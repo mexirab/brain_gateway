@@ -14,9 +14,10 @@ Layout of /work (the session folder on the host, mounted read-write):
   /work/repo          git clone of the bundle, on branch coder/<name>
   /work/.qwen-state   Qwen Code's chat history, so `--continue` works across boxes
 
-The host never runs git in /work: `patch` hands the diff over as text, and the
-box's files belong to the box uid, so host git refuses them as dubious ownership.
-Stdlib only; runs with python3 -I.
+The host never runs git in /work: `patch` hands the diff over as text (which
+the host still treats as hostile: it re-applies it to a trusted clone and keeps
+only what git regenerates there), and the box's files belong to the box uid, so
+host git refuses them as dubious ownership. Stdlib only; runs with python3 -I -S.
 """
 
 from __future__ import annotations
@@ -24,8 +25,11 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import NoReturn
 
@@ -38,8 +42,10 @@ SYSTEM_PROMPT = Path("/opt/jess-coder/system-prompt.md")
 SELFTEST = "/opt/jess-coder/selftest.py"
 SELFTEST_FAILED = 86  # scripts/jess-coder reads this exit code
 
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+PARTIAL = WORK / "repo.partial"
+SHA_RE = re.compile(r"[0-9a-f]{40}")  # used with fullmatch
+NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
+HEADLESS_WALL_TIME = "45m"
 
 # Qwen Code tools the box can't or shouldn't use (CODER_SPIKE.md section 2).
 # Excluding only tool_search makes Qwen Code load every deferred tool up front,
@@ -56,10 +62,9 @@ EXCLUDE_TOOLS = (
     "propose_goal,artifact,display_image"
 )
 
-# Git must not run anything from the workspace's own config or attributes when
-# the box hands its diff over (the model could have written them).
-HEADLESS_WALL_TIME = "45m"
-
+# Git flags for every git call here. In `patch` mode git also runs on a fresh git
+# dir (never the workspace's .git, whose config, hooks and filter drivers the
+# model could have written), so no model-written code runs there.
 SAFE_GIT = [
     "git",
     "-c",
@@ -86,10 +91,12 @@ def die(msg: str, code: int = 2) -> NoReturn:
     sys.exit(code)
 
 
-def git(*args: str, cwd: Path = REPO, env: dict | None = None, capture: bool = False) -> subprocess.CompletedProcess:
+def git(
+    *args: str, cwd: Path | None = None, env: dict | None = None, capture: bool = False
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         [*SAFE_GIT, *args],
-        cwd=cwd,
+        cwd=cwd or REPO,
         env=env,
         check=True,
         text=True,
@@ -98,23 +105,35 @@ def git(*args: str, cwd: Path = REPO, env: dict | None = None, capture: bool = F
 
 
 def run_selftest() -> int:
-    return subprocess.run([sys.executable, "-I", SELFTEST]).returncode
+    return subprocess.run([sys.executable, "-I", "-S", SELFTEST]).returncode
+
+
+def _workspace_ready() -> bool:
+    if not (REPO / ".git").is_dir():
+        return False
+    res = subprocess.run([*SAFE_GIT, "rev-parse", "--verify", "--quiet", "HEAD"], cwd=REPO, capture_output=True)
+    return res.returncode == 0
 
 
 def prepare_workspace(name: str, base: str) -> None:
-    if (REPO / ".git").is_dir():
+    if _workspace_ready():
         print(f"jess-coder box: resuming the workspace in {REPO}")
         return
+    if REPO.exists():
+        die(f"{REPO} exists but is not a usable git workspace: jess-coder rm the session")
     if not BUNDLE.is_file():
         die("no repo bundle mounted and no workspace yet")
     print("jess-coder box: unpacking the repo bundle (first start of this session)")
+    if PARTIAL.exists():  # an earlier first start was interrupted
+        _rmtree(PARTIAL)
     branch = f"coder/{name}"
-    git("init", "--quiet", "--initial-branch", branch, str(REPO), cwd=WORK)
-    git("fetch", "--quiet", "--no-tags", str(BUNDLE), "main")
-    git("cat-file", "-e", f"{base}^{{commit}}")
-    git("reset", "--quiet", "--hard", base)
-    git("config", "user.name", "Jess coder box")
-    git("config", "user.email", "coder-box@jess.invalid")
+    git("init", "--quiet", "--initial-branch", branch, str(PARTIAL), cwd=WORK)
+    git("fetch", "--quiet", "--no-tags", str(BUNDLE), "main", cwd=PARTIAL)
+    git("cat-file", "-e", f"{base}^{{commit}}", cwd=PARTIAL)
+    git("reset", "--quiet", "--hard", base, cwd=PARTIAL)
+    git("config", "user.name", "Jess coder box", cwd=PARTIAL)
+    git("config", "user.email", "coder-box@jess.invalid", cwd=PARTIAL)
+    PARTIAL.rename(REPO)  # only a complete workspace ever appears at /work/repo
 
 
 def prepare_home() -> None:
@@ -129,19 +148,32 @@ def prepare_home() -> None:
 def session(args: list[str]) -> None:
     name = os.environ.get("JESS_CODER_NAME", "")
     base = os.environ.get("JESS_CODER_BASE", "")
-    if not NAME_RE.match(name) or not SHA_RE.match(base):
+    if not NAME_RE.fullmatch(name) or not SHA_RE.fullmatch(base):
         die("JESS_CODER_NAME / JESS_CODER_BASE missing or malformed")
     if not os.environ.get("JESS_BRAIN_KEY"):
         die("no coder token (JESS_BRAIN_KEY)")
     unknown = [a for a in args if a not in ("--continue", "--ask", "--headless")]
     if unknown:
         die(f"unknown session option(s): {' '.join(unknown)}")
+    try:
+        deadline = float(os.environ.get("JESS_CODER_DEADLINE", ""))
+    except ValueError:
+        die("JESS_CODER_DEADLINE missing or malformed")
     print("jess-coder box: isolation self-test")
     if run_selftest() != 0:
         die("the isolation self-test failed; the box stays closed", SELFTEST_FAILED)
     prepare_workspace(name, base)
     prepare_home()
+    remaining = int(deadline - time.time())
+    if remaining < 60:
+        die("the session token expires in under a minute")
+    # The box ends itself at the token's expiry even if the launcher is gone
+    # (e.g. dockerd restarted and the launcher lost the attach).
     cmd = [
+        "timeout",
+        "--foreground",
+        "--kill-after=30",
+        str(remaining),
         "qwen",
         "--approval-mode",
         "default" if "--ask" in args else "yolo",
@@ -161,22 +193,28 @@ def session(args: list[str]) -> None:
 
 
 def patch(args: list[str]) -> None:
-    if len(args) != 1 or not SHA_RE.match(args[0]):
+    if len(args) != 1 or not SHA_RE.fullmatch(args[0]):
         die("usage: patch <base-sha>")
     base = args[0]
-    if not (REPO / ".git").is_dir():
+    if not (REPO / ".git" / "objects").is_dir():
         die("this session has no workspace yet")
-    # /work is read-only here: the scratch index and any new blob objects go to
-    # /tmp, reading the repo's own objects through an alternate.
-    env = dict(os.environ)
-    objects = "/tmp/patch-objects"
-    os.makedirs(objects, exist_ok=True)
-    env.update(
-        GIT_INDEX_FILE="/tmp/patch-index",
-        GIT_OBJECT_DIRECTORY=objects,
-        GIT_ALTERNATE_OBJECT_DIRECTORIES=str(REPO / ".git" / "objects"),
-        GIT_OPTIONAL_LOCKS="0",
-    )
+    # /work is read-only here. A fresh git dir in /tmp (no config, hooks,
+    # info/attributes or filter drivers from the workspace) reads the
+    # workspace's objects through an alternate and indexes its files.
+    scratch = Path(tempfile.mkdtemp(prefix="patch-"))
+    gitdir = scratch / "patch.git"
+    subprocess.run([*SAFE_GIT, "init", "--quiet", "--bare", str(gitdir)], check=True)
+    (gitdir / "objects" / "info" / "alternates").write_text(str(REPO / ".git" / "objects") + "\n")
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": str(scratch),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_DIR": str(gitdir),
+        "GIT_WORK_TREE": str(REPO),
+        "GIT_INDEX_FILE": str(scratch / "index"),
+        "GIT_OPTIONAL_LOCKS": "0",
+    }
     git("read-tree", base, env=env)
     git("add", "--all", "--", ".", env=env)
     diff = subprocess.run(
@@ -202,12 +240,37 @@ def patch(args: list[str]) -> None:
     sys.stdout.buffer.write(diff.stdout)
 
 
+def _rmtree(path: Path) -> None:
+    """rmtree that also removes what the box made unreadable (a 000 or 500 dir).
+
+    First every directory the box owns is opened up (top-down, never following
+    symlinks), then the tree goes. Nothing else runs in the workspace meanwhile.
+    """
+    stack = [str(path)]
+    while stack:
+        d = stack.pop()
+        try:
+            st = os.lstat(d)
+        except OSError:
+            continue
+        if not stat.S_ISDIR(st.st_mode):
+            continue
+        if st.st_uid == os.getuid():
+            os.chmod(d, stat.S_IRWXU)
+        try:
+            with os.scandir(d) as it:
+                stack.extend(e.path for e in it if e.is_dir(follow_symlinks=False))
+        except OSError:
+            pass
+    shutil.rmtree(path)
+
+
 def clean(args: list[str]) -> None:
     if args:
         die("usage: clean")
     for child in WORK.iterdir():
         if child.is_dir() and not child.is_symlink():
-            shutil.rmtree(child)
+            _rmtree(child)
         else:
             child.unlink()
     print("jess-coder box: workspace emptied")

@@ -16,6 +16,11 @@ inhibit_rules:
       - alertname="EmbeddingErrors"
     target_matchers:
       - alertname="AutoLearnFailing"
+  # A broken brain explains coder gate errors (the gate only relays them).
+  - source_matchers:
+      - alertname=~"BrainFailedToStart|BrainCudaInitFailed|BrainOnCPU|HeliosPoweredButUnreachable"
+    target_matchers:
+      - alertname="CoderUpstreamErrors"
   # Saturn down pages as NodeDown; the dead-man's switch on it being
   # unreachable is the same outage, not a second notice.
   - source_matchers:

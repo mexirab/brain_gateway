@@ -603,26 +603,28 @@ services:
       - frontend-probe-net
 
   # Coder box image (docs/CODER.md): Qwen Code in a disposable, offline
-  # container. BUILD-ONLY: `docker compose --profile coder build coder` (or
-  # `jess-coder build`). Never started by `up`: the profile keeps it out of
-  # every default command, and if it is ever started it only runs `true` with
-  # no network. scripts/jess-coder runs each box with `docker run --rm` and the
-  # hardening flags (read-only root, no capabilities, coder-net only).
-  # The base is the orchestrator image just built from this checkout, so the
-  # box's Python deps match Jess's and the repo's tests run inside.
+  # container. BUILD-ONLY, via `jess-coder build` (labels the image with a hash
+  # of its inputs; the deploy rebuilds when it no longer matches). Never started
+  # by `up`: the profile keeps it out of every default command, and if it is
+  # ever started it only runs `true` with no network. scripts/jess-coder runs
+  # each box with `docker run --rm` and the hardening flags.
+  # Only requirements.txt + embedding_pin.py come from ./orchestrator: the image
+  # never carries Jess's code, and building it never touches the orchestrator's.
   coder:
     profiles: ["coder"]
     image: jess-coder:current
     build:
       context: ./coder
       additional_contexts:
-        jess-orchestrator-base: service:orchestrator
+        orchestrator: ./orchestrator
       args:
         # Same variable as the orchestrator's fixed coder-net address above.
         GATE_URL: http://${CODER_GATE_ADDRESS:-10.213.250.2}:8888/api/coder/v1
         # Qwen Code compacts before this many tokens. Never above the brain's
         # real context (-c in tts/llama-server-primary.service, 262144 now).
         CONTEXT_WINDOW: ${CODER_CONTEXT_WINDOW:-131072}
+      labels:
+        jess.coder.inputs: ${JESS_CODER_INPUTS:-unknown}
     entrypoint: ["true"]
     network_mode: none
     restart: "no"

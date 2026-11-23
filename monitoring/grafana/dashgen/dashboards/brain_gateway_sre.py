@@ -1534,7 +1534,7 @@ def build() -> dict:
     coder_row = [
         timeseries(
             "Gate Requests by Result (6h)",
-            [("sum by (origin, result) (increase(bgw_coder_requests_total[6h]))", "{{origin}} {{result}}")],
+            [("sum by (origin, result) (increase(bgw_coder_requests_total[6h])) > 0", "{{origin}} {{result}}")],
             unit="none",
             description="origin = session (jess-coder) or job. No data = CODER_ENABLED is off or no box has run.",
         ),
@@ -1557,7 +1557,7 @@ def build() -> dict:
             [
                 ("sum(increase(bgw_coder_preempted_total[1h]))", "preempted by chat"),
                 ("sum(increase(bgw_coder_guard_blocked_total[1h]))", "guard blocked"),
-                ("sum by (reason) (increase(bgw_coder_rejected_total[1h]))", "refused: {{reason}}"),
+                ("sum by (reason) (increase(bgw_coder_rejected_total[1h])) > 0", "refused: {{reason}}"),
             ],
             unit="none",
         ),
@@ -1571,14 +1571,44 @@ def build() -> dict:
             "max(jess_coder_selftest_ok)",
             thresholds=[(None, "red"), (1, "green")],
             mappings=[
-                {"options": {"0": {"text": "FAILED", "color": "red"}, "1": {"text": "PASS", "color": "green"}},
-                 "type": "value"}
+                {
+                    "options": {"0": {"text": "FAILED", "color": "red"}, "1": {"text": "PASS", "color": "green"}},
+                    "type": "value",
+                }
             ],
             graph_mode="none",
             description="Last box self-test (launcher or deploy). No data = never run here (CODER_ENABLED off).",
         ),
     ]
     row, y = grid_row(coder_row, y, heights=[8, 8, 8, 8, 8])
+    panels.extend(row)
+    # Does a coding session slow Jess down? Chat should stay flat while boxes run.
+    coder_effect_row = [
+        timeseries(
+            "Box Requests In Flight vs Brain Queue",
+            [
+                ("max(bgw_coder_requests_admitted)", "box requests admitted"),
+                ("max(llamacpp:requests_deferred)", "brain requests waiting"),
+            ],
+            unit="none",
+            description="Brain queue > 0 while a box request is admitted means someone waited for the single slot.",
+        ),
+        timeseries(
+            "Chat TTFT p95 (15m)",
+            [("histogram_quantile(0.95, sum by (le) (rate(bgw_chat_ttft_seconds_bucket[15m])))", "chat TTFT p95")],
+            unit="s",
+            description="Jess's time to first token. Should not move when a coder box is busy (the gate gives way).",
+        ),
+        stat(
+            "Self-Test Age",
+            "time() - max(jess_coder_selftest_last_run_timestamp_seconds)",
+            unit="s",
+            thresholds=[(None, "green"), (7 * 86400, "yellow")],
+            graph_mode="none",
+            description="Since the last box self-test (each session start and each deploy with CODER_ENABLED).",
+        ),
+    ]
+    row, y = grid_row(coder_effect_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
     # ------------------------------------------------------ Voice Satellite

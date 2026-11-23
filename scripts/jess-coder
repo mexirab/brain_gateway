@@ -13,8 +13,9 @@
       (CI, Claude Code config, scripts, compose, ...) are refused unless allowed.
   jess-coder ls                     sessions, running boxes, live tokens
   jess-coder rm <name> [-y]         delete a session's workspace
-  jess-coder selftest [--metrics]   run the box isolation self-test
-  jess-coder build                  build the box image (docker compose)
+  jess-coder selftest               run the box isolation self-test
+  jess-coder build [--if-stale]     build the box image (docker compose)
+  jess-coder enabled                exit 0 if CODER_ENABLED is on in .env
 
 Docs + threat model: docs/CODER.md. Stdlib only. Install with
   ln -s ~/gateway_nerves/scripts/jess-coder ~/.local/bin/jess-coder
@@ -28,25 +29,29 @@ What this script guarantees (the box itself is the boundary; docs/CODER.md):
   IPv6, no foreign members) and the box runs the isolation self-test, which
   must pass;
 * the coder token is minted per session, reaches the box only through the
-  environment (never argv), and is revoked when the session ends; the box is
-  killed at the token's expiry;
-* this script never runs git inside a box's folder: the patch comes out of a
-  box as text, is checked here, and saved outside the workspace.
+  environment (never argv), and is revoked when the session ends; the box
+  ends itself at the token's expiry (and the launcher kills it then too);
+* this script never runs git inside a box's folder, and never trusts a box's
+  diff: it applies it to a clean clone of the base and keeps only what git
+  regenerates there (cmd_patch).
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import ipaddress
 import json
 import os
 import re
+import selectors
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import termios
 import threading
 import time
 import unicodedata
@@ -63,27 +68,44 @@ ORCHESTRATOR_CONTAINER = "brain-orchestrator"
 BOX_UID = 61001  # no host account has it; same as CODER_UID in coder/Dockerfile
 DEFAULT_HOME = "/srv/jess-coder"
 DEFAULT_METRICS_DIR = "/home/labadmin/node_exporter/textfile_collector"
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")  # always fullmatch
+SHA_RE = re.compile(r"[0-9a-f]{40}")
+HELPER_SUFFIXES = ("-patch", "-rm")  # helper boxes are jess-coder-<name><suffix>
 SELFTEST_FAILED = 86  # entrypoint.py exit code when the in-box self-test fails
 MAX_PATCH_BYTES = 8 * 1024 * 1024
+PATCH_TIMEOUT_S = 600
+SELFTEST_TIMEOUT_S = 300
 KILL_GRACE_S = 120
+MAX_OPEN_SESSIONS = 2
+BRAIN_WAKE_WAIT_S = 360
+TRUTHY = ("1", "true", "yes", "on", "t", "y")  # what pydantic accepts for CODER_ENABLED
 
-# Box resources. One interactive session needs pytest + node at most.
+# Box resources. One interactive session needs pytest + node at most. A box
+# loses CPU contention to Jess and is the kernel's first OOM victim.
 MEMORY = "8g"
 CPUS = "4"
+CPU_SHARES = "256"
+OOM_SCORE_ADJ = "500"
 PIDS = "1024"
 
-# Paths a patch may not touch unless --allow names them: files that execute on
-# this host (or in CI, or in your Claude Code / editor sessions) before a human
-# reviewed them, plus instruction files the next AI session would obey.
+# Paths a patch may not touch (add, change OR delete) unless --allow names them:
+# files that execute on this host, in CI, or in your Claude Code / editor /
+# linter sessions before a human reviewed them, plus instruction files the next
+# AI session would obey. Matched case-insensitively (macOS checkouts fold case).
 REFUSED_PREFIXES = (
     ".github/",
     ".claude/",
     ".qwen/",
+    ".gemini/",
+    ".codex/",
+    ".cursor/",
+    ".continue/",
+    ".zed/",
     ".vscode/",
     ".idea/",
     ".devcontainer/",
+    ".husky/",
+    ".githooks/",
     "scripts/",
     "coder/",
     "tts/",
@@ -95,39 +117,56 @@ REFUSED_PREFIXES = (
     "models/",
 )
 REFUSED_NAMES = (
-    "CLAUDE.md",
-    "QWEN.md",
-    "AGENTS.md",
-    "GEMINI.md",
+    "agents.md",
+    "gemini.md",
     ".mcp.json",
+    ".cursorrules",
+    ".windsurfrules",
+    ".clinerules",
     "install.sh",
     ".envrc",
-    "Makefile",
+    "makefile",
     "conftest.py",
     "pyproject.toml",
     "setup.py",
     "setup.cfg",
     "pytest.ini",
     "tox.ini",
+    "noxfile.py",
+    "mypy.ini",
+    ".pylintrc",
+    "pylintrc",
+    ".coveragerc",
     ".pre-commit-config.yaml",
     ".gitattributes",
     ".gitmodules",
     ".gitignore",
+    ".lfsconfig",
+    ".dockerignore",
     "package.json",
     "package-lock.json",
     ".npmrc",
-    ".env",
-    ".env.example",
+    ".pnpmfile.cjs",
 )
 REFUSED_PATTERNS = (
+    re.compile(r"(^|/)(claude|qwen)(\.[^/]*)?\.md$"),  # CLAUDE.md, CLAUDE.local.md, QWEN.md
     re.compile(r"(^|/)docker-compose[^/]*\.ya?ml$"),
-    re.compile(r"(^|/)Dockerfile[^/]*$"),
+    re.compile(r"(^|/)dockerfile[^/]*$"),
     re.compile(r"(^|/)requirements[^/]*\.txt$"),
-    re.compile(r"\.(service|socket|timer|sh)$"),
+    re.compile(r"\.(service|socket|timer|sh|code-workspace)$"),
     re.compile(r"(^|/)\.env(\.[^/]*)?$"),
+    re.compile(r"(^|/)\.yarnrc[^/]*$"),
+    # JS/TS tool configs run on lint/test/build (eslint, next, vite, vitest, jest, ...)
+    re.compile(r"(^|/)[^/]*\.(config|setup)\.[cm]?[jt]sx?$"),
+    re.compile(r"(^|/)\.(eslintrc|prettierrc|babelrc|stylelintrc|swcrc)[^/]*$"),
 )
+SAFE_PATH_RE = re.compile(r"[A-Za-z0-9._@+/-]+")  # anything else: refused unless allowed
 
 _BIDI = {chr(c) for c in (*range(0x202A, 0x202F), *range(0x2066, 0x206A), 0x200E, 0x200F, 0x061C)}
+# Line/paragraph separators end // comments in JS; Hangul fillers are invisible
+# but valid in identifiers.
+_INVISIBLE = {" ", " ", "ᅟ", "ᅠ", "ㅤ", "ﾠ"}
+_FORMAT_OK = {"‌", "‍"}  # ZWNJ / ZWJ: emoji sequences, Persian
 
 
 class Fatal(Exception):
@@ -167,14 +206,16 @@ class Config:
         self.subnet = self.env.get("CODER_SUBNET") or "10.213.250.0/24"
         self.box_range = self.env.get("CODER_BOX_RANGE") or "10.213.250.128/25"
         self.gate = self.env.get("CODER_GATE_ADDRESS") or "10.213.250.2"
+        self.context_window = self.env.get("CODER_CONTEXT_WINDOW") or "131072"
         # Overrides for a lab gate on another network (docs/CODER.md -> Testing).
         self.network = os.environ.get("JESS_CODER_NETWORK", NETWORK)
         self.image = os.environ.get("JESS_CODER_IMAGE", IMAGE)
         self.gate_container = os.environ.get("JESS_CODER_GATE_CONTAINER", ORCHESTRATOR_CONTAINER)
+        self.lab = self.image != IMAGE or self.network != NETWORK
 
     @property
     def enabled(self) -> bool:
-        return self.env.get("CODER_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+        return self.env.get("CODER_ENABLED", "").strip().lower() in TRUTHY
 
     @property
     def sessions(self) -> Path:
@@ -200,13 +241,14 @@ def say(msg: str) -> None:
     print(f"jess-coder: {msg}", flush=True)
 
 
-def api(cfg: Config, method: str, path: str, body: Optional[dict] = None) -> Tuple[int, dict]:
-    token = cfg.env.get("API_TOKEN", "")
-    if not token:
-        raise Fatal("API_TOKEN is not set in .env")
+def api(cfg: Config, method: str, path: str, body: Optional[dict] = None, *, auth: bool = True) -> Tuple[int, dict]:
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(cfg.api + path, data=data, method=method)
-    req.add_header("Authorization", f"Bearer {token}")
+    if auth:
+        token = cfg.env.get("API_TOKEN", "")
+        if not token:
+            raise Fatal("API_TOKEN is not set in .env")
+        req.add_header("Authorization", f"Bearer {token}")
     if data is not None:
         req.add_header("Content-Type", "application/json")
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -218,13 +260,15 @@ def api(cfg: Config, method: str, path: str, body: Optional[dict] = None) -> Tup
             return exc.code, json.loads(exc.read() or b"{}")
         except ValueError:
             return exc.code, {}
-    except (urllib.error.URLError, OSError) as exc:
+    except (urllib.error.URLError, OSError, ValueError) as exc:
         raise Fatal(f"orchestrator not reachable at {cfg.api} ({type(exc).__name__})") from None
 
 
 def check_name(name: str) -> str:
-    if not NAME_RE.match(name or ""):
+    if not NAME_RE.fullmatch(name or ""):
         raise Fatal("session names are 1-32 chars: a-z, 0-9 and dashes, starting with a letter or digit")
+    if name.endswith(HELPER_SUFFIXES) or name.startswith("selftest-"):
+        raise Fatal("names ending in -patch or -rm, or starting with selftest-, are reserved for helper boxes")
     return name
 
 
@@ -232,13 +276,46 @@ def container_name(name: str) -> str:
     return CONTAINER_PREFIX + name
 
 
-def running_boxes() -> List[str]:
-    out = run(["docker", "ps", "--filter", "label=jess-coder=1", "--format", "{{.Names}}"], check=False).stdout
+def running_boxes(kind: Optional[str] = None) -> List[str]:
+    label = f"jess-coder.kind={kind}" if kind else "jess-coder=1"
+    out = run(["docker", "ps", "--filter", f"label={label}", "--format", "{{.Names}}"], check=False).stdout
     return [n for n in out.split() if n.startswith(CONTAINER_PREFIX)]
 
 
-def kill_box(name: str) -> None:
-    run(["docker", "kill", container_name(name)], check=False)
+def kill_cid(cidfile: Path) -> None:
+    """Kill the container this launcher started (by id: never someone else's same-named box)."""
+    try:
+        cid = cidfile.read_text().strip()
+    except OSError:
+        return
+    if re.fullmatch(r"[0-9a-f]{64}", cid):
+        run(["docker", "kill", cid], check=False)
+
+
+def sanitize_for_terminal(text: str, *, keep_newlines: bool = True) -> str:
+    out = []
+    for ch in text:
+        o = ord(ch)
+        if (ch == "\n" and keep_newlines) or ch == "\t":
+            out.append(ch)
+        elif o < 0x20 or o == 0x7F:
+            out.append("^" + chr(o ^ 0x40))
+        elif 0x80 <= o <= 0x9F or ch in _BIDI or ch in _INVISIBLE or unicodedata.category(ch) == "Cf":
+            out.append(f"<U+{o:04X}>")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def flush_terminal_input() -> None:
+    """Drop terminal replies a box may have provoked (title/DECRQSS-style) so they
+    don't land in your shell after the session."""
+    try:
+        if sys.stdin.isatty():
+            time.sleep(0.3)
+            termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+    except (OSError, termios.error):
+        pass
 
 
 # ------------------------------------------------------------------ preflight
@@ -247,24 +324,51 @@ def kill_box(name: str) -> None:
 def check_home(cfg: Config) -> None:
     if not cfg.home.is_dir():
         raise Fatal(f"{cfg.home} does not exist: create the coder filesystem first (docs/CODER.md -> Setup)")
-    if not os.path.ismount(cfg.home) and os.environ.get("JESS_CODER_ALLOW_UNMOUNTED") != "1":
-        raise Fatal(
-            f"{cfg.home} is not its own filesystem: a runaway box could fill the root disk (docs/CODER.md -> Setup)"
-        )
+    if os.environ.get("JESS_CODER_ALLOW_UNMOUNTED") != "1":
+        if not os.path.ismount(cfg.home):
+            raise Fatal(f"{cfg.home} is not its own filesystem: a runaway box could fill the root disk (docs/CODER.md)")
+        opts = run(["findmnt", "-n", "-o", "OPTIONS", str(cfg.home)], check=False).stdout.strip().split(",")
+        missing = [o for o in ("nosuid", "nodev") if o not in opts]
+        if missing:
+            raise Fatal(f"{cfg.home} is mounted without {','.join(missing)} (docs/CODER.md -> Setup)")
     for d in (cfg.sessions, cfg.bundles, cfg.patches):
         d.mkdir(mode=0o700, exist_ok=True)
 
 
+def image_inputs(cfg: Config) -> str:
+    """Hash of everything the image is built from, stored as its jess.coder.inputs label."""
+    h = hashlib.sha256()
+    coder = cfg.root / "coder"
+    files = sorted(p for p in coder.rglob("*") if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc")
+    for rel in [p.relative_to(cfg.root).as_posix() for p in files] + [
+        "orchestrator/requirements.txt",
+        "orchestrator/embedding_pin.py",
+    ]:
+        h.update(rel.encode() + b"\0" + (cfg.root / rel).read_bytes() + b"\0")
+    h.update(f"gate={cfg.gate}\0context={cfg.context_window}\0".encode())
+    return h.hexdigest()[:16]
+
+
+def image_label(cfg: Config) -> Optional[str]:
+    res = run(
+        ["docker", "image", "inspect", "-f", '{{index .Config.Labels "jess.coder.inputs"}}', cfg.image], check=False
+    )
+    return res.stdout.strip() if res.returncode == 0 else None
+
+
 def check_image(cfg: Config) -> None:
-    if run(["docker", "image", "inspect", cfg.image], check=False).returncode != 0:
+    have = image_label(cfg)
+    if have is None:
         raise Fatal(f"image {cfg.image} not built yet: jess-coder build")
+    if not cfg.lab and have != image_inputs(cfg):
+        raise Fatal(f"image {cfg.image} is out of date (built from other coder/ inputs): jess-coder build")
 
 
 def check_network(cfg: Config) -> None:
     """coder-net must be the isolated network the gate expects, with no strangers on it."""
     res = run(["docker", "network", "inspect", cfg.network], check=False)
     if res.returncode != 0:
-        raise Fatal(f"network {cfg.network} missing: recreate the orchestrator (docker compose up -d orchestrator)")
+        raise Fatal(f"network {cfg.network} missing: recreate the orchestrator (docs/CODER.md -> Self-test)")
     net = json.loads(res.stdout)[0]
     opts = net.get("Options") or {}
     problems = []
@@ -314,6 +418,29 @@ def selftest_hosts(cfg: Config) -> List[str]:
     return hosts
 
 
+def bridge_link_local(cfg: Config) -> List[str]:
+    """The coder bridge's own IPv6 link-local addresses (host services on [::] answer there)."""
+    if cfg.network != NETWORK:
+        return []
+    res = run(["ip", "-j", "-6", "addr", "show", "dev", BRIDGE], check=False)
+    out = []
+    for info in json.loads(res.stdout or "[]") if res.returncode == 0 else []:
+        for a in info.get("addr_info", []):
+            if str(a.get("local", "")).startswith("fe80:"):
+                out.append(a["local"])
+    return out
+
+
+def selftest_env(cfg: Config) -> Dict[str, str]:
+    return {
+        "JESS_SELFTEST_HOSTS": ",".join(selftest_hosts(cfg)),
+        "JESS_SELFTEST_HOSTS_V6": ",".join(bridge_link_local(cfg)),
+        "JESS_CODER_SUBNET": cfg.subnet,
+        "JESS_CODER_BOX_RANGE": cfg.box_range,
+        "JESS_CODER_UID": str(BOX_UID),
+    }
+
+
 def write_selftest_metric(cfg: Config, ok: bool) -> None:
     if not cfg.metrics_dir.is_dir():
         return
@@ -336,6 +463,64 @@ def write_selftest_metric(cfg: Config, ok: bool) -> None:
         say(f"warning: self-test metric not written ({type(exc).__name__})")
 
 
+def checked_network(cfg: Config) -> None:
+    """check_network, recording a refusal as a failed self-test (it is an isolation break)."""
+    try:
+        check_network(cfg)
+    except Fatal:
+        write_selftest_metric(cfg, False)
+        raise
+
+
+def wait_for_orchestrator(cfg: Config, seconds: float) -> None:
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            status, _ = api(cfg, "GET", "/health", auth=False)
+            if status == 200:
+                return
+        except Fatal:
+            pass
+        if time.monotonic() > deadline:
+            raise Fatal(f"orchestrator not healthy at {cfg.api} after {seconds:.0f} s")
+        time.sleep(5)
+
+
+def ensure_brain(cfg: Config) -> None:
+    """Wake Helios if the brain is down (it's power-tiered), so the box's first
+    requests don't fail. Never refuses: the box opens either way."""
+    m = re.match(r"^(https?://[^/]+)", cfg.env.get("MODEL_URL", ""))
+    if not m:
+        return
+    url = m.group(1) + "/health"
+
+    def up() -> bool:
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(url, timeout=5) as resp:
+                return resp.status == 200
+        except (urllib.error.URLError, OSError, ValueError):
+            return False
+
+    if up():
+        return
+    try:
+        status, _ = api(cfg, "POST", "/api/helios/wake")
+    except Fatal:
+        status = 0
+    if status != 200:
+        say("warning: the brain (Helios) is not answering and can't be woken from here; requests fail until it is up")
+        return
+    say(f"the brain (Helios) is asleep: waking it, waiting up to {BRAIN_WAKE_WAIT_S // 60} min")
+    deadline = time.monotonic() + BRAIN_WAKE_WAIT_S
+    while time.monotonic() < deadline:
+        time.sleep(10)
+        if up():
+            say("the brain is up")
+            return
+    say("warning: the brain is still not up; the box opens anyway (Qwen Code retries)")
+
+
 # ---------------------------------------------------------------- box command
 
 
@@ -343,8 +528,10 @@ def box_command(
     cfg: Config,
     *,
     name: str,
+    kind: str,
     mode: Sequence[str],
     network: str,
+    cidfile: Path,
     tty: bool = False,
     stdin: bool = False,
     workspace: Optional[Path] = None,
@@ -355,50 +542,29 @@ def box_command(
 ) -> List[str]:
     """The ONE place box containers are started from. Hardening flags live here."""
     cmd = [
-        "docker",
-        "run",
-        "--rm",
-        "--init",
-        "--pull",
-        "never",
-        "--name",
-        container_name(name),
-        "--hostname",
-        "jess-coder",
-        "--label",
-        "jess-coder=1",
-        "--label",
-        f"jess-coder.session={name}",
-        "--user",
-        f"{BOX_UID}:{BOX_UID}",
+        "docker", "run", "--rm", "--init", "--pull", "never",
+        "--name", container_name(name),
+        "--cidfile", str(cidfile),
+        "--hostname", "jess-coder",
+        "--label", "jess-coder=1",
+        "--label", f"jess-coder.kind={kind}",
+        "--label", f"jess-coder.session={name}",
+        "--user", f"{BOX_UID}:{BOX_UID}",
         "--read-only",
-        "--cap-drop",
-        "ALL",
-        "--security-opt",
-        "no-new-privileges:true",
-        "--memory",
-        MEMORY,
-        "--memory-swap",
-        MEMORY,
-        "--cpus",
-        CPUS,
-        "--pids-limit",
-        PIDS,
-        "--ulimit",
-        "nofile=8192:8192",
-        "--ulimit",
-        "core=0",
-        "--log-driver",
-        "none",
-        "--network",
-        network,
-        "--tmpfs",
-        "/tmp:rw,nosuid,nodev,size=2g",
-        "--tmpfs",
-        f"/home/coder:rw,nosuid,nodev,size=1g,uid={BOX_UID},gid={BOX_UID},mode=0700",
-        "--tmpfs",
-        f"/app/data:rw,nosuid,nodev,size=256m,uid={BOX_UID},gid={BOX_UID},mode=0700",
-    ]
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges:true",
+        "--memory", MEMORY, "--memory-swap", MEMORY,
+        "--cpus", CPUS, "--cpu-shares", CPU_SHARES,
+        "--oom-score-adj", OOM_SCORE_ADJ,
+        "--pids-limit", PIDS,
+        "--ulimit", "nofile=8192:8192",
+        "--ulimit", "core=0",
+        "--log-driver", "none",
+        "--network", network,
+        "--tmpfs", "/tmp:rw,nosuid,nodev,size=2g",
+        "--tmpfs", f"/home/coder:rw,nosuid,nodev,size=1g,uid={BOX_UID},gid={BOX_UID},mode=0700",
+        "--tmpfs", f"/app/data:rw,nosuid,nodev,size=256m,uid={BOX_UID},gid={BOX_UID},mode=0700",
+    ]  # fmt: skip
     if tty:
         cmd += ["-it", "-e", "TERM=" + os.environ.get("TERM", "xterm-256color")]
     elif stdin:
@@ -414,13 +580,47 @@ def box_command(
     return cmd + [cfg.image, *mode]
 
 
-def selftest_env(cfg: Config) -> Dict[str, str]:
-    return {
-        "JESS_SELFTEST_HOSTS": ",".join(selftest_hosts(cfg)),
-        "JESS_CODER_SUBNET": cfg.subnet,
-        "JESS_CODER_BOX_RANGE": cfg.box_range,
-        "JESS_CODER_UID": str(BOX_UID),
-    }
+def run_captured(cmd: List[str], cidfile: Path, *, limit: int, timeout: float) -> Tuple[int, bytes, bytes, str]:
+    """Run a helper box, keeping at most ``limit`` bytes of stdout and 4 KB of stderr.
+
+    Returns (exit code, stdout, stderr tail, problem) where problem is "",
+    "too_large" or "timeout"; the box is killed in the last two cases.
+    """
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out, err = bytearray(), bytearray()
+    sel = selectors.DefaultSelector()
+    sel.register(proc.stdout, selectors.EVENT_READ, "out")
+    sel.register(proc.stderr, selectors.EVENT_READ, "err")
+    deadline = time.monotonic() + timeout
+    problem = ""
+    try:
+        while sel.get_map():
+            left = deadline - time.monotonic()
+            if left <= 0:
+                problem = "timeout"
+                break
+            for key, _ in sel.select(timeout=min(left, 1.0)):
+                chunk = os.read(key.fileobj.fileno(), 65536)
+                if not chunk:
+                    sel.unregister(key.fileobj)
+                elif key.data == "out":
+                    out += chunk
+                    if len(out) > limit:
+                        problem = "too_large"
+                        break
+                else:
+                    err = (err + chunk)[-4096:]
+            if problem:
+                break
+    finally:
+        sel.close()
+        if problem:
+            kill_cid(cidfile)
+            proc.kill()
+        code = proc.wait()
+        proc.stdout.close()
+        proc.stderr.close()
+    return code, bytes(out), bytes(err), problem
 
 
 # ------------------------------------------------------------------- sessions
@@ -435,18 +635,25 @@ def read_meta(cfg: Config, name: str) -> Optional[dict]:
         meta = json.loads((session_dir(cfg, name) / "meta.json").read_text())
     except (OSError, ValueError):
         return None
-    return meta if isinstance(meta, dict) and SHA_RE.match(str(meta.get("base", ""))) else None
+    return meta if isinstance(meta, dict) and SHA_RE.fullmatch(str(meta.get("base", ""))) else None
+
+
+def write_meta(cfg: Config, name: str, meta: dict) -> None:
+    path = session_dir(cfg, name) / "meta.json"
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(meta, indent=1) + "\n")
+    os.replace(tmp, path)
 
 
 def make_bundle(cfg: Config) -> Tuple[str, Path]:
     """Bundle of the deployed `main` (the live checkout's), cached per commit."""
     base = run(["git", "-C", str(cfg.root), "rev-parse", "--verify", "main^{commit}"]).stdout.strip()
-    if not SHA_RE.match(base):
+    if not SHA_RE.fullmatch(base):
         raise Fatal("could not resolve main in the live checkout")
     path = cfg.bundles / f"{base}.bundle"
     if not path.is_file():
         say(f"bundling main @ {base[:12]}")
-        tmp = path.with_suffix(".tmp")
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
         run(["git", "-C", str(cfg.root), "bundle", "create", "--quiet", str(tmp), "main"])
         os.chmod(tmp, 0o644)
         os.replace(tmp, path)
@@ -454,16 +661,24 @@ def make_bundle(cfg: Config) -> Tuple[str, Path]:
 
 
 def prune_bundles(cfg: Config, keep: str) -> None:
+    """Drop bundles no session uses (not ones made in the last hour: a concurrent
+    start may not have written its meta.json yet)."""
     used = {keep} | {m["base"] for n in list_session_names(cfg) if (m := read_meta(cfg, n))}
+    cutoff = time.time() - 3600
     for f in cfg.bundles.glob("*.bundle"):
-        if f.stem not in used:
+        if f.stem not in used and f.stat().st_mtime < cutoff:
             f.unlink(missing_ok=True)
 
 
 def list_session_names(cfg: Config) -> List[str]:
     if not cfg.sessions.is_dir():
         return []
-    return sorted(p.name for p in cfg.sessions.iterdir() if p.is_dir() and NAME_RE.match(p.name))
+    return sorted(p.name for p in cfg.sessions.iterdir() if p.is_dir() and NAME_RE.fullmatch(p.name))
+
+
+def _ignore_signals() -> None:
+    for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, signal.SIG_IGN)
 
 
 def cmd_start(cfg: Config, args: argparse.Namespace) -> int:
@@ -474,12 +689,16 @@ def cmd_start(cfg: Config, args: argparse.Namespace) -> int:
         raise Fatal("CODER_ENABLED is not true in .env (docs/CODER.md -> Setup)")
     check_home(cfg)
     check_image(cfg)
-    check_network(cfg)
-    if container_name(name) in running_boxes():
+    checked_network(cfg)
+    running = running_boxes("session")
+    if container_name(name) in running:
         raise Fatal(f"session {name} is already open in another terminal")
+    if len(running) >= MAX_OPEN_SESSIONS:
+        raise Fatal(f"{len(running)} sessions are open already (at most {MAX_OPEN_SESSIONS}); close one first")
 
     sdir = session_dir(cfg, name)
     meta = read_meta(cfg, name)
+    now = dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
     if meta is None:
         if sdir.exists():
             raise Fatal(f"{sdir} exists but has no valid meta.json: jess-coder rm {name}")
@@ -488,35 +707,45 @@ def cmd_start(cfg: Config, args: argparse.Namespace) -> int:
         box = sdir / "box"
         box.mkdir()
         os.chmod(box, 0o777)  # the box uid must write here; the 0700 parent keeps everyone else out
-        meta = {"name": name, "base": base, "created": dt.datetime.now(dt.UTC).isoformat(timespec="seconds")}
-        (sdir / "meta.json").write_text(json.dumps(meta, indent=1) + "\n")
+        meta = {"name": name, "base": base, "created": now}
         say(f"new session {name} on main @ {base[:12]}")
     else:
         base = meta["base"]
         bundle = cfg.bundles / f"{base}.bundle"
         say(f"resuming session {name} (base {base[:12]})")
+    meta["last_opened"] = now
+    write_meta(cfg, name, meta)
     prune_bundles(cfg, keep=base)
+    ensure_brain(cfg)
 
     body: dict = {"label": name}
     if args.hours is not None:
         body["hours"] = args.hours
+    fired = []
 
-    def on_hangup(signum, _frame):  # SSH dropped / killed: still kill the box and revoke
-        raise SystemExit(128 + signum)
+    def on_hangup(signum, _frame):  # SSH dropped / killed: still kill the box and revoke (once)
+        if not fired:
+            fired.append(signum)
+            raise SystemExit(128 + signum)
 
     signal.signal(signal.SIGHUP, on_hangup)
     signal.signal(signal.SIGTERM, on_hangup)
-    status, minted = api(cfg, "POST", "/api/coder/sessions", body)
-    if status == 404:
-        raise Fatal("the coder gate is off: set CODER_ENABLED=true in .env and recreate the orchestrator")
-    if status != 201 or not str(minted.get("token", "")).startswith("jcs_"):
-        raise Fatal(f"could not mint a session token (HTTP {status})")
-    token_id, expires = str(minted.get("id", "")), str(minted.get("expires_at", ""))
-    child_env = {**os.environ, "JESS_BRAIN_KEY": minted["token"]}
-    del minted
-    code = 1
+    tmpdir = Path(tempfile.mkdtemp(prefix="jess-coder-"))
+    cidfile = tmpdir / "cid"
+    token_id: Optional[str] = None
+    expires = ""
     timer: Optional[threading.Timer] = None
+    code = 1
     try:
+        status, minted = api(cfg, "POST", "/api/coder/sessions", body)
+        if status == 404:
+            raise Fatal("the coder gate is off: set CODER_ENABLED=true in .env and recreate the orchestrator")
+        if status != 201 or not str(minted.get("token", "")).startswith("jcs_"):
+            raise Fatal(f"could not mint a session token (HTTP {status})")
+        token_id, expires = str(minted.get("id", "")), str(minted.get("expires_at", ""))
+        child_env = {**os.environ, "JESS_BRAIN_KEY": minted["token"]}
+        del minted
+        expiry = dt.datetime.fromisoformat(expires)
         headless = args.task is not None
         mode = (
             ["session"]
@@ -524,25 +753,27 @@ def cmd_start(cfg: Config, args: argparse.Namespace) -> int:
             + (["--ask"] if args.ask else [])
             + (["--headless"] if headless else [])
         )
+        env = {
+            **selftest_env(cfg),
+            "JESS_CODER_NAME": name,
+            "JESS_CODER_BASE": base,
+            "JESS_CODER_DEADLINE": f"{expiry.timestamp():.0f}",
+        }
         cmd = box_command(
-            cfg,
-            name=name,
-            mode=mode,
-            network=cfg.network,
-            tty=not headless,
-            stdin=headless,
-            workspace=sdir / "box",
-            bundle=bundle if bundle.is_file() else None,
-            env={**selftest_env(cfg), "JESS_CODER_NAME": name, "JESS_CODER_BASE": base},
-            secret_env=["JESS_BRAIN_KEY"],
-        )
-        expires_in = max(60.0, (dt.datetime.fromisoformat(expires) - dt.datetime.now(dt.UTC)).total_seconds())
+            cfg, name=name, kind="session", mode=mode, network=cfg.network, cidfile=cidfile,
+            tty=not headless, stdin=headless, workspace=sdir / "box",
+            bundle=bundle if bundle.is_file() else None, env=env, secret_env=["JESS_BRAIN_KEY"],
+        )  # fmt: skip
+        expires_in = max(60.0, (expiry - dt.datetime.now(dt.UTC)).total_seconds())
         say(
             f"opening the box (token expires {expires[:16]}Z"
             + ("; running the task headless)" if headless else "; Ctrl-C twice inside Qwen Code to leave)")
         )
-        proc = subprocess.Popen(cmd, env=child_env, stdin=subprocess.PIPE if headless else None)
-        timer = threading.Timer(expires_in + KILL_GRACE_S, kill_box, args=(name,))
+        proc = subprocess.Popen(
+            cmd, env=child_env, stdin=subprocess.PIPE if headless else None,
+            stdout=subprocess.PIPE if headless else None,
+        )  # fmt: skip
+        timer = threading.Timer(expires_in + KILL_GRACE_S, kill_cid, args=(cidfile,))
         timer.daemon = True
         timer.start()
         if headless:
@@ -551,6 +782,9 @@ def cmd_start(cfg: Config, args: argparse.Namespace) -> int:
                 proc.stdin.close()
             except BrokenPipeError:  # the box ended early (e.g. self-test failed)
                 pass
+            for raw in iter(proc.stdout.readline, b""):  # the box's output, made terminal-safe
+                sys.stdout.write(sanitize_for_terminal(raw.decode("utf-8", "replace")))
+                sys.stdout.flush()
         while True:
             try:
                 code = proc.wait()
@@ -558,33 +792,71 @@ def cmd_start(cfg: Config, args: argparse.Namespace) -> int:
             except KeyboardInterrupt:  # a stray SIGINT must not tear the session down
                 continue
     finally:
+        _ignore_signals()  # a second signal must not interrupt the cleanup
         if timer is not None:
             timer.cancel()
-        kill_box(name)
+        kill_cid(cidfile)
+        shutil.rmtree(tmpdir, ignore_errors=True)
         try:
-            status, _ = api(cfg, "DELETE", f"/api/coder/sessions/{token_id}")
+            revoke_session_tokens(cfg, name, token_id)
         except Fatal:
-            status = 0
-        if status not in (200, 404):
-            say(f"warning: token {token_id} not revoked (HTTP {status}); it expires at {expires}")
+            say(f"warning: token not revoked (orchestrator unreachable); it expires at {expires or '?'}")
+        flush_terminal_input()
     if code in (0, SELFTEST_FAILED):  # other codes: the box never got that far, or Qwen Code failed
         write_selftest_metric(cfg, code == 0)
     if code == SELFTEST_FAILED:
         say("the isolation self-test FAILED: the box did not open. See the lines above; docs/CODER.md -> Self-test")
         return 1
+    if code == 124:
+        say(f"session {name} reached its token's expiry and was closed. Changes: jess-coder patch {name}")
+        return 1
+    if code != 0:
+        say(f"session {name} ended with exit code {code}. Changes so far: jess-coder patch {name}")
+        return 1
     say(f"session {name} closed. Changes: jess-coder patch {name}")
     return 0
 
 
+def revoke_session_tokens(cfg: Config, name: str, token_id: Optional[str]) -> None:
+    """Revoke this session's token, or (if the mint's answer never arrived) every
+    live token with this session's label: a session name is open at most once."""
+    ids = [token_id] if token_id else []
+    if not ids:
+        status, data = api(cfg, "GET", "/api/coder/sessions")
+        if status == 200:
+            ids = [t["id"] for t in data.get("sessions", []) if t.get("label") == name and t.get("id")]
+    for tid in ids:
+        if re.fullmatch(r"[0-9a-f]{32}", tid):
+            status, _ = api(cfg, "DELETE", f"/api/coder/sessions/{tid}")
+            if status not in (200, 404):
+                say(f"warning: token {tid} not revoked (HTTP {status})")
+
+
 def cmd_selftest(cfg: Config, args: argparse.Namespace) -> int:
+    if args.wait_health:
+        wait_for_orchestrator(cfg, args.wait_health)
     check_image(cfg)
-    check_network(cfg)
+    checked_network(cfg)
     name = f"selftest-{os.getpid()}"
-    cmd = box_command(cfg, name=name, mode=["selftest"], network=cfg.network, env=selftest_env(cfg))
-    code = run(cmd, check=False, capture=False).returncode
-    if args.metrics:
-        write_selftest_metric(cfg, code == 0)
-    return 0 if code == 0 else 1
+    with tempfile.TemporaryDirectory(prefix="jess-coder-") as tmp:
+        cidfile = Path(tmp) / "cid"
+        cmd = box_command(
+            cfg, name=name, kind="selftest", mode=["selftest"], network=cfg.network, cidfile=cidfile,
+            env=selftest_env(cfg),
+        )  # fmt: skip
+        code, out, err, problem = run_captured(cmd, cidfile, limit=256 * 1024, timeout=SELFTEST_TIMEOUT_S)
+    sys.stdout.write(sanitize_for_terminal(out.decode("utf-8", "replace")))
+    if err:
+        sys.stderr.write(sanitize_for_terminal(err.decode("utf-8", "replace")))
+    ok = code == 0 and not problem
+    if problem:
+        say(f"self-test box stopped: {problem}")
+    write_selftest_metric(cfg, ok)
+    return 0 if ok else 1
+
+
+def cmd_enabled(cfg: Config, _args: argparse.Namespace) -> int:
+    return 0 if cfg.enabled else 1
 
 
 # ---------------------------------------------------------------------- patch
@@ -596,18 +868,33 @@ def _clean_git_env(tmp: str) -> Dict[str, str]:
     return env
 
 
+HOST_GIT = [
+    "git",
+    "-c", "core.hooksPath=/dev/null",
+    "-c", "core.fsmonitor=false",
+    "-c", "core.quotePath=true",
+    "-c", "core.pager=cat",
+    "-c", "diff.noprefix=false",
+    "-c", "diff.relative=false",
+    "-c", "color.ui=false",
+]  # fmt: skip
+
+
 def refused_reason(path: str) -> Optional[str]:
     if path.startswith("/") or "\\" in path or any(p in ("", ".", "..") for p in path.split("/")):
         return "unsafe path"
-    if path.startswith(".git/") or path == ".git":
+    if not SAFE_PATH_RE.fullmatch(path):
+        return "unusual characters in the path"
+    low = path.lower()
+    if low.startswith(".git/") or low == ".git":
         return "git internals"
     for prefix in REFUSED_PREFIXES:
-        if path.startswith(prefix):
+        if low.startswith(prefix):
             return f"under {prefix}"
-    if path.rsplit("/", 1)[-1] in REFUSED_NAMES:
+    if low.rsplit("/", 1)[-1] in REFUSED_NAMES:
         return "runs or instructs before review"
     for pat in REFUSED_PATTERNS:
-        if pat.search(path):
+        if pat.search(low):
             return "runs before review"
     return None
 
@@ -616,10 +903,13 @@ def is_allowed(path: str, allows: Sequence[str]) -> bool:
     return any(path == a or (a.endswith("/") and path.startswith(a)) for a in allows)
 
 
-def text_problems(text: str) -> List[str]:
-    """Characters a terminal or a reviewer could be fooled by."""
+def text_problems(diff: str) -> List[str]:
+    """Characters a terminal or a reviewer could be fooled by, on added lines and
+    headers only (context and removed lines are the trusted base)."""
     out = []
-    for lineno, line in enumerate(text.split("\n"), 1):
+    for lineno, line in enumerate(diff.split("\n"), 1):
+        if line.startswith((" ", "-")) and not line.startswith("--- "):
+            continue
         for ch in line:
             o = ord(ch)
             if ch in _BIDI:
@@ -628,56 +918,97 @@ def text_problems(text: str) -> List[str]:
             if (o < 0x20 and ch not in "\t\r") or o == 0x7F or 0x80 <= o <= 0x9F:
                 out.append(f"line {lineno}: control character 0x{o:02x}")
                 break
-            if unicodedata.category(ch) == "Cf" and ch not in ("​", "﻿"):
-                out.append(f"line {lineno}: invisible format character U+{o:04X}")
+            if ch in _INVISIBLE or (unicodedata.category(ch) == "Cf" and ch not in _FORMAT_OK):
+                out.append(f"line {lineno}: invisible character U+{o:04X}")
                 break
         if len(out) >= 5:
             break
     return out
 
 
-def review_patch(text: str, numstat: List[Tuple[str, str, str]], allows: Sequence[str]) -> Tuple[List[str], List[str]]:
-    """(problems, files). ``numstat`` = git apply --numstat entries in diff order."""
-    problems = text_problems(text)
-    files = [path for _a, _d, path in numstat]
-    for added, deleted, path in numstat:
-        if added == "-" or deleted == "-":
-            problems.append(f"{path}: binary change (not reviewable as text)")
+def parse_raw(raw: bytes) -> List[Tuple[str, str, str, str]]:
+    """`git diff --raw -z --no-renames`: [(old mode, new mode, status, path)]."""
+    out = []
+    parts = raw.split(b"\0")
+    i = 0
+    while i < len(parts) - 1:
+        meta = parts[i].decode("ascii")
+        if not meta.startswith(":"):
+            raise ValueError("unexpected --raw output")
+        old_mode, new_mode, _old, _new, status = meta[1:].split(" ")
+        if status[:1] in ("R", "C"):
+            raise ValueError("rename/copy in --no-renames output")
+        out.append((old_mode, new_mode, status[:1], parts[i + 1].decode("utf-8", "surrogateescape")))
+        i += 2
+    return out
+
+
+def review_changes(
+    entries: Sequence[Tuple[str, str, str, str]], binary: Iterable[str], diff_text: str, allows: Sequence[str]
+) -> List[str]:
+    """Problems with a change set, from trusted git's view of the applied patch."""
+    problems = text_problems(diff_text)
+    binary = set(binary)
+    for _old_mode, new_mode, status, path in entries:
+        shown = sanitize_for_terminal(path, keep_newlines=False)
+        if path in binary:
+            problems.append(f"{shown}: binary change (not reviewable as text)")
         reason = refused_reason(path)
         if reason and not is_allowed(path, allows):
-            problems.append(f"{path}: refused ({reason}); --allow {path} if you mean it")
-    idx = -1
-    for line in text.split("\n"):
-        if line.startswith("diff --git "):
-            idx += 1
-            continue
-        if line.startswith(("GIT binary patch", "Binary files ")):
-            problems.append("binary content in the patch")
-            continue
-        m = re.match(r"^(new file mode|new mode|old mode|deleted file mode) (\d{6})$", line)
-        if not m:
-            continue
-        kind, mode = m.groups()
-        path = files[idx] if 0 <= idx < len(files) else "?"
-        if kind in ("new file mode", "new mode") and mode != "100644" and not is_allowed(path, allows):
-            what = {"100755": "executable", "120000": "symlink", "160000": "submodule"}.get(mode, f"mode {mode}")
-            problems.append(f"{path}: {what} (refused); --allow {path} if you mean it")
-    return problems, files
+            verb = "deletes" if status == "D" else "changes"
+            problems.append(f"{shown}: refused, {verb} a protected file ({reason}); --allow {shown} if you mean it")
+        if status != "D" and new_mode != "100644" and not is_allowed(path, allows):
+            what = {"100755": "executable", "120000": "symlink", "160000": "submodule"}.get(new_mode, new_mode)
+            problems.append(f"{shown}: {what} (refused); --allow {shown} if you mean it")
+        if status not in ("A", "M", "D", "T"):
+            problems.append(f"{shown}: unexpected change type {status}")
+    return problems
 
 
-def sanitize_for_terminal(text: str) -> str:
-    out = []
-    for ch in text:
-        o = ord(ch)
-        if ch == "\n" or ch == "\t":
-            out.append(ch)
-        elif o < 0x20 or o == 0x7F:
-            out.append("^" + chr(o ^ 0x40))
-        elif 0x80 <= o <= 0x9F or ch in _BIDI or unicodedata.category(ch) == "Cf":
-            out.append(f"<U+{o:04X}>")
-        else:
-            out.append(ch)
-    return "".join(out)
+def check_box_diff(bundle: Path, base: str, raw: bytes, allows: Sequence[str]):
+    """Judge a box's (untrusted) diff by what trusted git makes of it.
+
+    The text is applied to a clean clone of ``base`` from our own bundle; the
+    file list, modes and the diff that is reviewed and saved are what git then
+    shows there, never the box's bytes. So whatever odd mode lines, decoy hunk
+    lines or "no newline" tricks the text holds, what you review is exactly
+    what will apply. Returns (entries, numstat, diff text, diff bytes, problems).
+    """
+    with tempfile.TemporaryDirectory(prefix="jess-coder-check-") as tmp:
+        genv = _clean_git_env(tmp)
+        boxfile = Path(tmp) / "from-box.patch"
+        boxfile.write_bytes(raw)
+        clone = Path(tmp) / "repo"
+        run([*HOST_GIT, "clone", "--quiet", "--no-checkout", str(bundle), str(clone)], cwd=tmp, env=genv)
+        run([*HOST_GIT, "-C", str(clone), "checkout", "--quiet", base], env=genv)
+        applied = subprocess.run(
+            [*HOST_GIT, "-C", str(clone), "apply", "--index", "--whitespace=nowarn", str(boxfile)],
+            env=genv, capture_output=True, text=True, errors="replace",
+        )  # fmt: skip
+        if applied.returncode != 0:
+            raise Fatal("the patch does not apply to its base: " + sanitize_for_terminal(applied.stderr)[:300])
+        diff_args = ["diff", "--cached", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color"]
+
+        def git_out(*extra: str) -> bytes:
+            return subprocess.run(
+                [*HOST_GIT, "-C", str(clone), *diff_args, *extra, base], env=genv, capture_output=True, check=True
+            ).stdout
+
+        raw_entries = git_out("--raw", "-z", "--no-abbrev")
+        numstat = git_out("--numstat", "-z")
+        canonical = git_out("--full-index", "--src-prefix=a/", "--dst-prefix=b/")
+    try:
+        entries = parse_raw(raw_entries)
+        text = canonical.decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        raise Fatal("the change has content git can't show as UTF-8 text (binary or mis-encoded)") from None
+    stats = []
+    for rec in numstat.decode("utf-8", "surrogateescape").split("\0"):
+        if rec:
+            added, deleted, path = rec.split("\t", 2)
+            stats.append((added, deleted, path))
+    binary = [p for a, d, p in stats if a == "-" or d == "-"]
+    return entries, stats, text, canonical, review_changes(entries, binary, text, allows)
 
 
 def cmd_patch(cfg: Config, args: argparse.Namespace) -> int:
@@ -687,70 +1018,56 @@ def cmd_patch(cfg: Config, args: argparse.Namespace) -> int:
     meta = read_meta(cfg, name)
     if meta is None:
         raise Fatal(f"no session {name}")
+    if container_name(name) in running_boxes("session"):
+        raise Fatal(f"session {name} is open; close it first so the workspace stops changing")
     base = meta["base"]
-    box = session_dir(cfg, name) / "box"
-    cmd = box_command(cfg, name=f"{name}-patch", mode=["patch", base], network="none", workspace=box, workspace_ro=True)
-    res = subprocess.run(cmd, capture_output=True, timeout=600)
-    if res.returncode != 0:
-        sys.stderr.write(sanitize_for_terminal(res.stderr.decode("utf-8", "replace"))[-2000:])
-        raise Fatal(f"the box could not produce a diff (exit {res.returncode})")
-    raw = res.stdout
-    if not raw.strip():
-        say(f"session {name} has no changes against {base[:12]}")
-        return 0
-    if len(raw) > MAX_PATCH_BYTES:
-        raise Fatal(f"patch is {len(raw)} bytes, over the {MAX_PATCH_BYTES} limit")
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        raise Fatal("patch is not valid UTF-8 (binary or mis-encoded content)") from None
-
+    bundle = cfg.bundles / f"{base}.bundle"
+    if not bundle.is_file():
+        raise Fatal(f"the base bundle {bundle.name} is missing, so the patch can't be checked")
     with tempfile.TemporaryDirectory(prefix="jess-coder-patch-") as tmp:
-        genv = _clean_git_env(tmp)
-        pfile = Path(tmp) / "change.patch"
-        pfile.write_bytes(raw)
-        ns = run(["git", "apply", "--numstat", "-z", str(pfile)], check=False, cwd=tmp, env=genv)
-        if ns.returncode != 0:
-            raise Fatal("git can't parse the patch: " + sanitize_for_terminal(ns.stderr)[:300])
-        numstat = []
-        for entry in ns.stdout.split("\0"):
-            if entry:
-                added, deleted, path = entry.split("\t", 2)
-                numstat.append((added, deleted, path))
-        problems, files = review_patch(text, numstat, args.allow)
-        # Does it apply cleanly to the session's base? (our own bundle: trusted)
-        bundle = cfg.bundles / f"{base}.bundle"
-        applies = None
-        if bundle.is_file():
-            clone = Path(tmp) / "repo"
-            run(["git", "clone", "--quiet", "--no-checkout", str(bundle), str(clone)], cwd=tmp, env=genv)
-            run(["git", "-C", str(clone), "checkout", "--quiet", base], env=genv)
-            chk = run(["git", "-C", str(clone), "apply", "--check", str(pfile)], check=False, env=genv)
-            applies = chk.returncode == 0
-            if not applies:
-                problems.append("does not apply cleanly to its base: " + sanitize_for_terminal(chk.stderr)[:300])
+        cidfile = Path(tmp) / "cid"
+        cmd = box_command(
+            cfg, name=f"{name}-patch", kind="patch", mode=["patch", base], network="none", cidfile=cidfile,
+            workspace=session_dir(cfg, name) / "box", workspace_ro=True,
+        )  # fmt: skip
+        code, raw, err, problem = run_captured(cmd, cidfile, limit=MAX_PATCH_BYTES, timeout=PATCH_TIMEOUT_S)
+        if problem == "too_large":
+            raise Fatal(f"the diff is over {MAX_PATCH_BYTES // (1024 * 1024)} MB; not exported")
+        if problem == "timeout":
+            raise Fatal(f"the box took over {PATCH_TIMEOUT_S} s to produce a diff; stopped")
+        if code != 0:
+            sys.stderr.write(sanitize_for_terminal(err.decode("utf-8", "replace")))
+            raise Fatal(f"the box could not produce a diff (exit {code})")
+        if not raw.strip():
+            say(f"session {name} has no changes against {base[:12]}")
+            return 0
+        review = check_box_diff(bundle, base, raw, args.allow)
+    entries, stats, text, canonical, problems = review
 
-    print(f"Session {name}: {len(files)} file(s) changed against main @ {base[:12]}")
-    for added, deleted, path in numstat:
-        print(f"  +{added:<5} -{deleted:<5} {sanitize_for_terminal(path)}")
+    print(f"Session {name}: {len(entries)} file(s) changed against main @ {base[:12]}")
+    for added, deleted, path in stats:
+        print(f"  +{added:<5} -{deleted:<5} {sanitize_for_terminal(path, keep_newlines=False)}")
     if args.show:
         print()
         print(sanitize_for_terminal(text))
     if problems:
         print("\nRefused:")
         for p in problems:
-            print(f"  - {sanitize_for_terminal(p)}")
+            print(f"  - {sanitize_for_terminal(p, keep_newlines=False)}")
         return 1
-    stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
-    out = cfg.patches / f"{name}-{stamp}.patch"
-    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(raw)
-    wt = cfg.root / ".claude" / "worktrees" / f"coder-{name}"
-    print(f"\nSaved: {out}" + (" (applies cleanly)" if applies else ""))
-    print("Review it (jess-coder patch --show, or less), then apply it in a fresh worktree:")
-    print(f"  git -C {cfg.root} worktree add -b coder/{name}-{stamp.lower()} {wt}-{stamp.lower()} {base}")
-    print(f"  git -C {wt}-{stamp.lower()} apply --index {out}")
+    digest = hashlib.sha256(canonical).hexdigest()[:12]
+    out = cfg.patches / f"{name}-{digest}.patch"
+    if out.exists():
+        print(f"\nAlready saved: {out}")
+    else:
+        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(canonical)
+        print(f"\nSaved: {out} (regenerated by git from the applied change)")
+    wt = cfg.root / ".claude" / "worktrees" / f"coder-{name}-{digest}"
+    print("Review it (jess-coder patch --show, or less) like a patch from a stranger, then apply it in a worktree:")
+    print(f"  git -C {cfg.root} worktree add -b coder/{name}-{digest} {wt} {base}")
+    print(f"  git -C {wt} apply --index {out}")
     return 0
 
 
@@ -771,14 +1088,11 @@ def cmd_ls(cfg: Config, _args: argparse.Namespace) -> int:
         print("No sessions. Start one: jess-coder <name>")
     for n in names:
         meta = read_meta(cfg, n) or {}
-        box = session_dir(cfg, n) / "box"
-        used = (
-            dt.datetime.fromtimestamp(box.stat().st_mtime, dt.UTC).strftime("%Y-%m-%d %H:%M") if box.exists() else "?"
-        )
         state = "OPEN" if container_name(n) in running else "closed"
         live = sum(1 for t in tokens if t.get("label") == n)
+        opened = str(meta.get("last_opened") or meta.get("created") or "?")[:16]
         print(
-            f"{n:<32} {state:<6} base {str(meta.get('base', '?'))[:12]}  last change {used}Z"
+            f"{n:<32} {state:<6} base {str(meta.get('base', '?'))[:12]}  last opened {opened}Z"
             + (f"  ({live} live token)" if live else "")
         )
     strays = sorted(running - {container_name(n) for n in names})
@@ -793,7 +1107,7 @@ def cmd_rm(cfg: Config, args: argparse.Namespace) -> int:
     sdir = session_dir(cfg, name)
     if not sdir.is_dir():
         raise Fatal(f"no session {name}")
-    if container_name(name) in running_boxes():
+    if container_name(name) in running_boxes("session"):
         raise Fatal(f"session {name} is open; close it first")
     if not args.yes:
         answer = input(f"Delete session {name} and its workspace? Patches already saved stay. [y/N] ")
@@ -803,26 +1117,38 @@ def cmd_rm(cfg: Config, args: argparse.Namespace) -> int:
     if box.is_dir() and any(box.iterdir()):
         check_image(cfg)
         # The box's files belong to the box uid: a no-network box deletes them.
-        cmd = box_command(cfg, name=f"{name}-rm", mode=["clean"], network="none", workspace=box)
-        if run(cmd, check=False).returncode != 0:
+        with tempfile.TemporaryDirectory(prefix="jess-coder-") as tmp:
+            cidfile = Path(tmp) / "cid"
+            cmd = box_command(cfg, name=f"{name}-rm", kind="rm", mode=["clean"], network="none", cidfile=cidfile,
+                              workspace=box)  # fmt: skip
+            code, _out, err, problem = run_captured(cmd, cidfile, limit=64 * 1024, timeout=PATCH_TIMEOUT_S)
+        if code != 0 or problem:
+            sys.stderr.write(sanitize_for_terminal(err.decode("utf-8", "replace")))
             raise Fatal("the cleanup box failed; the session folder is left as it was")
     shutil.rmtree(sdir)
     say(f"session {name} deleted")
     return 0
 
 
-def cmd_build(cfg: Config, _args: argparse.Namespace) -> int:
-    say("building the coder image (docker compose --profile coder build coder)")
-    return run(
-        ["docker", "compose", "--profile", "coder", "build", "coder"], check=False, capture=False, cwd=cfg.root
-    ).returncode
+def cmd_build(cfg: Config, args: argparse.Namespace) -> int:
+    want = image_inputs(cfg)
+    if args.if_stale and image_label(cfg) == want:
+        say(f"image {cfg.image} is up to date (inputs {want})")
+        return 0
+    say(f"building the coder image (inputs {want})")
+    env = {**os.environ, "JESS_CODER_INPUTS": want}
+    code = subprocess.run(["docker", "compose", "--profile", "coder", "build", "coder"], cwd=cfg.root,
+                          env=env).returncode  # fmt: skip
+    if code == 0:  # older box images become dangling: drop them
+        run(["docker", "image", "prune", "-f", "--filter", "label=jess.coder=1"], check=False)
+    return code
 
 
 # ----------------------------------------------------------------------- main
 
 
 def parse(argv: List[str]) -> argparse.Namespace:
-    commands = {"start", "patch", "ls", "rm", "selftest", "build"}
+    commands = {"start", "patch", "ls", "rm", "selftest", "build", "enabled"}
     if argv and argv[0] not in commands and not argv[0].startswith("-"):
         argv = ["start", *argv]  # `jess-coder <name>` = start
     ap = argparse.ArgumentParser(prog="jess-coder", description=__doc__.split("\n\n")[0])
@@ -836,7 +1162,7 @@ def parse(argv: List[str]) -> argparse.Namespace:
     p = sub.add_parser("patch", help="export the session's changes as a checked patch")
     p.add_argument("name")
     p.add_argument(
-        "--allow", action="append", default=[], metavar="PATH", help="allow one refused path (dir/ for a prefix)"
+        "--allow", action="append", default=[], metavar="PATH", help="allow one refused path (dir/ = prefix)"
     )
     p.add_argument("--show", action="store_true", help="print the whole diff (control characters made visible)")
     sub.add_parser("ls", help="list sessions")
@@ -844,8 +1170,12 @@ def parse(argv: List[str]) -> argparse.Namespace:
     p.add_argument("name")
     p.add_argument("-y", "--yes", action="store_true")
     p = sub.add_parser("selftest", help="run the isolation self-test")
-    p.add_argument("--metrics", action="store_true", help="write the node_exporter textfile metric")
-    sub.add_parser("build", help="build the box image")
+    p.add_argument(
+        "--wait-health", type=float, default=0, metavar="S", help="first wait up to S s for the orchestrator"
+    )
+    p = sub.add_parser("build", help="build the box image")
+    p.add_argument("--if-stale", action="store_true", help="only if its inputs changed since the last build")
+    sub.add_parser("enabled", help="exit 0 if CODER_ENABLED is on")
     return ap.parse_args(argv)
 
 
@@ -858,11 +1188,12 @@ def main(argv: List[str]) -> int:
         "rm": cmd_rm,
         "selftest": cmd_selftest,
         "build": cmd_build,
+        "enabled": cmd_enabled,
     }
     try:
         return handlers[args.cmd](Config(), args)
     except Fatal as exc:
-        print(f"jess-coder: {exc}", file=sys.stderr)
+        print(f"jess-coder: {sanitize_for_terminal(str(exc), keep_newlines=False)}", file=sys.stderr)
         return 2
     except subprocess.CalledProcessError as exc:
         print(f"jess-coder: {exc.cmd[0]} failed (exit {exc.returncode})", file=sys.stderr)

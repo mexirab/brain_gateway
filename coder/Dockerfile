@@ -1,23 +1,44 @@
-# syntax=docker/dockerfile:1.7
-#
 # Coder box: Qwen Code in a disposable, offline container (docs/CODER.md).
 #
-# Built only through compose (`docker compose --profile coder build coder`),
-# which passes the freshly built orchestrator image as the build context
-# `jess-orchestrator-base` (additional_contexts: service:orchestrator). So the
-# box gets exactly Jess's Python dependencies and the repo's pytest suite runs
-# inside, without a second multi-GB pip install. A plain `docker build` needs
-# `--build-context jess-orchestrator-base=docker-image://<orchestrator image>`
-# (the CI docker-build job does that).
+# Built with `jess-coder build` (which runs `docker compose --profile coder
+# build coder` and labels the image with a hash of its inputs). The compose
+# service passes ./orchestrator as the named build context `orchestrator`;
+# only requirements.txt and embedding_pin.py are taken from it. The box never
+# carries Jess's code: sessions work on their own clone. A plain `docker build`
+# needs `--build-context orchestrator=orchestrator/` (the CI docker-build job).
 #
 # Nothing here is started by `docker compose up`: scripts/jess-coder runs one
 # fresh `docker run --rm` per session with the hardening flags (read-only root,
 # no capabilities, coder-net only). The image itself carries no secret.
-FROM jess-orchestrator-base
 
-USER root
+# Jess's Python dependencies, so the repo's pytest suite runs inside. These
+# instructions repeat the first lines of orchestrator/Dockerfile exactly
+# (test_coder_box.py keeps them in step): BuildKit then reuses the
+# orchestrator's cached pip layer, and the box tests against the same packages.
+FROM python:3.11-slim
 
-# git: the box clones the repo bundle and diffs against its base.
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl tesseract-ocr && rm -rf /var/lib/apt/lists/*
+
+COPY --from=orchestrator requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Jess's tests import orchestrator.shared, which loads the pinned embedding
+# model (orchestrator/embedding_pin.py) at import time. The box is offline, so
+# the image carries that exact model. Read-only at run time; transformers puts
+# the model's remote code in HF_MODULES_CACHE (a tmpfs) when it loads. Early in
+# the file so a Qwen Code or Node bump doesn't download the model again.
+ENV HF_HOME=/opt/jess-coder/hf
+COPY --from=orchestrator embedding_pin.py /opt/jess-coder/pin/embedding_pin.py
+RUN python3 -I -c "import sys; sys.path.insert(0, '/opt/jess-coder/pin'); \
+from embedding_pin import DEFAULT_EMBEDDING_MODEL as m, load_kwargs; \
+from sentence_transformers import SentenceTransformer; \
+SentenceTransformer(m, **load_kwargs(m))" \
+    && rm -rf /opt/jess-coder/pin /opt/jess-coder/hf/modules /opt/jess-coder/hf/token /opt/jess-coder/hf/stored_tokens \
+    && chmod -R a+rX,go-w /opt/jess-coder/hf
+
+# git: the box unpacks the repo bundle and diffs against its base.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
@@ -55,22 +76,9 @@ ARG CODER_UID=61001
 RUN groupadd --gid "${CODER_UID}" coder \
     && useradd --no-log-init --uid "${CODER_UID}" --gid "${CODER_UID}" --home-dir /home/coder --no-create-home \
         --shell /bin/bash coder \
-    && mkdir -p /home/coder /work /bundle /etc/qwen-code \
-    && chown "${CODER_UID}:${CODER_UID}" /home/coder /work
-
-# Jess's tests import orchestrator.shared, which loads the pinned embedding
-# model (orchestrator/embedding_pin.py) at import time. The box is offline, so
-# the image carries that exact model. Read-only at run time; transformers puts
-# the model's remote code in HF_MODULES_CACHE (a tmpfs) when it loads.
-ENV HF_HOME=/opt/jess-coder/hf
-RUN python3 -c "from sentence_transformers import SentenceTransformer; \
-from orchestrator.embedding_pin import DEFAULT_EMBEDDING_MODEL as m, load_kwargs; \
-SentenceTransformer(m, **load_kwargs(m))" \
-    && rm -rf /opt/jess-coder/hf/modules /opt/jess-coder/hf/token /opt/jess-coder/hf/stored_tokens \
-    && chmod -R a+rX,go-w /opt/jess-coder/hf
-
-# Jess's code comes from the session's clone, never from the base image.
-RUN rm -rf /app/orchestrator
+    && mkdir -p /home/coder /work /bundle /etc/qwen-code /app/data \
+    && chown "${CODER_UID}:${CODER_UID}" /home/coder /work \
+    && test ! -e /app/orchestrator
 
 # Locked Qwen Code config (system scope beats user and workspace settings).
 # GATE_URL is rendered in at build time from CODER_GATE_ADDRESS (compose arg).
@@ -87,7 +95,6 @@ COPY selftest.py entrypoint.py /opt/jess-coder/
 RUN chmod 0444 /opt/jess-coder/*.md /opt/jess-coder/*.py
 
 ENV HOME=/home/coder \
-    PYTHONPATH= \
     PYTHONDONTWRITEBYTECODE=1 \
     HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1 \
@@ -98,8 +105,10 @@ ENV HOME=/home/coder \
     npm_config_offline=true \
     GIT_CONFIG_NOSYSTEM=1
 
+LABEL jess.coder="1"
 USER coder
 WORKDIR /work
 HEALTHCHECK NONE
-ENTRYPOINT ["python3", "-I", "/opt/jess-coder/entrypoint.py"]
+# -I -S: no site-packages code runs before the self-test's socket checks.
+ENTRYPOINT ["python3", "-I", "-S", "/opt/jess-coder/entrypoint.py"]
 CMD ["selftest"]

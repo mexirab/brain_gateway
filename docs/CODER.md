@@ -29,18 +29,35 @@ Assume the model inside the box is hostile: prompt-injected by a file it read, o
 | **Container.** Read-only root, no capabilities, `no-new-privileges`, its own uid (61001, no account on Jupiter has it), memory/CPU/pids limits, no logs, no Docker socket, a fresh `docker run --rm` every time. | `box_command()` in `scripts/jess-coder` | `test_coder_box.py`, the self-test |
 | **Disk.** The workspace lives on its own 20 GB filesystem, so a runaway box can't fill Jupiter's root disk. | `/srv/jess-coder` loop mount (Setup below) | `jess-coder` refuses an unmounted `/srv/jess-coder` |
 | **Token.** One per session, 4 h by default (`CODER_SESSION_HOURS`), with a request and token budget. It reaches the box through the environment (never argv) and is revoked when the session ends. The box is killed at expiry. | `jess-coder` + the gate's token store | PR 1 tests |
-| **Host side of the patch.** The host never runs git inside a box's folder. The box's files belong to its uid, so host git refuses them as "dubious ownership" instead of running a planted `.git/config` hook or fsmonitor. `jess-coder patch` gets the diff from a second, **offline**, read-only box and parses it as text. It refuses files that would run before you review them, symlinks, executables, submodules, binary changes and terminal/Trojan-Source tricks. It test-applies the patch to a clean clone of the base and saves it outside the workspace. | `cmd_patch` / `review_patch` | `test_coder_box.py` |
+| **Host side of the patch.** The host never runs git inside a box's folder. The box's files belong to its uid, so host git refuses them as "dubious ownership" instead of running a planted `.git/config` hook or fsmonitor. `jess-coder patch` gets the diff from a second, **offline**, read-only box, which uses a fresh git dir, so the workspace's own config, filter drivers and attributes never run. The host still treats that text as hostile: it applies it to a clean clone of the base (from its own bundle) and takes the file list, the modes and the diff you review and save from **what git shows there**, never the box's bytes. So odd mode lines, decoy hunk lines, "no newline" joins or forged renames can't make what you read differ from what applies. It then refuses files that would run before you review them (deleting one too), symlinks, executables, submodules, binary changes and terminal/Trojan-Source characters on added lines. The output is capped at 8 MB and 10 min. | `check_box_diff` / `review_changes` | `test_coder_box.py` (incl. the reviewers' hostile patches) |
 
 **Refused by default** (`--allow PATH` overrides one, `--allow dir/` a prefix). These would run on Jupiter, in CI, or in your next Claude Code or Qwen Code session before a human read them:
 - `.github/`, `.claude/`, `.qwen/`, `.vscode/`, `.idea/`, `.devcontainer/`
 - `scripts/`, `coder/`, `tts/`, `monitoring/`, `homeassistant/`, `radicale/`, `actual/`, `grist/`, `models/`
-- `CLAUDE.md`, `QWEN.md`, `AGENTS.md`, `.mcp.json`
-- `install.sh`, `Makefile`, `conftest.py`, `pyproject.toml`
+- other agents' and editors' folders: `.gemini/`, `.codex/`, `.cursor/`, `.continue/`, `.zed/`, `.husky/`, `.githooks/`
+- `CLAUDE*.md` (incl. `CLAUDE.local.md`), `QWEN*.md`, `AGENTS.md`, `.mcp.json`, `.cursorrules` and the like
+- `install.sh`, `Makefile`, `conftest.py`, `pyproject.toml`, `setup.py`, `noxfile.py`, `mypy.ini`, `.pylintrc`, `.coveragerc`
 - any `docker-compose*.yml`, `Dockerfile*`, `requirements*.txt`, `*.service`/`*.socket`/`*.timer`/`*.sh`, `.env*`
-- `package.json`, `.gitattributes`, `.gitmodules`, `.gitignore`
+- JS/TS tool configs that run on lint/test/build: `*.config.{js,mjs,cjs,ts}`, `*.setup.ts`, `.eslintrc*`, `.prettierrc*`, `.babelrc*`
+- `package.json`, `package-lock.json`, `.npmrc`, `.yarnrc*`, `.gitattributes`, `.gitmodules`, `.gitignore`, `.lfsconfig`
+- any path with characters outside `A-Z a-z 0-9 . _ @ + / -`
+
+Matching ignores case (a macOS checkout folds `.Claude/` into `.claude/`).
+
+**Treat a coder patch like a pull request from a stranger.** The next tools to touch it run on Jupiter as you:
+- Read it yourself (`jess-coder patch <name> --show`) before you hand the worktree to Claude Code. Review agents with a shell read the code too, and a planted docstring is a prompt injection.
+- Run its tests **offline**, in a box-like container, never on the default bridge (which reaches the LAN, the internet and host services):
+
+  ```bash
+  docker run --rm --network none --read-only --cap-drop ALL --user 61001:61001 --tmpfs /tmp --tmpfs /home/coder:uid=61001,gid=61001 --tmpfs /app/data:uid=61001,gid=61001 -v "$PWD":/w:ro -w /w --entrypoint python3 jess-coder:current -m pytest -o asyncio_mode=auto -p no:cacheprovider orchestrator/tests -q
+  ```
+
+- Frontend changes: `frontend/` configs are refused, but the repo's Claude Code lint hook runs `eslint` in a worktree that has `node_modules`. Read the patch first.
 
 **Known limits (accepted):**
-- **Your terminal.** An interactive session draws on your terminal, so a hostile box can send it escape sequences. Use a terminal that doesn't let remote programs write your clipboard (OSC 52) or change settings. iTerm2: Settings → General → Selection, "Applications in terminal may access clipboard" off.
+- **Your terminal.** An interactive session draws on your terminal, so a hostile box can send it escape sequences. Use a terminal that doesn't let remote programs write your clipboard (OSC 52) or change settings (iTerm2: Settings → General → Selection, "Applications in terminal may access clipboard" off), and preferably run sessions inside `tmux` on Jupiter. `jess-coder` flushes pending terminal input when a session ends and makes headless output terminal-safe.
+- **Boxes on coder-net can reach each other** (Docker inter-container traffic is on; turning it off would cut the gate too). At most 2 sessions are open at a time.
+- **IPv6 rests on Docker's default.** Docker 29 turns IPv6 off in endpoints of IPv4-only networks. With it on, a box would reach Jupiter's SSH and Home Assistant through the bridge's link-local address (measured). The self-test fails in that case. Optional host backstop: a udev rule that sets `net.ipv6.conf.br-jesscoder.disable_ipv6=1`.
 - **The workspace persists** between runs of the same session. A box can leave things for its own next run (only its own: each session has its own folder).
 - **The brain is shared.** A coder request waits for chat to be idle and gives way to it, so chat and voice stay fast. A long coding burst still makes Jess's background jobs (auto_learn, meal planner, self-audit) wait longer. Watch the Grafana row.
 - **The box can read the whole repo history of `main`.** The repo is public anyway.
@@ -60,16 +77,18 @@ Assume the model inside the box is hostile: prompt-injected by a file it read, o
    ```
 
    ```bash
-   sudo mkdir -p /srv/jess-coder && echo '/var/lib/jess-coder.img /srv/jess-coder ext4 loop,nosuid,nodev,noatime 0 2' | sudo tee -a /etc/fstab
+   sudo mkdir -p /srv/jess-coder && echo '/var/lib/jess-coder.img /srv/jess-coder ext4 loop,nosuid,nodev,noatime,nofail 0 0' | sudo tee -a /etc/fstab
    ```
+
+   `nofail`: if the image ever goes missing or needs a repair, Jupiter still boots (HA, Jess and monitoring come up; only `jess-coder` refuses, because `/srv/jess-coder` isn't mounted).
 
    ```bash
    sudo systemctl daemon-reload && sudo mount /srv/jess-coder && sudo chown labadmin:labadmin /srv/jess-coder && sudo chmod 0700 /srv/jess-coder
    ```
 
-   Check: `findmnt /srv/jess-coder` shows `nosuid,nodev`.
+   Check: `findmnt /srv/jess-coder` shows `nosuid,nodev` (`jess-coder` refuses to run without them).
 
-2. **Firewall backstop.** Nothing to add: the container firewall (`scripts/container-firewall/`, PR #176) puts every `br-+` bridge, `br-jesscoder` included, through its INPUT allow-list once it enforces. coder-net needs no allow line, because boxes must reach nothing on the host. Until it enforces, the isolated gateway mode is the control (the self-test proves it).
+2. **Firewall backstop.** Nothing to add: the container firewall (`jess-docker-input`, PR #176, installed on Jupiter in observe mode) puts every `br-+` bridge, `br-jesscoder` included, through its INPUT allow-list once it enforces. coder-net needs no allow line, because boxes must reach nothing on the host. Until it enforces, the isolated gateway mode is the control (the self-test proves it).
 
 3. **Turn the gate on.** Add `CODER_ENABLED=true` to Jupiter's `.env`, then recreate the orchestrator:
 
@@ -79,7 +98,7 @@ Assume the model inside the box is hostile: prompt-injected by a file it read, o
 
    Its log says `[CODER] Gate enabled on 10.213.250.2`.
 
-4. **Build the image.** Later deploys rebuild it when `coder/` changes while `CODER_ENABLED=true`:
+4. **Build the image.** It's labelled with a hash of its inputs (`coder/`, `orchestrator/requirements.txt`, `embedding_pin.py`, the gate address, `CODER_CONTEXT_WINDOW`); `jess-coder` refuses an image whose label no longer matches, and every deploy with `CODER_ENABLED=true` rebuilds it then (`build --if-stale`). Old box images are pruned after a build:
 
    ```bash
    cd ~/gateway_nerves && python3 scripts/jess-coder build
@@ -114,7 +133,8 @@ That opens session `fix-grocery`: a fresh box on `main` as deployed. Qwen Code s
 | `jess-coder patch <name> --show` | The same, plus the whole diff (control characters made visible) |
 | `jess-coder ls` | Sessions, open boxes, live tokens |
 | `jess-coder rm <name>` | Delete a session (its saved patches stay) |
-| `jess-coder selftest` | Run the isolation self-test |
+| `jess-coder selftest` | Run the isolation self-test (writes the metric) |
+| `jess-coder build [--if-stale]` | Build the box image |
 
 **Applying a patch.** `jess-coder patch` prints the exact commands. They:
 - create a worktree on the session's base commit,
@@ -125,6 +145,8 @@ The change then goes through the normal pipeline: CLAUDE.md's review agents and 
 
 **Sessions start from `main` as deployed** (the live checkout's `main`), not from your feature branch. A session keeps its base commit until you `rm` it.
 
+**The brain asleep?** `jess-coder` checks the brain's `/health` first and wakes Helios (through the orchestrator, when `HELIOS_WAKE_ENABLED`) and waits up to 6 min. A session ends itself at its token's expiry (4 h by default), even if `jess-coder` is gone.
+
 ## Self-test
 
 `coder/selftest.py` runs **inside** a box on coder-net, at the start of every session (before Qwen Code starts) and on every deploy while `CODER_ENABLED=true`. If it fails, the box doesn't open and the deploy fails. It checks:
@@ -133,18 +155,25 @@ The change then goes through the normal pipeline: CLAUDE.md's review agents and 
 - **Filesystem:** root mount read-only; writable mounts only `/work`, `/tmp`, `/home/coder`, `/app/data`; no Docker socket.
 - **Network:** only `lo` + `eth0`; an address in `CODER_BOX_RANGE`; no default route; no routable IPv6.
 - **Reach:**
-  - external DNS doesn't resolve;
-  - TCP to every Jupiter address fails (each interface, each Docker bridge gateway, given by the launcher), and so do Helios, Saturn, the router, public resolvers and IPv6, on 18 common service ports;
+  - external DNS doesn't resolve (a lookup that never finishes counts as a failure);
+  - every Jupiter address (each interface, each Docker bridge gateway, given by the launcher), Helios, Saturn, the router, public resolvers, public IPv6 and the bridge's own IPv6 link-local must answer a TCP connect with an immediate **"no route"**. That proves no port is reachable, not just the 18 probed: a refusal (something answered) or a timeout (packets left) counts as reach. The gate host may refuse its other ports; the bridge's `.1` may only be absent;
   - UDP DNS gets no answer.
-- **Gate:** 403 on other paths (`/health`, `/metrics`, `/api/coder/sessions`, `/v1/chat/completions`, `/api/config/personal-facts`, a `..` path), 401 without a valid token, 200 with the session's token.
+- **IPv6:** off on `eth0`, no address but `::1`.
+- **Gate:** 403 on other paths (`/health`, `/v1/chat/completions`, a `..` path: 3 guard hits per run), 401 without a valid token, 200 with the session's token.
 
-It writes `jess_coder_selftest_ok` (node_exporter textfile). A failure fires `CoderSelfTestFailing`.
+It writes `jess_coder_selftest_ok` + `jess_coder_selftest_last_run_timestamp_seconds` (node_exporter textfile) on every run, also when `jess-coder` refuses coder-net before running it. A failure in the last 7 days fires `CoderSelfTestFailing`.
 
 **When it fails:** run `jess-coder selftest` and read the FAIL lines.
 - `gate is off` → step 3 of Setup.
-- A TCP or DNS hit → coder-net isn't isolated any more. Check `docker network inspect gateway_nerves_coder-net` for `gateway_mode_ipv4: isolated` and members. If it was recreated by hand, `docker compose up -d --force-recreate orchestrator` recreates it from compose.
+- A TCP or DNS hit → coder-net isn't isolated any more. Check `docker network inspect gateway_nerves_coder-net` for `gateway_mode_ipv4: isolated`, `Internal: true` and its members. If it was recreated by hand without those options, compose won't fix it in place (a same-name network blocks it). Close every box, then:
 
-A negative control (the same container on Docker's default bridge) fails 6 checks, so the test does notice a box with network access.
+  ```bash
+  docker network disconnect -f gateway_nerves_coder-net brain-orchestrator && docker network rm gateway_nerves_coder-net && cd ~/gateway_nerves && docker compose up -d --force-recreate orchestrator
+  ```
+
+- `IPv6 disabled on eth0` / `no IPv6 address but ::1` → Docker started giving endpoints IPv6 (a Docker upgrade?). Don't open boxes; add the host backstop (Threat model → Known limits).
+
+Negative controls: the same container on Docker's default bridge fails 6 checks (internet, LAN, Helios, DNS, host bridge gateways), and one with IPv6 forced on in its endpoint fails the IPv6 checks, so the test does notice a box with network access.
 
 ## Monitoring
 
@@ -160,8 +189,8 @@ A negative control (the same container on Docker's default bridge) fails 6 check
 | Alert | Fires when |
 |---|---|
 | `CoderSelfTestFailing` | The last self-test failed |
-| `CoderGuardBlocked` | More than 15 requests from coder-net to other paths in 10 min. A box is probing the API (each self-test makes 6) |
-| `CoderUpstreamErrors` | 3+ gate requests failed at the brain or inside the gate in an hour |
+| `CoderGuardBlocked` | More than 15 requests from coder-net to other paths in 10 min. A box is probing the API (each self-test makes 3) |
+| `CoderUpstreamErrors` | 3+ gate requests failed at the brain or inside the gate in an hour (inhibited while a brain alert explains it) |
 
 Metric details: `monitoring/README.md` → Coder Gate.
 
@@ -195,7 +224,7 @@ Node: bump `NODE_VERSION` + `NODE_SHA256` in `coder/Dockerfile` from the release
 | `JESS_GATEWAY_ROOT` | Checkout + `.env` to read |
 | `JESS_CODER_HOME` | Instead of `/srv/jess-coder`; add `JESS_CODER_ALLOW_UNMOUNTED=1` for a plain folder |
 | `JESS_CODER_NETWORK` | The box network |
-| `JESS_CODER_IMAGE` | An image built with `--build-arg GATE_URL=http://<lab gate>:8888/api/coder/v1` |
+| `JESS_CODER_IMAGE` | An image built with `docker build --build-context orchestrator=orchestrator/ --build-arg GATE_URL=http://<lab gate>:8888/api/coder/v1 coder/` (the input-hash check is skipped for an override) |
 | `JESS_CODER_GATE_CONTAINER` | The only non-box member allowed on the network |
 | `JESS_CODER_METRICS_DIR` | Where the self-test metric goes |
 
@@ -210,11 +239,11 @@ Qwen Code found it, ran the test file inside the box (7 failed → 44 passed) an
 
 | File | What |
 |---|---|
-| `coder/Dockerfile` | The box image (FROM the orchestrator image via compose `additional_contexts`) |
+| `coder/Dockerfile` | The box image: the orchestrator's dependency lines (shared build cache), none of its code; `requirements.txt` + `embedding_pin.py` come in through the compose build context `orchestrator` |
 | `coder/package.json`, `package-lock.json` | Pinned Qwen Code |
 | `coder/settings.json` | Locked Qwen Code settings (`/etc/qwen-code/settings.json`, system scope) |
 | `coder/system-prompt.md` | The lean system prompt (the spike measured ~4.4K tokens per request with it) |
 | `coder/entrypoint.py` | In-box modes: `selftest`, `session`, `patch`, `clean` |
 | `coder/selftest.py` | The isolation self-test |
-| `scripts/jess-coder` | Host launcher (stdlib Python) |
+| `scripts/jess-coder` | Host launcher (stdlib Python): `box_command()` is the only `docker run`; `check_box_diff()` the patch check |
 | `orchestrator/tests/test_coder_box.py` | Static guards + launcher logic |

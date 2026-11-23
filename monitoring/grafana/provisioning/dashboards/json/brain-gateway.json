@@ -10469,7 +10469,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by (origin, result) (increase(bgw_coder_requests_total[6h]))",
+          "expr": "sum by (origin, result) (increase(bgw_coder_requests_total[6h])) > 0",
           "legendFormat": "{{origin}} {{result}}",
           "range": true,
           "instant": false,
@@ -10676,7 +10676,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by (reason) (increase(bgw_coder_rejected_total[1h]))",
+          "expr": "sum by (reason) (increase(bgw_coder_rejected_total[1h])) > 0",
           "legendFormat": "refused: {{reason}}",
           "range": true,
           "instant": false,
@@ -10915,6 +10915,258 @@
       "id": 142
     },
     {
+      "type": "timeseries",
+      "title": "Box Requests In Flight vs Brain Queue",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "max(bgw_coder_requests_admitted)",
+          "legendFormat": "box requests admitted",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "max(llamacpp:requests_deferred)",
+          "legendFormat": "brain requests waiting",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Brain queue > 0 while a box request is admitted means someone waited for the single slot.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 311
+      },
+      "id": 143
+    },
+    {
+      "type": "timeseries",
+      "title": "Chat TTFT p95 (15m)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(bgw_chat_ttft_seconds_bucket[15m])))",
+          "legendFormat": "chat TTFT p95",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Jess's time to first token. Should not move when a coder box is busy (the gate gives way).",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 311
+      },
+      "id": 144
+    },
+    {
+      "type": "stat",
+      "title": "Self-Test Age",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "time() - max(jess_coder_selftest_last_run_timestamp_seconds)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 604800
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Since the last box self-test (each session start and each deploy with CODER_ENABLED).",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 311
+      },
+      "id": 145
+    },
+    {
       "type": "row",
       "title": "Voice Satellite",
       "collapsed": false,
@@ -10923,9 +11175,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 311
+        "y": 319
       },
-      "id": 143
+      "id": 146
     },
     {
       "type": "timeseries",
@@ -11009,9 +11261,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 312
+        "y": 320
       },
-      "id": 144
+      "id": 147
     },
     {
       "type": "timeseries",
@@ -11094,9 +11346,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 312
+        "y": 320
       },
-      "id": 145
+      "id": 148
     },
     {
       "type": "timeseries",
@@ -11180,9 +11432,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 312
+        "y": 320
       },
-      "id": 146
+      "id": 149
     },
     {
       "type": "timeseries",
@@ -11278,9 +11530,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 320
+        "y": 328
       },
-      "id": 147
+      "id": 150
     },
     {
       "type": "timeseries",
@@ -11364,9 +11616,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 320
+        "y": 328
       },
-      "id": 148
+      "id": 151
     },
     {
       "type": "timeseries",
@@ -11462,9 +11714,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 320
+        "y": 328
       },
-      "id": 149
+      "id": 152
     },
     {
       "type": "timeseries",
@@ -11548,9 +11800,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 328
+        "y": 336
       },
-      "id": 150
+      "id": 153
     },
     {
       "type": "timeseries",
@@ -11634,9 +11886,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 328
+        "y": 336
       },
-      "id": 151
+      "id": 154
     },
     {
       "type": "row",
@@ -11647,9 +11899,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 336
+        "y": 344
       },
-      "id": 152
+      "id": 155
     },
     {
       "type": "timeseries",
@@ -11732,9 +11984,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 337
+        "y": 345
       },
-      "id": 153
+      "id": 156
     },
     {
       "type": "timeseries",
@@ -11818,9 +12070,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 337
+        "y": 345
       },
-      "id": 154
+      "id": 157
     },
     {
       "type": "timeseries",
@@ -11904,9 +12156,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 337
+        "y": 345
       },
-      "id": 155
+      "id": 158
     },
     {
       "type": "row",
@@ -11917,9 +12169,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 345
+        "y": 353
       },
-      "id": 156
+      "id": 159
     },
     {
       "type": "stat",
@@ -11985,9 +12237,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 346
+        "y": 354
       },
-      "id": 157
+      "id": 160
     },
     {
       "type": "stat",
@@ -12053,9 +12305,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 346
+        "y": 354
       },
-      "id": 158
+      "id": 161
     },
     {
       "type": "timeseries",
@@ -12139,9 +12391,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 346
+        "y": 354
       },
-      "id": 159
+      "id": 162
     },
     {
       "type": "stat",
@@ -12207,9 +12459,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 346
+        "y": 354
       },
-      "id": 160
+      "id": 163
     },
     {
       "type": "row",
@@ -12220,9 +12472,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 354
+        "y": 362
       },
-      "id": 161
+      "id": 164
     },
     {
       "type": "stat",
@@ -12288,9 +12540,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 355
+        "y": 363
       },
-      "id": 162
+      "id": 165
     },
     {
       "type": "timeseries",
@@ -12374,9 +12626,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 355
+        "y": 363
       },
-      "id": 163
+      "id": 166
     },
     {
       "type": "timeseries",
@@ -12460,9 +12712,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 355
+        "y": 363
       },
-      "id": 164
+      "id": 167
     },
     {
       "type": "row",
@@ -12473,9 +12725,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 363
+        "y": 371
       },
-      "id": 165
+      "id": 168
     },
     {
       "type": "stat",
@@ -12545,9 +12797,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 364
+        "y": 372
       },
-      "id": 166
+      "id": 169
     },
     {
       "type": "timeseries",
@@ -12631,9 +12883,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 364
+        "y": 372
       },
-      "id": 167
+      "id": 170
     },
     {
       "type": "timeseries",
@@ -12717,9 +12969,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 364
+        "y": 372
       },
-      "id": 168
+      "id": 171
     },
     {
       "type": "logs",
@@ -12758,9 +13010,9 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 372
+        "y": 380
       },
-      "id": 169
+      "id": 172
     },
     {
       "type": "row",
@@ -12771,9 +13023,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 380
+        "y": 388
       },
-      "id": 170
+      "id": 173
     },
     {
       "type": "timeseries",
@@ -12857,9 +13109,9 @@
         "h": 8,
         "w": 4,
         "x": 0,
-        "y": 381
+        "y": 389
       },
-      "id": 171
+      "id": 174
     },
     {
       "type": "timeseries",
@@ -12967,9 +13219,9 @@
         "h": 8,
         "w": 4,
         "x": 4,
-        "y": 381
+        "y": 389
       },
-      "id": 172
+      "id": 175
     },
     {
       "type": "timeseries",
@@ -13065,9 +13317,9 @@
         "h": 8,
         "w": 4,
         "x": 8,
-        "y": 381
+        "y": 389
       },
-      "id": 173
+      "id": 176
     },
     {
       "type": "logs",
@@ -13106,9 +13358,9 @@
         "h": 8,
         "w": 4,
         "x": 12,
-        "y": 381
+        "y": 389
       },
-      "id": 174
+      "id": 177
     },
     {
       "type": "timeseries",
@@ -13192,9 +13444,9 @@
         "h": 8,
         "w": 4,
         "x": 16,
-        "y": 381
+        "y": 389
       },
-      "id": 175
+      "id": 178
     },
     {
       "type": "timeseries",
@@ -13278,9 +13530,9 @@
         "h": 8,
         "w": 4,
         "x": 20,
-        "y": 381
+        "y": 389
       },
-      "id": 176
+      "id": 179
     },
     {
       "type": "timeseries",
@@ -13376,9 +13628,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 389
+        "y": 397
       },
-      "id": 177
+      "id": 180
     },
     {
       "type": "timeseries",
@@ -13486,9 +13738,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 389
+        "y": 397
       },
-      "id": 178
+      "id": 181
     },
     {
       "type": "stat",
@@ -13558,9 +13810,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 389
+        "y": 397
       },
-      "id": 179
+      "id": 182
     },
     {
       "type": "row",
@@ -13571,9 +13823,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 397
+        "y": 405
       },
-      "id": 180
+      "id": 183
     },
     {
       "type": "stat",
@@ -13634,9 +13886,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 398
+        "y": 406
       },
-      "id": 181
+      "id": 184
     },
     {
       "type": "timeseries",
@@ -13720,9 +13972,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 398
+        "y": 406
       },
-      "id": 182
+      "id": 185
     },
     {
       "type": "stat",
@@ -13783,9 +14035,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 398
+        "y": 406
       },
-      "id": 183
+      "id": 186
     },
     {
       "type": "timeseries",
@@ -13873,9 +14125,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 406
+        "y": 414
       },
-      "id": 184
+      "id": 187
     },
     {
       "type": "stat",
@@ -13941,9 +14193,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 406
+        "y": 414
       },
-      "id": 185
+      "id": 188
     },
     {
       "type": "stat",
@@ -14009,9 +14261,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 406
+        "y": 414
       },
-      "id": 186
+      "id": 189
     },
     {
       "type": "stat",
@@ -14077,9 +14329,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 414
+        "y": 422
       },
-      "id": 187
+      "id": 190
     },
     {
       "type": "timeseries",
@@ -14163,9 +14415,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 414
+        "y": 422
       },
-      "id": 188
+      "id": 191
     },
     {
       "type": "timeseries",
@@ -14273,9 +14525,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 414
+        "y": 422
       },
-      "id": 189
+      "id": 192
     },
     {
       "type": "row",
@@ -14286,9 +14538,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 422
+        "y": 430
       },
-      "id": 190
+      "id": 193
     },
     {
       "type": "stat",
@@ -14350,9 +14602,9 @@
         "h": 6,
         "w": 4,
         "x": 0,
-        "y": 423
+        "y": 431
       },
-      "id": 191
+      "id": 194
     },
     {
       "type": "stat",
@@ -14424,9 +14676,9 @@
         "h": 6,
         "w": 4,
         "x": 4,
-        "y": 423
+        "y": 431
       },
-      "id": 192
+      "id": 195
     },
     {
       "type": "stat",
@@ -14502,9 +14754,9 @@
         "h": 6,
         "w": 4,
         "x": 8,
-        "y": 423
+        "y": 431
       },
-      "id": 193
+      "id": 196
     },
     {
       "type": "stat",
@@ -14584,9 +14836,9 @@
         "h": 6,
         "w": 4,
         "x": 12,
-        "y": 423
+        "y": 431
       },
-      "id": 194
+      "id": 197
     },
     {
       "type": "timeseries",
@@ -14670,9 +14922,9 @@
         "h": 6,
         "w": 8,
         "x": 16,
-        "y": 423
+        "y": 431
       },
-      "id": 195
+      "id": 198
     },
     {
       "type": "row",
@@ -14683,9 +14935,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 429
+        "y": 437
       },
-      "id": 196
+      "id": 199
     },
     {
       "type": "logs",
@@ -14724,9 +14976,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 430
+        "y": 438
       },
-      "id": 197
+      "id": 200
     },
     {
       "type": "logs",
@@ -14765,9 +15017,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 430
+        "y": 438
       },
-      "id": 198
+      "id": 201
     }
   ]
 }

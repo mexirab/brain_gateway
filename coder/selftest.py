@@ -9,16 +9,20 @@ What it proves, from inside:
 * identity: not root, the box uid, no capabilities, no_new_privs, seccomp on;
 * filesystem: root mount read-only, writable mounts only where the launcher puts
   them, no Docker socket;
-* network: only lo + eth0, an address in the box range, no default route, no
-  routable IPv6;
-* reach: external DNS fails; TCP to every host address the launcher passed
-  (Jupiter's own addresses incl. every Docker bridge gateway, Helios, the LAN
-  router...), to public resolvers and over IPv6 all fail; UDP DNS gets no answer;
+* network: only lo + eth0, an address in the box range, no default route, IPv6
+  off (no IPv6 address but ::1, eth0's disable_ipv6 set);
+* reach: external DNS fails; every host address the launcher passed (Jupiter's
+  own addresses incl. every Docker bridge gateway, Helios, the LAN router...),
+  public resolvers and IPv6 (incl. the bridge's link-local) answer a TCP connect
+  with "no route" at once. That is an any-port proof: a refusal (RST) or a
+  timeout means packets got somewhere, and counts as reach. The gate host may
+  refuse; the bridge's .1 may only be absent. UDP DNS gets no answer;
 * gate: the orchestrator answers 403 on any path but the two gate paths, 401
   without a valid coder token, and (with one) 200 on /models.
 
 Inputs (environment):
   JESS_SELFTEST_HOSTS   comma-separated IPv4 addresses to try (required; the launcher's list)
+  JESS_SELFTEST_HOSTS_V6  the coder bridge's fe80:: addresses (probed via eth0)
   JESS_CODER_SUBNET     coder-net's CIDR (its first address is probed too)
   JESS_CODER_BOX_RANGE  CIDR the box's own address must be in
   JESS_CODER_UID        expected uid (default 61001)
@@ -28,12 +32,13 @@ The gate URL comes from /etc/qwen-code/settings.json (baseUrl), the file Qwen
 Code itself uses, so the test can't check one address while Qwen talks to another.
 
 Output: one line per check, no content beyond addresses, ports and status codes.
-Stdlib only (runs with python3 -I).
+Stdlib only (runs with python3 -I -S).
 """
 
 from __future__ import annotations
 
 import concurrent.futures as cf
+import errno
 import http.client
 import ipaddress
 import json
@@ -55,8 +60,11 @@ PROBE_PORTS = (22, 53, 80, 443, 445, 3000, 3001, 3100, 5006, 5232, 6053, 8004, 8
 PUBLIC_V4 = ("1.1.1.1", "8.8.8.8", "9.9.9.9")
 PUBLIC_V6 = ("2606:4700:4700::1111", "2001:4860:4860::8888")
 DNS_NAMES = ("example.com", "github.com", "registry.npmjs.org", "pypi.org")
-CONNECT_TIMEOUT_S = 1.5
-DNS_TIMEOUT_S = 8.0
+CONNECT_TIMEOUT_S = 4.0
+DNS_TIMEOUT_S = 15.0
+MAX_HOSTS = 256
+# Connect errors that prove "no route at all" (so no port on that address).
+NO_ROUTE = {errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT}
 DEFAULT_RW = ("/work", "/tmp", "/home/coder", "/app/data")
 # Kernel/runtime mounts Docker always makes writable for the container.
 RUNTIME_RW_PREFIXES = ("/proc", "/dev", "/sys/fs/cgroup")
@@ -180,8 +188,14 @@ def check_network_config(res: Results, gate_host: str) -> None:
     ifaces = _interfaces()
     res.check("interfaces are lo + eth0 only", sorted(ifaces) == ["eth0", "lo"], ", ".join(sorted(ifaces)))
     res.check("no IPv4 default route", not _has_default_route_v4())
-    routable = [a for a in _v6_addresses() if not (a.is_loopback or a.is_link_local)]
-    res.check("no routable IPv6 address", not routable, ", ".join(str(a) for a in routable[:4]))
+    v6 = [a for a in _v6_addresses() if not a.is_loopback]
+    res.check("no IPv6 address but ::1", not v6, ", ".join(str(a) for a in v6[:4]))
+    try:
+        with open("/proc/sys/net/ipv6/conf/eth0/disable_ipv6") as fh:
+            off = fh.read().strip() == "1"
+    except FileNotFoundError:  # IPv6 not in this kernel/netns at all
+        off = True
+    res.check("IPv6 disabled on eth0", off)
     own = _own_ipv4(gate_host)
     box_range = os.environ.get("JESS_CODER_BOX_RANGE", "")
     if box_range:
@@ -195,16 +209,38 @@ def check_network_config(res: Results, gate_host: str) -> None:
 # ---------------------------------------------------------------------- reach
 
 
-def _tcp_connects(target: Tuple[str, int, int]) -> Optional[str]:
-    """Return an error string if a TCP connection to ``target`` SUCCEEDED, else None."""
-    host, port, family = target
+def _tcp_reach(target: Tuple[str, int, int, str]) -> Optional[str]:
+    """None if ``target`` behaves as expected, else what happened.
+
+    expect = "no_route" (off-subnet: only an immediate no-route error is fine),
+    "closed" (the gate host: a refusal is fine too) or "absent" (an empty
+    in-subnet address: no-route or a timeout, never an answer).
+    """
+    host, port, family, expect = target
+    where = f"[{host}]:{port}" if family == socket.AF_INET6 else f"{host}:{port}"
     try:
+        if "%" in host:  # link-local: the scope must be numeric, "%eth0" alone fails with EINVAL
+            addr, iface = host.split("%", 1)
+            sockaddr: tuple = (addr, port, 0, socket.if_nametoindex(iface))
+        else:
+            sockaddr = (host, port)
         with socket.socket(family, socket.SOCK_STREAM) as s:
             s.settimeout(CONNECT_TIMEOUT_S)
-            s.connect((host, port))
-    except OSError:
-        return None  # refused, unreachable or timed out: all fine
-    return f"[{host}]:{port}" if family == socket.AF_INET6 else f"{host}:{port}"
+            s.connect(sockaddr)
+    except TimeoutError:
+        return None if expect == "absent" else f"{where} timed out (packets left the box)"
+    except OSError as exc:
+        if exc.errno in NO_ROUTE:
+            return None
+        if exc.errno == errno.ECONNREFUSED and expect == "closed":
+            return None
+        return f"{where} {errno.errorcode.get(exc.errno, exc.errno)}"
+    return f"{where} connected"
+
+
+def _tcp_connects(target: Tuple[str, int, int]) -> Optional[str]:
+    """Strict probe: anything but no-route is a hit (kept for tests and callers)."""
+    return _tcp_reach((*target, "no_route"))
 
 
 def _dns_query(name: str) -> bytes:
@@ -219,7 +255,7 @@ def _udp_dns_answers(host: str) -> Optional[str]:
             s.settimeout(2.0)
             s.sendto(_dns_query("example.com"), (host, 53))
             s.recvfrom(512)
-    except OSError:
+    except OSError:  # no route, or sent and nothing came back
         return None
     return f"udp {host}:53"
 
@@ -244,7 +280,19 @@ def _parse_hosts(raw: str) -> List[str]:
             continue
         if not addr.is_loopback and str(addr) not in out:
             out.append(str(addr))
-    return out[:128]
+    return out
+
+
+def _parse_link_local(raw: str) -> List[str]:
+    out = []
+    for item in raw.split(","):
+        try:
+            addr = ipaddress.IPv6Address(item.strip())
+        except ValueError:
+            continue
+        if addr.is_link_local:
+            out.append(f"{addr}%eth0")
+    return out
 
 
 def _run_all(fn: Callable, items: Iterable, timeout: float) -> Tuple[List[str], int]:
@@ -265,33 +313,45 @@ def _run_all(fn: Callable, items: Iterable, timeout: float) -> Tuple[List[str], 
 def check_reach(res: Results, gate_host: str, gate_port: int) -> None:
     hosts = _parse_hosts(os.environ.get("JESS_SELFTEST_HOSTS", ""))
     res.check("launcher passed host addresses to try", bool(hosts), "JESS_SELFTEST_HOSTS is empty")
+    res.check(f"at most {MAX_HOSTS} host addresses", len(hosts) <= MAX_HOSTS, f"{len(hosts)} given")
+    hosts = hosts[:MAX_HOSTS]
 
-    hits, _ = _run_all(_resolves, DNS_NAMES, DNS_TIMEOUT_S)
-    res.check("external DNS does not resolve", not hits, ", ".join(hits))
+    hits, pending = _run_all(_resolves, DNS_NAMES, DNS_TIMEOUT_S)
+    res.check(
+        "external DNS does not resolve",
+        not hits and not pending,
+        ", ".join(hits) or f"{pending} lookups did not finish",
+    )
 
-    targets: List[Tuple[str, int, int]] = []
+    targets: List[Tuple[str, int, int, str]] = []
     for host in [*hosts, *PUBLIC_V4]:
-        targets += [(host, p, socket.AF_INET) for p in PROBE_PORTS]
-    # The gate host itself: every port but the orchestrator's (refused is fine).
-    targets += [(gate_host, p, socket.AF_INET) for p in PROBE_PORTS if p != gate_port]
+        if host == gate_host:
+            continue
+        targets += [(host, p, socket.AF_INET, "no_route") for p in PROBE_PORTS]
+    # The gate host itself: every port but the orchestrator's must refuse.
+    targets += [(gate_host, p, socket.AF_INET, "closed") for p in PROBE_PORTS if p != gate_port]
     # The bridge's usual gateway address (.1): with gateway_mode isolated the
     # host has no address there, so nothing may answer.
     try:
         bridge = str(next(ipaddress.IPv4Network(os.environ.get("JESS_CODER_SUBNET", ""), strict=False).hosts()))
         if bridge != gate_host:
-            targets += [(bridge, p, socket.AF_INET) for p in PROBE_PORTS]
+            targets += [(bridge, p, socket.AF_INET, "absent") for p in PROBE_PORTS]
     except (ValueError, StopIteration):
         pass
-    targets += [(h, 443, socket.AF_INET6) for h in PUBLIC_V6]
-    hits, pending = _run_all(_tcp_connects, targets, 60.0)
+    # IPv6: public addresses and the bridge's own link-local (host services on [::]).
+    v6_hosts = [*PUBLIC_V6, *_parse_link_local(os.environ.get("JESS_SELFTEST_HOSTS_V6", ""))]
+    targets += [(h, p, socket.AF_INET6, "no_route") for h in v6_hosts for p in PROBE_PORTS]
+    hits, pending = _run_all(_tcp_reach, targets, 60.0)
     res.check(
         f"no TCP reach ({len(targets)} address:port pairs)",
         not hits and not pending,
         ", ".join(hits[:10]) or f"{pending} probes did not finish",
     )
 
-    hits, _ = _run_all(_udp_dns_answers, [*hosts, *PUBLIC_V4], 10.0)
-    res.check("no UDP DNS answers", not hits, ", ".join(hits[:10]))
+    hits, pending = _run_all(_udp_dns_answers, [*hosts, *PUBLIC_V4], 15.0)
+    res.check(
+        "no UDP DNS answers", not hits and not pending, ", ".join(hits[:10]) or f"{pending} probes did not finish"
+    )
 
 
 # ----------------------------------------------------------------------- gate
@@ -331,11 +391,10 @@ def check_gate(res: Results, host: str, port: int) -> None:
     if not res.check("gate address answers", status is not None, f"no HTTP answer from {host}:{port}"):
         return
     res.check("other paths are refused (403)", status == 403, f"/health -> {status}")
+    # Three guard hits per run in all (CoderGuardBlocked's threshold allows for
+    # several self-tests in a row): a public path, the main API, a `..` path.
     for method, path in (
-        ("GET", "/metrics"),
-        ("GET", "/api/coder/sessions"),
         ("POST", "/v1/chat/completions"),
-        ("GET", "/api/config/personal-facts"),
         ("GET", GATE_PREFIX + "/models/../../health"),
     ):
         got = _http(host, port, method, path)

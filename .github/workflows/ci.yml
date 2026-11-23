@@ -141,10 +141,10 @@ jobs:
           fetch-depth: 0
       - name: Build orchestrator image
         run: docker build -t brain-orchestrator:test orchestrator/
-      # The coder box image (coder/, docs/CODER.md) is built FROM the
-      # orchestrator image. Only when its inputs changed: it downloads Node and
-      # the embedding model. Smoke checks only; the isolation self-test needs
-      # coder-net and the gate, so it runs in the Jupiter deploy instead.
+      # The coder box image (coder/, docs/CODER.md) shares the orchestrator's
+      # dependency layers. Built only when its inputs changed: it downloads Node
+      # and the embedding model. Smoke checks only; the isolation self-test
+      # needs coder-net and the gate, so it runs in the Jupiter deploy instead.
       - name: Build coder box image (when it changed)
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -156,15 +156,18 @@ jobs:
             echo "coder box inputs unchanged; not building it"
             exit 0
           fi
-          docker build -t jess-coder:test \
-            --build-context jess-orchestrator-base=docker-image://brain-orchestrator:test coder/
+          df -h / | tail -1
+          # The coder image adds ~2.5 GB (Node, Qwen Code, the embedding model)
+          # on top of the orchestrator's layers; make room on the runner.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker build -t jess-coder:test --build-context orchestrator=orchestrator/ coder/
           docker run --rm --network none --entrypoint sh jess-coder:test -c '
             set -e
             test "$(id -u)" = 61001
             qwen --version
             python3 -I -c "import json; s = json.load(open(\"/etc/qwen-code/settings.json\")); assert s[\"memory\"][\"enableManagedAutoMemory\"] is False"
             test ! -e /app/orchestrator
-            python3 -I /opt/jess-coder/selftest.py --help > /dev/null'
+            python3 -I -S /opt/jess-coder/selftest.py --help > /dev/null'
 
   deploy:
     name: Deploy to Jupiter
@@ -542,27 +545,6 @@ jobs:
             echo "::endgroup::"
           fi
 
-          # Coder box (docs/CODER.md), only while the gate is on: rebuild the
-          # build-only image when its inputs changed (or it doesn't exist yet),
-          # then run the isolation self-test from a real box on coder-net on
-          # every deploy. A failing self-test fails the deploy; jess-coder
-          # refuses to open boxes until it passes. Never starts a long-lived
-          # container (COMPOSE_PROFILES stays empty).
-          if grep -qE '^CODER_ENABLED=(true|1|yes|on)$' .env; then
-            if grep -qE "^coder/|^docker-compose\.yml$|^orchestrator/(Dockerfile|requirements\.txt|embedding_pin\.py)$" <<<"$CHANGED" \
-                || ! docker image inspect jess-coder:current >/dev/null 2>&1; then
-              echo "::group::Building the coder box image"
-              docker compose --profile coder build coder
-              echo "::endgroup::"
-            fi
-            echo "::group::Coder box isolation self-test"
-            if ! python3 -I scripts/jess-coder selftest --metrics; then
-              echo "::error::The coder box isolation self-test failed: from a box on coder-net something answered that must not, or the gate misbehaved. jess-coder refuses to open boxes until it passes. Run 'jess-coder selftest' on Jupiter; docs/CODER.md -> Self-test."
-              exit 1
-            fi
-            echo "::endgroup::"
-          fi
-
           # Record what we just deployed so the next run diffs from here.
           echo "$HEAD_SHA" > "$MARKER"
           echo "Deploy complete at $(date -Iseconds)"
@@ -586,3 +568,30 @@ jobs:
           wait_for orchestrator http://127.0.0.1:8888/health || failed=1
           wait_for frontend http://127.0.0.1:3001 || failed=1
           exit "$failed"
+
+      # Coder box (docs/CODER.md), only while CODER_ENABLED is on (the launcher
+      # reads .env the way the orchestrator does). Its own step, after the
+      # deploy marker is written: the optional box never holds Jess's deploy
+      # back. Rebuilds the build-only image when its inputs hash (image label)
+      # no longer matches, then runs the isolation self-test from a real box on
+      # coder-net. A failure fails this run (and CoderSelfTestFailing fires);
+      # jess-coder refuses to open boxes until it passes. Starts no long-lived
+      # container. The self-test's details (Jupiter's addresses) stay out of
+      # this public log: only the names of failed checks are shown.
+      - name: Coder box image + isolation self-test (when enabled)
+        run: |
+          set -euo pipefail
+          cd /home/labadmin/gateway_nerves
+          if ! python3 -I scripts/jess-coder enabled; then
+            echo "CODER_ENABLED is off: nothing to do"
+            exit 0
+          fi
+          timeout 1500 python3 -I scripts/jess-coder build --if-stale
+          out="$RUNNER_TEMP/coder-selftest.txt"
+          if timeout 600 python3 -I scripts/jess-coder selftest --wait-health 300 > "$out" 2>&1; then
+            grep -E '^selftest: ' "$out" || true
+          else
+            echo "::error::The coder box isolation self-test failed. jess-coder refuses to open boxes until it passes. Run 'jess-coder selftest' on Jupiter for the details; docs/CODER.md -> Self-test."
+            grep -E '^(FAIL|selftest:)' "$out" | sed -E 's/: .*$//' || echo "(no self-test output; the launcher refused before running it)"
+            exit 1
+          fi
