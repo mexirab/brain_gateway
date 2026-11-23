@@ -236,9 +236,11 @@ class TestMovementCheck:
 
     def test_nudge_after_sitting(self, sm, mock_shared):
         mock_shared.MOVEMENT_INTERVAL = 90
-        sm._state.sitting_since = datetime(2026, 3, 20, 8, 0)
+        # Inside the default 09:00-18:00 movement hours: time before 09:00
+        # doesn't count (test_movement_health.TestSittingClockStartsWithTheDay).
+        sm._state.sitting_since = datetime(2026, 3, 20, 9, 30)
         sm._state.last_movement_nudge = None
-        now = datetime(2026, 3, 20, 10, 0)  # 120 min sitting
+        now = datetime(2026, 3, 20, 11, 30)  # 120 min sitting
         result = sm._check_movement(now)
         assert result is not None
         assert "sitting" in result.lower()

@@ -643,6 +643,24 @@ groups:
           summary: "Voice satellite {{ $labels.device }} not connected for 30+ min"
           description: "\"Hey Jess\" on {{ $labels.device }} gets the error sound (or nothing). Check `sum by (result)(increase(bgw_satellite_connect_total{device=\"{{ $labels.device }}\"}[1h]))`: unreachable/timeout = device unplugged, off Wi-Fi or lost its DHCP reservation; bad_key = VOICE_SATELLITE_API_KEY doesn't match the firmware's api: encryption: key; wrong_device = that IP is another ESPHome node (the name in VOICE_SATELLITE_DEVICES / VOICE_SATELLITE_NAME); no_api_audio = firmware lacks voice_assistant. `docker logs brain-orchestrator | grep SATELLITE`. Unplugged on purpose: take it out of VOICE_SATELLITE_DEVICES (last device: VOICE_SATELLITE_ENABLED=false) + `docker compose up -d --force-recreate orchestrator`."
 
+      # Movement from the phone (selfcare_manager._refresh_movement_from_health):
+      # a configured HA iPhone-app sensor has had no good read for 6h, so the
+      # movement nudge is back on the plain sitting timer. HA serves the last
+      # known state even while the phone sleeps, so an ok read is normal at
+      # 3 am too — this is not a staleness alert. Silent when the feature is
+      # off (no series).
+      - alert: MovementSensorFailing
+        expr: |
+          (sum by (kind) (increase(bgw_movement_health_read_total{result!="ok"}[6h])) > 0)
+          unless on (kind)
+          (sum by (kind) (increase(bgw_movement_health_read_total{result="ok"}[6h])) > 0)
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "Phone {{ $labels.kind }} sensor: no good read in 6h"
+          description: "Jess can't see movement from the phone, so movement nudges ignore walking again. Split by result in Grafana (Movement From the Phone row). not_found = the entity id in MOVEMENT_STEPS_ENTITY / MOVEMENT_STAND_ENTITY no longer exists in HA (a new phone or an app re-install renames it); unavailable = the sensor is off in the HA iPhone app or Health access was revoked; http_error / unreachable = HA down or HA_TOKEN rejected. Fix Jupiter .env, then `docker compose up -d --force-recreate orchestrator`. `docker logs brain-orchestrator | grep 'Movement'`."
+
       # A VOICE_SATELLITE_DEVICES entry was skipped (typo), or the satellite was
       # asked for but its config disabled it. Neither has a connection gauge,
       # so VoiceSatelliteDisconnected can't fire for it. Set once at startup.

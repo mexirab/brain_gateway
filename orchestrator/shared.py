@@ -514,6 +514,9 @@ SELFCARE_ENABLED = settings.selfcare_enabled
 MEAL_NUDGE_HOURS = settings.meal_nudge_hours
 HYDRATION_INTERVAL = settings.hydration_interval
 MOVEMENT_INTERVAL = settings.movement_interval
+MOVEMENT_STEPS_ENTITY = settings.movement_steps_entity
+MOVEMENT_STAND_ENTITY = settings.movement_stand_entity
+MOVEMENT_STEPS_THRESHOLD = settings.movement_steps_threshold
 QUIET_HOURS_START = settings.quiet_hours_start
 QUIET_HOURS_END = settings.quiet_hours_end
 

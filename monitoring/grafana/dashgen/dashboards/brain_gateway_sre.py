@@ -1741,6 +1741,61 @@ def build() -> dict:
     row, y = grid_row(wind_down_row, y, heights=[8, 8, 8, 8])
     panels.extend(row)
 
+    # -------------------------------------------------- Movement From the Phone
+    # The movement nudge reads the HA iPhone app's Apple Health sensors
+    # (MOVEMENT_STEPS_ENTITY / MOVEMENT_STAND_ENTITY) so walking resets the
+    # sitting clock. MovementSensorFailing (quiet) fires when a sensor has had
+    # no good read for 6h; the age panel shows the phone's last report.
+    r, y = row_divider("Movement From the Phone", y)
+    panels.append(r)
+
+    movement_row = [
+        stat(
+            "Phone Steps Sensor Age",
+            'time() - (bgw_movement_health_last_update_timestamp_seconds{kind="steps"} > 0)',
+            unit="s",
+            thresholds=[(None, "green"), (10800, "orange")],
+            description="Seconds since the phone last reported the steps sensor to Home "
+            "Assistant (HA's last_reported, which moves even when the count didn't). "
+            "The phone reports roughly hourly by day; can grow overnight while it "
+            "sleeps. Hours old in the daytime means the HA iPhone app stopped "
+            "reporting (open the app, check Background App Refresh) and Jess is back "
+            "on the plain sitting timer. 'No data' = MOVEMENT_STEPS_ENTITY unset, or "
+            "no good read since the last restart.",
+        ),
+        timeseries(
+            "Sensor Reads (/hour)",
+            [
+                (
+                    "sum by (kind, result) (increase(bgw_movement_health_read_total[1h]))",
+                    "{{kind}} {{result}}",
+                )
+            ],
+            unit="none",
+            description="One read per sensor every 15 min (the selfcare check). "
+            "unavailable = sensor off or Health access denied on the phone; "
+            "not_found = the entity id is wrong or was renamed; http_error / "
+            "unreachable = HA down or token rejected; bad_value = not a plausible "
+            "number.",
+        ),
+        timeseries(
+            "Movement Detected (/day)",
+            [
+                (
+                    "sum by (source) (increase(bgw_movement_auto_detected_total[1d]))",
+                    "{{source}}",
+                )
+            ],
+            unit="none",
+            description="Checks where the phone showed movement (steps gained >= "
+            "MOVEMENT_STEPS_THRESHOLD, or one more Watch stand hour) newer than the "
+            "last logged movement, so the sitting clock moved. Labelled by the sensor "
+            "with the newest movement.",
+        ),
+    ]
+    row, y = grid_row(movement_row, y, heights=[8, 8, 8])
+    panels.extend(row)
+
     # -------------------------------------------------------- Budget Sync
     # Actual Budget read-only sync (replaced YNAB 2026-10). The
     # BudgetSyncFailing alert (quiet Pushover) is counter-based so it also

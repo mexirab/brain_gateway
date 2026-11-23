@@ -7,10 +7,12 @@ Nudges via TTS at appropriate intervals. Gentle external signals, not nagging.
 
 import asyncio
 import logging
+import math
 import re
+import time as _time
 from dataclasses import dataclass, field
-from datetime import datetime, time
-from typing import Any, Dict, Optional
+from datetime import date, datetime, time, timedelta
+from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from orchestrator import shared
@@ -199,22 +201,307 @@ def record_hydration_logged(label: str = "water") -> None:
     logger.info(f"[SELFCARE] Hydration logged ({label.split(':', 1)[0]})", extra={"component": "selfcare"})
 
 
-def record_movement_logged(label: str = "movement") -> None:
+def _advance_movement_clock(ts: datetime) -> None:
+    """Move the sitting clock and the nudge gate forward to `ts`, never back."""
+    if _state.sitting_since is None or ts > _state.sitting_since:
+        _state.sitting_since = ts
+    if _state.last_movement_nudge is None or ts > _state.last_movement_nudge:
+        _state.last_movement_nudge = ts
+
+
+def record_movement_logged(label: str = "movement", at: Optional[datetime] = None) -> None:
     """Advance the movement nudge gate (resets sitting_since too).
 
     Called by workout_manager.log_set so lifting a set counts as movement
     and suppresses the "you've been sitting for N minutes" nudge that
     would otherwise fire while the user is actively at the gym.
+
+    `at` is when the movement happened, if earlier than now (phone sensor
+    data arrives late); the default is now. The clock never moves backwards.
     """
     from orchestrator.state_store import save_selfcare_log
 
-    now = datetime.now()
-    _state.last_movement_nudge = now
-    _state.sitting_since = now
+    _advance_movement_clock(at or datetime.now())
     save_selfcare_log("movement", label)
     SELFCARE_LOGGED.labels(action="movement").inc()
     _resolve_inbox("movement")
     logger.info(f"[SELFCARE] Movement logged ({label.split(':', 1)[0]})", extra={"component": "selfcare"})
+
+
+# ---------------------------------------------------------------------------
+# Movement seen by the phone (Home Assistant iPhone-app Apple Health sensors)
+# ---------------------------------------------------------------------------
+#
+# The movement nudge only knew about movement someone LOGGED, so it nagged
+# after the user had already been up and walking. When MOVEMENT_STEPS_ENTITY /
+# MOVEMENT_STAND_ENTITY name HA sensors, every check_selfcare cycle (15 min)
+# reads them: steps gained since the last read >= MOVEMENT_STEPS_THRESHOLD, or
+# one more Apple Watch stand hour, counts as movement and resets the sitting
+# clock. Both are "since local midnight" totals. Use the HA app's Apple Health
+# steps sensor (HealthKit: phone + Watch); its plain pedometer "steps" sensor
+# counts only steps taken with the phone in a pocket.
+#
+# The movement time is when HA received the phone's update (`last_changed`,
+# held inside [baseline read, now]). iOS sends updates roughly hourly by day,
+# so a walk can be credited up to an hour late, and a nudge can still land
+# between a walk and the phone's report.
+#
+# Fail open toward nudging: a missing / unavailable / garbage reading is no
+# evidence, so the timer behaves exactly as it did without this feature. A
+# drop within a day (a dip, a deduplication, a bad value) is no evidence
+# either, and keeps the higher baseline, so a dip-then-recovery can't fake a
+# walk — until a second, different phone report confirms the lower count.
+# Only a count that went DOWN on a later day is a new day's total (an HA
+# restart overnight restores yesterday's value with a new last_changed; that
+# is a carry-over, not new steps). A new day's steps were walked at an
+# unknown time, so they never move the clock inside today's movement hours.
+# Baselines are RAM-only: after a restart the first read only sets them.
+# Never log the values (health data) or the entity ids (they carry the
+# phone's name) — only the kind and the read result.
+
+_MOVEMENT_ROW_MIN_GAP_S = 30 * 60  # at most one selfcare_log row per 30 min
+# Plausibility caps for a since-midnight total; above = bad_value.
+_MOVEMENT_MAX_VALUE = {"steps": 200_000.0, "stand": 24.0}
+
+
+@dataclass
+class _HealthMovementState:
+    # kind -> (value, the day that value counts, when it was read)
+    baseline: Dict[str, Tuple[float, date, datetime]] = field(default_factory=dict)
+    last_result: Dict[str, str] = field(default_factory=dict)  # kind -> last read result
+    drop_seen: Dict[str, datetime] = field(default_factory=dict)  # kind -> last_changed of an unconfirmed drop
+    last_warned: Dict[str, Tuple[str, float]] = field(default_factory=dict)  # kind -> (result, monotonic)
+    last_row: Optional[datetime] = None
+
+
+_health = _HealthMovementState()
+
+
+def _movement_sensors() -> List[Tuple[str, str]]:
+    return [
+        (kind, entity)
+        for kind, entity in (("steps", shared.MOVEMENT_STEPS_ENTITY), ("stand", shared.MOVEMENT_STAND_ENTITY))
+        if entity
+    ]
+
+
+def _parse_ha_time(raw: Any) -> Optional[Tuple[float, datetime]]:
+    """HA's ISO timestamp (with offset) → (epoch seconds, local naive time).
+
+    Local naive = the clock datetime.now() uses (the container's TZ). None
+    for anything missing, naive, malformed or out of range.
+    """
+    if not isinstance(raw, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            return None
+        return dt.timestamp(), dt.astimezone().replace(tzinfo=None)
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _note_read_result(kind: str, result: str, status: Optional[int] = None, error_type: str = "") -> None:
+    """Count a read; log only when a sensor starts failing, fails a different
+    way, or recovers (WARNING feeds the self-audit digest, so a dead sensor
+    gets noticed without an alert). `error_type` is an exception class name only."""
+    from orchestrator.metrics import MOVEMENT_HEALTH_READ
+
+    MOVEMENT_HEALTH_READ.labels(kind=kind, result=result).inc()
+    previous = _health.last_result.get(kind)
+    _health.last_result[kind] = result
+    last_warned = _health.last_warned.get(kind)
+    # A sensor flapping the same way (e.g. HA timeouts) warns at most hourly.
+    repeat = last_warned is not None and last_warned[0] == result and _time.monotonic() - last_warned[1] < 3600
+    if result != "ok" and result != previous and not repeat:
+        _health.last_warned[kind] = (result, _time.monotonic())
+        hint = " (check MOVEMENT_STEPS_ENTITY / MOVEMENT_STAND_ENTITY)" if result == "not_found" else ""
+        logger.warning(
+            "[SELFCARE] Movement %s sensor read failing: %s%s%s%s — movement from the phone is off until it reads again",
+            kind,
+            result,
+            f" http {status}" if status else "",
+            f" ({error_type})" if error_type else "",
+            hint,
+        )
+    elif result == "ok" and previous not in (None, "ok"):
+        logger.info("[SELFCARE] Movement %s sensor reading again", kind)
+
+
+def _parse_state_number(raw: Any) -> float:
+    """An HA state string → float; NaN for anything else (HA sends strings)."""
+    if not isinstance(raw, str):
+        return math.nan
+    try:
+        return float(raw)
+    except ValueError:
+        return math.nan
+
+
+async def _read_movement_sensor(kind: str, entity_id: str) -> Optional[Tuple[float, Optional[datetime]]]:
+    """One HA state read → (value, last_changed as local naive time), or None.
+
+    Talks to HA directly (like jobs_monitoring) rather than through
+    ha_client.get_entity_state, which prints the entity id on errors. Never
+    raises, and never lets an exception's text (it holds the URL) reach a log.
+    """
+    from orchestrator.metrics import MOVEMENT_HEALTH_LAST_UPDATE
+
+    try:
+        resp = await shared._http.get(
+            f"{shared.HA_URL}/api/states/{entity_id}",
+            headers={"Authorization": f"Bearer {shared.HA_TOKEN}"},
+            timeout=5.0,
+        )
+    except Exception as e:
+        _note_read_result(kind, "unreachable", error_type=type(e).__name__)
+        return None
+    if resp.status_code != 200:
+        _note_read_result(kind, "not_found" if resp.status_code == 404 else "http_error", resp.status_code)
+        return None
+    try:
+        data = resp.json()
+    except Exception:
+        data = None
+    if not isinstance(data, dict):
+        _note_read_result(kind, "bad_value")
+        return None
+
+    raw_state = data.get("state")
+    if raw_state in (None, "", "unknown", "unavailable"):
+        _note_read_result(kind, "unavailable")
+        return None
+    value = _parse_state_number(raw_state)
+    if not math.isfinite(value) or not 0 <= value <= _MOVEMENT_MAX_VALUE[kind]:
+        _note_read_result(kind, "bad_value")
+        return None
+
+    # The age gauge tracks the phone's last REPORT (last_reported moves even
+    # when the value didn't change), so "sat still for hours" doesn't look
+    # like "the app stopped reporting". The movement time uses last_changed.
+    for key in ("last_reported", "last_updated", "last_changed"):
+        reported = _parse_ha_time(data.get(key))
+        if reported is not None:
+            if reported[0] <= _time.time() + 300:
+                MOVEMENT_HEALTH_LAST_UPDATE.labels(kind=kind).set(reported[0])
+            break
+    changed = _parse_ha_time(data.get("last_changed"))
+    _note_read_result(kind, "ok")
+    return value, (changed[1] if changed else None)
+
+
+async def _refresh_movement_from_health(now: datetime) -> None:
+    """Reset the sitting clock if the phone's sensors show the user moved
+    since the last check. Never raises out to check_selfcare (it wraps it)."""
+    from orchestrator.metrics import MOVEMENT_AUTO_DETECTED, MOVEMENT_HEALTH_READ
+    from orchestrator.selfcare_schedule import category_enabled
+
+    sensors = _movement_sensors()
+    if not sensors or not shared.HA_URL or not shared.HA_TOKEN:
+        return
+    if not category_enabled("movement"):
+        return
+    for kind, _entity in sensors:
+        # Create the series at 0 so the first real increment isn't lost to increase().
+        MOVEMENT_HEALTH_READ.labels(kind=kind, result="ok")
+        MOVEMENT_AUTO_DETECTED.labels(source=kind)
+
+    readings = await asyncio.gather(
+        *(_read_movement_sensor(kind, entity) for kind, entity in sensors), return_exceptions=True
+    )
+
+    moved_at: Optional[datetime] = None
+    moved_source = ""
+    for (kind, _entity), reading in zip(sensors, readings, strict=True):
+        if isinstance(reading, BaseException):
+            # _read_movement_sensor never raises, so this is a bug; type only.
+            logger.warning("[SELFCARE] Movement %s sensor read crashed (%s)", kind, type(reading).__name__)
+            continue
+        if reading is None:
+            continue  # keep the old baseline; the next good read covers the gap
+        step = _apply_movement_reading(kind, reading, now)
+        if step is not None and (moved_at is None or step > moved_at):
+            moved_at, moved_source = step, kind
+
+    if moved_at is not None:
+        _note_phone_movement(moved_at, moved_source, now)
+
+
+def _apply_movement_reading(kind: str, reading: Tuple[float, Optional[datetime]], now: datetime) -> Optional[datetime]:
+    """Fold one good reading into the baseline; return when the user moved
+    (if this reading shows movement), else None."""
+    value, changed = reading
+    base = _health.baseline.get(kind)
+    if base is None:
+        day = min(changed.date(), now.date()) if changed else now.date()
+        _health.baseline[kind] = (value, day, now)  # first read: baseline only
+        return None
+    base_value, base_day, base_read = base
+    # The day a since-midnight total belongs to: when the phone sent it, never
+    # in the future. No timestamp: assume the baseline's day.
+    value_day = min(changed.date(), now.date()) if changed else base_day
+
+    new_day_total = False
+    if value < base_value:
+        if value_day > base_day:
+            # The counter reset at midnight: a new day's total, every step of it new.
+            gained, new_day_total = value, True
+            _health.drop_seen.pop(kind, None)
+            _health.baseline[kind] = (value, value_day, now)
+        else:
+            # A drop within a day — a dip, a HealthKit dedup, a bad report — is
+            # no evidence and keeps the higher baseline, so a dip that recovers
+            # can't fake a walk. A drop the phone confirms with a second,
+            # different report is real (e.g. a baseline left too high): take it.
+            first_drop = _health.drop_seen.get(kind)
+            if changed is not None and first_drop is not None and changed != first_drop:
+                _health.baseline[kind] = (value, max(value_day, base_day), now)
+                _health.drop_seen.pop(kind, None)
+                logger.info("[SELFCARE] Movement %s count went down and stayed down; using the lower count", kind)
+            elif first_drop is None and changed is not None:
+                _health.drop_seen[kind] = changed
+            return None
+    else:
+        # Same or higher. On a later day with a value that didn't drop this is
+        # a carry-over of the old total (HA restored the state after an
+        # overnight restart, or a late report), not a new day: keep its day.
+        gained = value - base_value
+        _health.drop_seen.pop(kind, None)
+        _health.baseline[kind] = (value, base_day, now)
+
+    needed = shared.MOVEMENT_STEPS_THRESHOLD if kind == "steps" else 1
+    if gained < needed:
+        return None
+    # When it happened: the sensor's last change, held between the baseline
+    # read and now (a stale or odd timestamp can't move the clock outside the
+    # window this reading covers).
+    when = min(max(changed or now, base_read), now)
+    if new_day_total:
+        # Steps since midnight, walked at an unknown time. Reported before
+        # today's movement hours start: credit them (the morning walk). Reported
+        # inside them: they can't tell us the user moved within the window, so
+        # no credit (no clock move, no row, no resolved nudge card).
+        day_start = _movement_day_start(now)
+        if day_start is not None and when > day_start:
+            return None
+    return when
+
+
+def _note_phone_movement(moved_at: datetime, source: str, now: datetime) -> None:
+    """Apply phone-detected movement to the nudge state."""
+    from orchestrator.metrics import MOVEMENT_AUTO_DETECTED
+
+    if _state.sitting_since is not None and moved_at <= _state.sitting_since:
+        return  # a newer movement is already on record
+    MOVEMENT_AUTO_DETECTED.labels(source=source).inc()
+    if _health.last_row is not None and (now - _health.last_row).total_seconds() < _MOVEMENT_ROW_MIN_GAP_S:
+        # Walking around keeps tripping the threshold; move the clock but
+        # don't add a log row every 15 minutes.
+        _advance_movement_clock(moved_at)
+        return
+    _health.last_row = now
+    record_movement_logged(f"health:{source}", at=moved_at)
 
 
 def record_selfcare(kind: str, label: str) -> bool:
@@ -357,6 +644,14 @@ async def check_selfcare() -> None:
     # figures stuck at yesterday's timestamps. get_selfcare_status() reads
     # those and surfaces e.g. "you've been sitting for 32 hours".
     _apply_daily_reset(now)
+
+    # Movement the phone saw resets the sitting clock. Before every gate below
+    # (away, quiet hours, focus, routine) so walking during them still counts
+    # and the step baseline stays current.
+    try:
+        await _refresh_movement_from_health(now)
+    except Exception as e:
+        logger.warning("[SELFCARE] Movement sensor check failed (%s)", type(e).__name__)
 
     # Skip nudges when not home
     if shared.PRESENCE_ENABLED:
@@ -652,6 +947,41 @@ def _check_hydration(now: datetime) -> Optional[str]:
     return None
 
 
+def _movement_day_start(now: datetime) -> Optional[datetime]:
+    """Start of the movement category's current active-hours window (today's
+    09:00 by default — still ahead of `now` before 09:00), or None when no
+    window is set. A window that wraps midnight counts from its last start."""
+    from orchestrator.selfcare_schedule import category_active_hours
+
+    start_s, end_s = category_active_hours("movement")
+    if not start_s or not end_s:
+        return None  # same rule as _within_active_hours: no full window = always active
+    try:
+        start = _parse_time(start_s)
+        end = _parse_time(end_s)
+    except Exception:
+        return None
+    day_start = datetime.combine(now.date(), start)
+    if start > end and day_start > now:
+        day_start -= timedelta(days=1)  # e.g. 22:00-06:00 at 02:00 → last night's 22:00
+    return day_start
+
+
+def _sitting_start(now: datetime) -> datetime:
+    """When the current sitting stretch counts from.
+
+    Time before the movement hours start doesn't count. The midnight reset
+    (_apply_daily_reset) parks sitting_since at ~00:00, so the first nudge
+    of the day used to say ~540 minutes at 09:00 — sleep counted as sitting.
+    Before the window opens this is in the future (callers clamp to 0).
+    """
+    since = _state.sitting_since or now
+    day_start = _movement_day_start(now)
+    if day_start is not None and since < day_start:
+        return day_start
+    return since
+
+
 def _check_movement(now: datetime) -> Optional[str]:
     """Check if movement nudge is due."""
     from orchestrator.selfcare_schedule import category_enabled, category_interval_minutes
@@ -666,7 +996,7 @@ def _check_movement(now: datetime) -> Optional[str]:
         _state.sitting_since = now
         return None
 
-    minutes_sitting = (now - _state.sitting_since).total_seconds() / 60
+    minutes_sitting = (now - _sitting_start(now)).total_seconds() / 60
     if minutes_sitting >= interval and (
         _state.last_movement_nudge is None or (now - _state.last_movement_nudge).total_seconds() / 60 >= interval
     ):
@@ -721,7 +1051,7 @@ async def get_selfcare_status() -> Dict[str, Any]:
     }
 
     if _state.sitting_since:
-        minutes = (now - _state.sitting_since).total_seconds() / 60
+        minutes = max(0.0, (now - _sitting_start(now)).total_seconds() / 60)
         status["sitting_minutes"] = int(minutes)
     else:
         status["sitting_minutes"] = None

@@ -11741,7 +11741,7 @@
     },
     {
       "type": "row",
-      "title": "Budget Sync (Actual)",
+      "title": "Movement From the Phone",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -11751,6 +11751,259 @@
         "y": 345
       },
       "id": 155
+    },
+    {
+      "type": "stat",
+      "title": "Phone Steps Sensor Age",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "time() - (bgw_movement_health_last_update_timestamp_seconds{kind=\"steps\"} > 0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 10800
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Seconds since the phone last reported the steps sensor to Home Assistant (HA's last_reported, which moves even when the count didn't). The phone reports roughly hourly by day; can grow overnight while it sleeps. Hours old in the daytime means the HA iPhone app stopped reporting (open the app, check Background App Refresh) and Jess is back on the plain sitting timer. 'No data' = MOVEMENT_STEPS_ENTITY unset, or no good read since the last restart.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 346
+      },
+      "id": 156
+    },
+    {
+      "type": "timeseries",
+      "title": "Sensor Reads (/hour)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (kind, result) (increase(bgw_movement_health_read_total[1h]))",
+          "legendFormat": "{{kind}} {{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "One read per sensor every 15 min (the selfcare check). unavailable = sensor off or Health access denied on the phone; not_found = the entity id is wrong or was renamed; http_error / unreachable = HA down or token rejected; bad_value = not a plausible number.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 346
+      },
+      "id": 157
+    },
+    {
+      "type": "timeseries",
+      "title": "Movement Detected (/day)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (source) (increase(bgw_movement_auto_detected_total[1d]))",
+          "legendFormat": "{{source}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Checks where the phone showed movement (steps gained >= MOVEMENT_STEPS_THRESHOLD, or one more Watch stand hour) newer than the last logged movement, so the sitting clock moved. Labelled by the sensor with the newest movement.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 346
+      },
+      "id": 158
+    },
+    {
+      "type": "row",
+      "title": "Budget Sync (Actual)",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 354
+      },
+      "id": 159
     },
     {
       "type": "stat",
@@ -11820,9 +12073,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 346
+        "y": 355
       },
-      "id": 156
+      "id": 160
     },
     {
       "type": "timeseries",
@@ -11906,9 +12159,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 346
+        "y": 355
       },
-      "id": 157
+      "id": 161
     },
     {
       "type": "timeseries",
@@ -11992,9 +12245,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 346
+        "y": 355
       },
-      "id": 158
+      "id": 162
     },
     {
       "type": "logs",
@@ -12033,9 +12286,9 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 354
+        "y": 363
       },
-      "id": 159
+      "id": 163
     },
     {
       "type": "row",
@@ -12046,9 +12299,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 362
+        "y": 371
       },
-      "id": 160
+      "id": 164
     },
     {
       "type": "timeseries",
@@ -12132,9 +12385,9 @@
         "h": 8,
         "w": 4,
         "x": 0,
-        "y": 363
+        "y": 372
       },
-      "id": 161
+      "id": 165
     },
     {
       "type": "timeseries",
@@ -12242,9 +12495,9 @@
         "h": 8,
         "w": 4,
         "x": 4,
-        "y": 363
+        "y": 372
       },
-      "id": 162
+      "id": 166
     },
     {
       "type": "timeseries",
@@ -12340,9 +12593,9 @@
         "h": 8,
         "w": 4,
         "x": 8,
-        "y": 363
+        "y": 372
       },
-      "id": 163
+      "id": 167
     },
     {
       "type": "logs",
@@ -12381,9 +12634,9 @@
         "h": 8,
         "w": 4,
         "x": 12,
-        "y": 363
+        "y": 372
       },
-      "id": 164
+      "id": 168
     },
     {
       "type": "timeseries",
@@ -12467,9 +12720,9 @@
         "h": 8,
         "w": 4,
         "x": 16,
-        "y": 363
+        "y": 372
       },
-      "id": 165
+      "id": 169
     },
     {
       "type": "timeseries",
@@ -12553,9 +12806,9 @@
         "h": 8,
         "w": 4,
         "x": 20,
-        "y": 363
+        "y": 372
       },
-      "id": 166
+      "id": 170
     },
     {
       "type": "timeseries",
@@ -12651,9 +12904,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 371
+        "y": 380
       },
-      "id": 167
+      "id": 171
     },
     {
       "type": "timeseries",
@@ -12761,9 +13014,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 371
+        "y": 380
       },
-      "id": 168
+      "id": 172
     },
     {
       "type": "stat",
@@ -12833,9 +13086,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 371
+        "y": 380
       },
-      "id": 169
+      "id": 173
     },
     {
       "type": "row",
@@ -12846,9 +13099,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 379
+        "y": 388
       },
-      "id": 170
+      "id": 174
     },
     {
       "type": "stat",
@@ -12909,9 +13162,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 380
+        "y": 389
       },
-      "id": 171
+      "id": 175
     },
     {
       "type": "timeseries",
@@ -12995,9 +13248,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 380
+        "y": 389
       },
-      "id": 172
+      "id": 176
     },
     {
       "type": "stat",
@@ -13058,9 +13311,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 380
+        "y": 389
       },
-      "id": 173
+      "id": 177
     },
     {
       "type": "timeseries",
@@ -13148,9 +13401,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 388
+        "y": 397
       },
-      "id": 174
+      "id": 178
     },
     {
       "type": "stat",
@@ -13216,9 +13469,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 388
+        "y": 397
       },
-      "id": 175
+      "id": 179
     },
     {
       "type": "stat",
@@ -13284,9 +13537,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 388
+        "y": 397
       },
-      "id": 176
+      "id": 180
     },
     {
       "type": "stat",
@@ -13352,9 +13605,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 396
+        "y": 405
       },
-      "id": 177
+      "id": 181
     },
     {
       "type": "timeseries",
@@ -13438,9 +13691,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 396
+        "y": 405
       },
-      "id": 178
+      "id": 182
     },
     {
       "type": "timeseries",
@@ -13548,9 +13801,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 396
+        "y": 405
       },
-      "id": 179
+      "id": 183
     },
     {
       "type": "row",
@@ -13561,9 +13814,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 404
+        "y": 413
       },
-      "id": 180
+      "id": 184
     },
     {
       "type": "stat",
@@ -13625,9 +13878,9 @@
         "h": 6,
         "w": 4,
         "x": 0,
-        "y": 405
+        "y": 414
       },
-      "id": 181
+      "id": 185
     },
     {
       "type": "stat",
@@ -13699,9 +13952,9 @@
         "h": 6,
         "w": 4,
         "x": 4,
-        "y": 405
+        "y": 414
       },
-      "id": 182
+      "id": 186
     },
     {
       "type": "stat",
@@ -13777,9 +14030,9 @@
         "h": 6,
         "w": 4,
         "x": 8,
-        "y": 405
+        "y": 414
       },
-      "id": 183
+      "id": 187
     },
     {
       "type": "stat",
@@ -13859,9 +14112,9 @@
         "h": 6,
         "w": 4,
         "x": 12,
-        "y": 405
+        "y": 414
       },
-      "id": 184
+      "id": 188
     },
     {
       "type": "timeseries",
@@ -13945,9 +14198,9 @@
         "h": 6,
         "w": 8,
         "x": 16,
-        "y": 405
+        "y": 414
       },
-      "id": 185
+      "id": 189
     },
     {
       "type": "row",
@@ -13958,9 +14211,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 411
+        "y": 420
       },
-      "id": 186
+      "id": 190
     },
     {
       "type": "logs",
@@ -13999,9 +14252,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 412
+        "y": 421
       },
-      "id": 187
+      "id": 191
     },
     {
       "type": "logs",
@@ -14040,9 +14293,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 412
+        "y": 421
       },
-      "id": 188
+      "id": 192
     }
   ]
 }

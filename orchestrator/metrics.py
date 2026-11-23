@@ -1541,6 +1541,27 @@ SELFCARE_LOGGED = Counter(
     ["action"],  # meal | medication | water | movement
 )
 
+# Movement seen by the phone (HA iPhone-app Apple Health sensors) resets the
+# sitting clock. See selfcare_manager._refresh_movement_from_health.
+MOVEMENT_HEALTH_READ = Counter(
+    "bgw_movement_health_read_total",
+    "Reads of the phone's movement sensors in Home Assistant.",
+    # kind: steps | stand
+    # result: ok | unavailable | bad_value | not_found | http_error | unreachable
+    ["kind", "result"],
+)
+MOVEMENT_AUTO_DETECTED = Counter(
+    "bgw_movement_auto_detected_total",
+    "Checks where phone sensor data showed movement newer than the last logged one (the sitting clock moved).",
+    ["source"],  # steps | stand
+)
+MOVEMENT_HEALTH_LAST_UPDATE = Gauge(
+    "bgw_movement_health_last_update_timestamp_seconds",
+    "When the phone last reported this movement sensor to HA (last_reported); "
+    "stale for hours by day = the HA iPhone app stopped reporting.",
+    ["kind"],  # steps | stand
+)
+
 # ---------------------------------------------------------------------------
 # Budget sync (Actual Budget, replaced YNAB 2026-10) — finance_manager.sync_budget_transactions
 # ---------------------------------------------------------------------------
