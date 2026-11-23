@@ -4,6 +4,47 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Movement nudges: movement the phone saw counts; the night no longer counts as sitting (2026-11-23)
+
+Branch `feat/movement-from-health`. The movement nudge only knew about movement someone logged, so it nagged after a walk, and the midnight reset parked the sitting clock at ~00:00, so the first nudge of the day said "about 546 minutes". Now Jess can read the HA iPhone app's Apple Health sensors (default off), and the sitting clock starts with the movement hours (everyone). Detail: `jess-features/F-008-selfcare-nudges.md` → Sitting clock / Movement seen by the phone.
+
+### Upgrade action
+
+- None required. **Behaviour change for every install on merge:** with the default movement hours (09:00–18:00, 90 min) the first movement nudge comes at ~10:30 instead of ~09:00 (about one fewer nudge a day).
+- To turn on movement from the phone: HA iPhone app → Apple Health Sensors → Steps (+ Stand Hours), Background App Refresh on, `MOVEMENT_STEPS_ENTITY=sensor.<phone>_health_steps` (optional `MOVEMENT_STAND_ENTITY`) in Jupiter `.env`, `docker compose up -d --force-recreate orchestrator`. Steps + checks: F-008 → Setup.
+
+### Orchestrator
+
+- `selfcare_manager._refresh_movement_from_health(now)` runs every `check_selfcare` cycle (15 min), before the away, quiet-hours, focus and routine gates. It reads up to two HA sensors over HA REST (`shared._http`, 5 s timeout; not `ha_client`, which prints entity ids). Steps gained ≥ `MOVEMENT_STEPS_THRESHOLD` since the last read, or +1 stand hour, is movement, timed at the sensor's `last_changed` held between the baseline read and now.
+- `record_movement_logged(label, at=None)`: new optional `at`; the clock never moves backwards. Phone movement writes a `health:steps` / `health:stand` `selfcare_log` row (no counts) at most once per 30 min and resolves the movement inbox card.
+- Fail open toward nudging: unavailable, garbage or implausible readings (steps > 200000, stand > 24) are no evidence. A drop within a day keeps the higher baseline until a second, different phone report confirms it. Only a count that went down on a later day is a new day's total (an HA restart overnight restoring yesterday's value is a carry-over). New-day steps first reported inside today's movement hours get no credit. Baselines are RAM-only.
+- Logs never carry values or entity ids: one WARNING per new failure kind (repeats at most hourly), INFO on recovery. Startup line: `[SCHEDULER] Self-care nudges every 15 min (movement from the phone: steps, stand)`.
+- `_sitting_start` / `_movement_day_start`: sitting counts from max(`sitting_since`, start of the movement category's active hours). `get_selfcare_status()["sitting_minutes"]` reads 0 before the window opens. No full window → unchanged; a window that wraps midnight counts from last night's start.
+- New env vars `MOVEMENT_STEPS_ENTITY`, `MOVEMENT_STAND_ENTITY` (must match `sensor.[a-z0-9_]+`, else dropped with a log line), `MOVEMENT_STEPS_THRESHOLD` (default 150, range 20–5000, else 150 with a log line; never a startup failure). `docs/ENV_VARS.md` → Self-Care Nudges.
+
+### Monitoring
+
+- New metrics `bgw_movement_health_read_total{kind,result}`, `bgw_movement_auto_detected_total{source}` (only when the clock moved), `bgw_movement_health_last_update_timestamp_seconds{kind}` (HA `last_reported`, falling back to `last_updated` then `last_changed`; a future value is ignored); pre-created at 0 for the configured kinds.
+- New quiet alert `MovementSensorFailing` (`brain_gateway_informational`, info, `for: 30m`): a configured sensor had no ok read in 6 h (HA down 6 h fires it too). Own `pushover-quiet` route, 24h repeat.
+- New Grafana row "Movement From the Phone" after Sleep Wind-Down: Phone Steps Sensor Age, Sensor Reads (/hour), Movement Detected (/day).
+
+### Known limits
+
+- The phone reports to HA about hourly by day (median gap 40 min, p90 ~2 h, measured over 3 days): a nudge can still land between a walk and the report.
+- A restart loses the baselines; `sitting_since` restored from the last row can be up to 30 min older than the real last movement (an earlier nudge only).
+- Travelling west of the server's timezone can switch detection off for that day (fails safe: the plain timer).
+- If the HA app stops reporting, Jess quietly falls back to the plain timer; the age panel and the alert make it visible.
+
+### Tests
+
+- New `orchestrator/tests/test_movement_health.py`. `test_selfcare_manager.py::TestMovementCheck::test_nudge_after_sitting` premise updated for the new sitting start.
+
+### Docs
+
+- `CLAUDE.md`, `docs/ENV_VARS.md`, `jess-features/F-008-selfcare-nudges.md`, `monitoring/README.md`, `TECHNICAL_REFERENCE.md`, `docs/JESS_QUICK_START.md`.
+
+---
+
 ## [Unreleased] — Voice satellite: several devices, one per room (2026-11-12)
 
 Branch `feat/satellite-multi-device`. The bridge served one ATOM Echo. It now runs one `Satellite` per configured device inside the one bridge task, each answering only on its own room's speaker (D10 unchanged), with a rule for one "Hey Jess" heard by two devices (D11 amended, was "no multi-device arbitration"). Detail: `docs/VOICE_AND_TTS.md` → Voice satellite → Several devices / Add a device.

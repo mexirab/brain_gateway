@@ -109,6 +109,8 @@ The assistant monitors meals, meds, water, and movement — nudging when somethi
 
 You don't need to remember to log — nudges come to you on the configured interval, and a routine step ("take meds") auto-logs the matching category when you say "done."
 
+If your phone is set up for it, Jess also notices when your phone or Watch saw you walk, and holds off the "you've been sitting" nudge. It can lag up to an hour or two, because the phone reports in batches. The sitting count starts when your movement hours begin (9:00 by default), not at midnight.
+
 ---
 
 ## Interruptions

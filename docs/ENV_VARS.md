@@ -150,9 +150,14 @@ These env vars are bootstrap defaults. Once the runtime YAML at `SELFCARE_SCHEDU
 | `MEAL_NUDGE_HOURS` | `4` | Hours since last meal before nudging |
 | `HYDRATION_INTERVAL` | `90` | Minutes between water reminders |
 | `MOVEMENT_INTERVAL` | `90` | Minutes between movement reminders |
+| `MOVEMENT_STEPS_ENTITY` | (empty = off) | HA iPhone-app **Apple Health** steps sensor (`sensor.<phone>_health_steps`, phone + Watch), read every 15-min selfcare check; a gain ≥ `MOVEMENT_STEPS_THRESHOLD` since the last read resets the sitting clock. Not the plain pedometer `sensor.<phone>_steps` (phone-in-pocket only). Must match `sensor.[a-z0-9_]+`, else dropped with a `[CONFIG]` log line. Needs `SELFCARE_ENABLED` + the movement category on. See `jess-features/F-008-selfcare-nudges.md` → Movement seen by the phone |
+| `MOVEMENT_STAND_ENTITY` | (empty = off) | Optional HA iPhone-app Apple Watch stand-hours sensor (`sensor.<phone>_stand_hours`); +1 stand hour counts as movement. Same id rule as above |
+| `MOVEMENT_STEPS_THRESHOLD` | `150` | Steps gained between two checks that count as movement. Range 20–5000; out of range or not a whole number → 150 with a log line (never a startup failure) |
 | `QUIET_HOURS_START` | `22:00` | No nudges after this |
 | `QUIET_HOURS_END` | `07:00` | No nudges before this |
 | `SELFCARE_SCHEDULE_PATH` | `/app/data/selfcare_schedule.yaml` | Runtime YAML written by the Selfcare + Quiet Hours panels. Loaded by `selfcare_schedule.load_schedule()`; hot-reloaded on every save via `reload_schedule()`. |
+
+`MOVEMENT_STEPS_ENTITY`, `MOVEMENT_STAND_ENTITY` and `MOVEMENT_STEPS_THRESHOLD` are env-only (not in the YAML): after changing them, `docker compose up -d --force-recreate orchestrator`.
 
 ## User profile overrides
 
