@@ -19,16 +19,17 @@ jobs:
       # break CI on an unrelated push; bump it deliberately.
       # coder/ and scripts/jess-coder (the coder box and its host launcher, a
       # security boundary) ride along as extra paths in args. A file named
-      # explicitly is linted even without a .py extension.
+      # explicitly is linted even without a .py extension. scripts/jupiter-kiosk
+      # holds the closet kiosk, which handles the dashboard credential.
       - uses: astral-sh/ruff-action@v4.1.0
         with:
           version: "0.16.9"
-          args: check coder scripts/jess-coder
+          args: check coder scripts/jess-coder scripts/jupiter-kiosk
           src: orchestrator
       - uses: astral-sh/ruff-action@v4.1.0
         with:
           version: "0.16.9"
-          args: format --check coder scripts/jess-coder
+          args: format --check coder scripts/jess-coder scripts/jupiter-kiosk
           src: orchestrator
 
   check-dashboards:

@@ -27,7 +27,7 @@ After any change under `frontend/`, or when adding a new dashboard page, widget,
 ### Accessibility & UX
 - Interactive elements are keyboard-reachable and have visible focus states
 - Color is not the only signal for status (focus/reminder/error indicators should have text or icon too)
-- Text contrast is readable — this dashboard gets used on a kiosk (Callisto Pi 4) and on phones
+- Text contrast is readable — this dashboard gets used on the closet kiosk (portrait monitors on Jupiter, `scripts/jupiter-kiosk/`) and on phones
 - Touch targets are large enough for phone use
 
 ### Performance
@@ -39,7 +39,7 @@ After any change under `frontend/`, or when adding a new dashboard page, widget,
 - Rebuild: `docker compose up -d --build --force-recreate frontend`
 - Hit it in a browser at `https://jupiter-amds.tail74fc4a.ts.net` (Tailscale Serve → Jupiter :3001) and verify the happy path AND one error path (e.g., orchestrator down, empty response)
 - Check the browser console for warnings/errors
-- If the change affects the Callisto kiosk, test at kiosk resolution (1920x1080 typically)
+- If the change affects the closet kiosk, test at kiosk resolution (1080x1920 portrait) and in kiosk display mode (cookie `__Host-jess_display=kiosk`: no sidebar or mobile nav; `docs/FRONTEND.md` → Display mode)
 
 ## Output format
 

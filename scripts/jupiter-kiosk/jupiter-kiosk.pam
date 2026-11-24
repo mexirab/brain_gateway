@@ -1,0 +1,12 @@
+# PAM service for jupiter-kiosk.service (PAMName=jupiter-kiosk). Installed as /etc/pam.d/jupiter-kiosk.
+#
+# Just enough for a logind seat session on tty1 (pam_systemd, via common-session), which is what lets
+# the rootless X server open the display. Not the full `login` stack: that runs the motd scripts as
+# root and logs a pam_lastlog error on every start. Nothing authenticates here: systemd only calls
+# pam_setcred on the auth stack (and ignores its failure), so auth is a hard deny for anything else
+# that might try this service name.
+auth     required   pam_deny.so
+@include common-account
+session  required   pam_loginuid.so
+session  required   pam_limits.so
+@include common-session

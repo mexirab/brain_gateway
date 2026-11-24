@@ -6,6 +6,7 @@ import ServiceWorkerRegistrar from '@/components/providers/ServiceWorkerRegistra
 import { SWRProvider } from '@/components/providers/SWRProvider';
 import { isAuthenticated } from '@/lib/auth';
 import { getAssistantName } from '@/lib/branding.server';
+import { isKioskDisplayRequest } from '@/lib/display-mode.server';
 import { getFeatureFlags } from '@/lib/features.server';
 
 export default async function PrivateLayout({
@@ -19,6 +20,8 @@ export default async function PrivateLayout({
   if (!(await isAuthenticated())) redirect('/login');
 
   const [flags, appName] = await Promise.all([getFeatureFlags(), getAssistantName()]);
+  // Display-only screens (the closet kiosk) get the page without either menu. See lib/display-mode.ts.
+  const kiosk = isKioskDisplayRequest();
 
   return (
     // SWRProvider wraps the nav too, so the Chat badge gets the app's
@@ -26,10 +29,10 @@ export default async function PrivateLayout({
     <SWRProvider>
     <div className="min-h-screen supports-[height:100dvh]:min-h-dvh flex">
       {/* Sidebar — hidden on mobile, shown on md+ */}
-      <Sidebar flags={flags} appName={appName} />
+      {!kiosk && <Sidebar flags={flags} appName={appName} />}
 
       {/* Mobile bottom nav (5 primary tabs + More sheet) */}
-      <MobileNav flags={flags} />
+      {!kiosk && <MobileNav flags={flags} />}
 
       {/* Main content — mobile pt clears the status bar (viewportFit: cover)
           and pb the fixed MobileNav. If you change this padding, update

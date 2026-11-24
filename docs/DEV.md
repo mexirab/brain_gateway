@@ -73,7 +73,7 @@ docker compose --profile models config
 
 | Job (`name:`) | Timeout (min) | What |
 |---------------|---------------|------|
-| Python Lint & Format | 10 | ruff check + format check on `orchestrator/`, `coder/` and `scripts/jess-coder` (ruff version pinned) |
+| Python Lint & Format | 10 | ruff check + format check on `orchestrator/`, `coder/`, `scripts/jess-coder` and `scripts/jupiter-kiosk/` (ruff version pinned) |
 | Grafana Dashboards In Sync | 10 | regenerates `monitoring/grafana/dashgen/`, fails on drift |
 | Suite Theme In Sync | 10 | theme generator tests + `theme/build.py` drift check |
 | Python Tests | 15 | `pytest orchestrator/tests/ -v` (usually ~4 min) |

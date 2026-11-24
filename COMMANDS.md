@@ -363,6 +363,19 @@ docker ps --filter label=jess-coder=1   # open boxes (CoderGuardBlocked: docker 
 
 ---
 
+## Closet monitors kiosk (Jupiter; `scripts/jupiter-kiosk/README.md`)
+
+```bash
+systemctl status jupiter-kiosk
+journalctl -t jupiter-kiosk -f                # kiosk.py + X + preflight
+sudo systemctl restart jupiter-kiosk           # after editing /etc/jupiter-kiosk/kiosk.json
+sudo systemctl stop jupiter-kiosk && sudo systemctl start getty@tty1   # text console back on tty1
+cd ~/gateway_nerves/scripts/jupiter-kiosk && sudo python3 -I make_logins.py   # after changing DASHBOARD_TOKEN, then restart
+nvidia-smi                                     # Xorg + chrome on GPU bus 0C only
+```
+
+---
+
 ## HTTPS (Tailscale Serve)
 
 ### Check status

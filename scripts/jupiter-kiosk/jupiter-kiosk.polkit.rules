@@ -1,0 +1,11 @@
+// Closet kiosk: installed as /etc/polkit-1/rules.d/10-jupiter-kiosk.rules.
+//
+// The kiosk runs as the active local seat session (that is how its X server may open the display),
+// and polkit's allow_active defaults would then let any process running as `kiosk` - the browser
+// included - power off, reboot or suspend Jupiter, or mount disks, without a password. The kiosk
+// needs none of that: deny every polkit action to it.
+polkit.addRule(function (action, subject) {
+    if (subject.user == "kiosk") {
+        return polkit.Result.NO;
+    }
+});
