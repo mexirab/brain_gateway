@@ -1,0 +1,85 @@
+# Closet monitors kiosk on Jupiter: the X server, in a network namespace of its own.
+# Install steps, config and troubleshooting: scripts/jupiter-kiosk/README.md.
+#
+# Not started on its own: jupiter-kiosk.service (kiosk.py + Chrome) pulls it in, and stopping or
+# restarting that unit does the same here (PartOf=). If X dies, that unit stops too (its BindsTo=),
+# and when this one restarts, Wants= starts it again.
+#
+# Why two units: the NVIDIA X driver always binds an abstract sideband socket (@tmp/nvidia-xdriver-*),
+# and abstract sockets belong to a network namespace, not to the file system: in the host's, every
+# process could send to it, the host-networked Home Assistant and Pi-hole containers included.
+# PrivateNetwork= gives X a namespace with nothing in it but loopback. Chrome needs the host's (it
+# loads the pages over Jupiter's Tailscale address), so it runs in jupiter-kiosk.service, which shares
+# only this unit's private /tmp (its JoinsNamespaceOf=): the X socket and the driver's filesystem
+# sideband socket, which NVIDIA's GL client falls back to when the abstract one can't be reached.
+#
+# A rootless X server on tty1 (takes over the console login there). It runs as the unprivileged
+# `kiosk` user: no sudo, no docker group. PAMName + TTYPath give it a real logind seat session, which
+# is what lets a non-root X server open the display. Side effect: pam_systemd moves the processes into
+# the kiosk user's session scope, so cgroup limits live in user-<uid>.slice.d/50-jupiter-kiosk.conf,
+# not here. Everything below is applied at exec time and does reach X.
+# X keyboards are off (jupiter-kiosk.xorg.conf), so there is no Ctrl+Alt+F2 here: use SSH.
+
+[Unit]
+Description=Closet monitors kiosk: X server on the display RTX 5080 (own network namespace)
+Documentation=file:///home/labadmin/gateway_nerves/scripts/jupiter-kiosk/README.md
+After=systemd-user-sessions.service plymouth-quit-wait.service
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+PartOf=jupiter-kiosk.service
+Wants=jupiter-kiosk.service
+# Anything that ends X is worth retrying forever.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=kiosk
+PAMName=jupiter-kiosk
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+# X and its preflight log from the session scope: `journalctl -t jupiter-kiosk-x`.
+SyslogIdentifier=jupiter-kiosk-x
+UtmpIdentifier=tty1
+UtmpMode=user
+# --x-server: also refuses to start X outside a private network namespace. systemd skips
+# PrivateNetwork= without a word if jupiter-kiosk.service set up the shared namespaces first.
+ExecStartPre=/usr/local/lib/jupiter-kiosk/kiosk.py --preflight --x-server
+# start-x.sh: per-start X auth cookie, no TCP / abstract X socket (see its header), then Xorg.
+ExecStart=/usr/local/lib/jupiter-kiosk/start-x.sh
+Restart=always
+RestartSec=30
+
+# Loopback only, and no abstract socket of the host's network namespace in either direction.
+PrivateNetwork=yes
+# The X socket (/tmp/.X11-unix) and the driver's /tmp/nvidia-xdriver-* stay in this unit's /tmp,
+# shared with jupiter-kiosk.service only.
+PrivateTmp=yes
+# The voice card's device files (bus 0b: /dev/nvidia0, card0, renderD128; check with
+# `ls -l /dev/dri/by-path`). X then can't even open it; --preflight fails if these names ever point
+# at the display card. Plus host folders the kiosk has no business reading: other apps' data, some of
+# it world-readable (Paperless index, Immich, configs under /opt).
+InaccessiblePaths=-/dev/nvidia0 -/dev/dri/card0 -/dev/dri/renderD128
+InaccessiblePaths=-/mnt -/home -/root -/srv -/opt/conjure -/opt/homepage -/opt/apps
+# Not here: MemoryDenyWriteExecute and PrivateDevices (the GPU), ProtectHome (hides /run/user, where
+# the X auth cookie is).
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+# X needs no IP at all: AF_UNIX (its socket, D-Bus to logind, the sideband) and AF_NETLINK (udev).
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+UMask=0077
