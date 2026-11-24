@@ -54,7 +54,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum(rate(bgw_requests_total[5m])) * 60",
+          "expr": "(sum(rate(bgw_requests_total[5m])) * 60) or on() vector(0)",
           "legendFormat": "__auto",
           "range": false,
           "instant": true,
@@ -125,7 +125,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(bgw_request_duration_seconds_bucket[5m])))",
+          "expr": "(histogram_quantile(0.95, sum by (le) (rate(bgw_request_duration_seconds_bucket[5m]))) >= 0) or on() vector(0)",
           "legendFormat": "__auto",
           "range": false,
           "instant": true,
@@ -196,7 +196,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "(sum(rate(bgw_request_errors_total[5m])) / clamp_min(sum(rate(bgw_requests_total[5m])), 0.001)) * 100",
+          "expr": "((sum(rate(bgw_request_errors_total[5m])) / clamp_min(sum(rate(bgw_requests_total[5m])), 0.001)) * 100) or on() vector(0)",
           "legendFormat": "__auto",
           "range": false,
           "instant": true,
@@ -575,7 +575,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum(rate(bgw_tool_calls_total[5m])) * 60",
+          "expr": "(sum(rate(bgw_tool_calls_total[5m])) * 60) or on() vector(0)",
           "legendFormat": "__auto",
           "range": false,
           "instant": true,
@@ -638,7 +638,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(bgw_request_duration_seconds_bucket[5m])))",
+          "expr": "(histogram_quantile(0.5, sum by (le) (rate(bgw_request_duration_seconds_bucket[5m]))) >= 0) or on() vector(0)",
           "legendFormat": "p50",
           "range": true,
           "instant": false,
@@ -650,7 +650,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(bgw_request_duration_seconds_bucket[5m])))",
+          "expr": "(histogram_quantile(0.95, sum by (le) (rate(bgw_request_duration_seconds_bucket[5m]))) >= 0) or on() vector(0)",
           "legendFormat": "p95",
           "range": true,
           "instant": false,
@@ -662,7 +662,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(bgw_request_duration_seconds_bucket[5m])))",
+          "expr": "(histogram_quantile(0.99, sum by (le) (rate(bgw_request_duration_seconds_bucket[5m]))) >= 0) or on() vector(0)",
           "legendFormat": "p99",
           "range": true,
           "instant": false,
@@ -747,7 +747,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by (tool) (rate(bgw_tool_calls_total[5m])) * 60",
+          "expr": "(sum by (tool) (rate(bgw_tool_calls_total[5m])) * 60) or on() label_replace(vector(0), \"tool\", \"none\", \"\", \"\")",
           "legendFormat": "{{tool}}",
           "range": true,
           "instant": false,
@@ -833,7 +833,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by (error_type) (rate(bgw_llm_call_errors_total[5m])) * 60",
+          "expr": "(sum by (error_type) (rate(bgw_llm_call_errors_total[5m])) * 60) or on() label_replace(vector(0), \"error_type\", \"none\", \"\", \"\")",
           "legendFormat": "{{error_type}}",
           "range": true,
           "instant": false,

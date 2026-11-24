@@ -29,6 +29,25 @@ from ..panels import (
 )
 
 
+# A kiosk screen (scripts/jupiter-kiosk) should read "0", not "No data", when nobody has chatted in
+# the last hour or the orchestrator just restarted (its counters start over). `or on() X` adds X only
+# when the left side is empty, so a real series always wins. Latency over an idle window is NaN
+# (0/0), so it is filtered with `>= 0` first. Temperature panels keep "No data": there it means the
+# sensor is missing, and a fake 0 F would hide that.
+def or_zero(expr: str) -> str:
+    return f"({expr}) or on() vector(0)"
+
+
+def latency_or_zero(quantile: float) -> str:
+    q = f"histogram_quantile({quantile}, sum by (le) (rate(bgw_request_duration_seconds_bucket[5m])))"
+    return f"({q} >= 0) or on() vector(0)"
+
+
+def by_label_or_zero(expr: str, label: str) -> str:
+    """A per-label series, or one 0 series labelled `none` when there are none."""
+    return f'({expr}) or on() label_replace(vector(0), "{label}", "none", "", "")'
+
+
 def build() -> dict:
     panels: list[dict] = []
     y = 0
@@ -38,7 +57,7 @@ def build() -> dict:
     stats = [
         stat(
             "Request Rate",
-            "sum(rate(bgw_requests_total[5m])) * 60",
+            or_zero("sum(rate(bgw_requests_total[5m])) * 60"),
             unit="none",
             decimals=1,
             graph_mode="area",
@@ -46,14 +65,14 @@ def build() -> dict:
         ),
         stat(
             "p95 Latency",
-            "histogram_quantile(0.95, sum by (le) (rate(bgw_request_duration_seconds_bucket[5m])))",
+            latency_or_zero(0.95),
             unit="s",
             decimals=1,
             thresholds=CHAT_TURN_LATENCY_THRESHOLDS_S,
         ),
         stat(
             "Error %",
-            "(sum(rate(bgw_request_errors_total[5m])) / clamp_min(sum(rate(bgw_requests_total[5m])), 0.001)) * 100",
+            or_zero("(sum(rate(bgw_request_errors_total[5m])) / clamp_min(sum(rate(bgw_requests_total[5m])), 0.001)) * 100"),
             unit="percent",
             decimals=1,
             thresholds=GREEN_YELLOW_RED,
@@ -108,7 +127,7 @@ def build() -> dict:
         ),
         stat(
             "Tool Calls / min",
-            "sum(rate(bgw_tool_calls_total[5m])) * 60",
+            or_zero("sum(rate(bgw_tool_calls_total[5m])) * 60"),
             unit="none",
             decimals=1,
             graph_mode="area",
@@ -123,15 +142,15 @@ def build() -> dict:
             "Request Latency (p50 / p95 / p99)",
             [
                 (
-                    "histogram_quantile(0.50, sum by (le) (rate(bgw_request_duration_seconds_bucket[5m])))",
+                    latency_or_zero(0.50),
                     "p50",
                 ),
                 (
-                    "histogram_quantile(0.95, sum by (le) (rate(bgw_request_duration_seconds_bucket[5m])))",
+                    latency_or_zero(0.95),
                     "p95",
                 ),
                 (
-                    "histogram_quantile(0.99, sum by (le) (rate(bgw_request_duration_seconds_bucket[5m])))",
+                    latency_or_zero(0.99),
                     "p99",
                 ),
             ],
@@ -140,7 +159,7 @@ def build() -> dict:
         ),
         timeseries(
             "Tool Calls by Tool",
-            [("sum by (tool) (rate(bgw_tool_calls_total[5m])) * 60", "{{tool}}")],
+            [(by_label_or_zero("sum by (tool) (rate(bgw_tool_calls_total[5m])) * 60", "tool"), "{{tool}}")],
             unit="none",
             stack=True,
             fill=60,
@@ -156,7 +175,7 @@ def build() -> dict:
             "LLM Errors by Type",
             [
                 (
-                    "sum by (error_type) (rate(bgw_llm_call_errors_total[5m])) * 60",
+                    by_label_or_zero("sum by (error_type) (rate(bgw_llm_call_errors_total[5m])) * 60", "error_type"),
                     "{{error_type}}",
                 )
             ],

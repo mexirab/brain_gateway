@@ -1,0 +1,72 @@
+# Closet monitors kiosk on Jupiter: Grafana + the Jess dashboard on the two portrait monitors.
+# Install steps, config and troubleshooting: scripts/jupiter-kiosk/README.md.
+#
+# A rootless X server on tty1 (takes over the console login there) runs kiosk.py, which starts one
+# Chrome per monitor. Everything runs as the unprivileged `kiosk` user: no sudo, no docker group.
+# PAMName + TTYPath give it a real logind seat session, which is what lets a non-root X server open
+# the display. Side effect: pam_systemd moves the processes into the kiosk user's session scope, so
+# cgroup limits (memory, tasks, CPU, IP allow-list) live in user-<uid>.slice.d/50-jupiter-kiosk.conf,
+# not here. Everything below is applied at exec time and does reach X, kiosk.py and Chrome.
+# X keyboards are off (jupiter-kiosk.xorg.conf), so there is no Ctrl+Alt+F2 here: use SSH.
+
+[Unit]
+Description=Closet monitors kiosk (Chrome on the display RTX 5080)
+Documentation=file:///home/labadmin/gateway_nerves/scripts/jupiter-kiosk/README.md
+After=systemd-user-sessions.service network-online.target tailscaled.service plymouth-quit-wait.service
+Wants=network-online.target
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+# kiosk.py waits for monitors itself; anything else that ends it is worth retrying forever.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=kiosk
+PAMName=jupiter-kiosk
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+# kiosk.py, X and Chrome log from the session scope: find them all with `journalctl -t jupiter-kiosk`.
+SyslogIdentifier=jupiter-kiosk
+UtmpIdentifier=tty1
+UtmpMode=user
+ExecStartPre=/usr/local/lib/jupiter-kiosk/kiosk.py --preflight
+# start-x.sh: per-start X auth cookie, no TCP / abstract socket (see its header), then xinit.
+ExecStart=/usr/local/lib/jupiter-kiosk/start-x.sh
+Restart=always
+RestartSec=30
+# xinit exits 1 when stopped by SIGTERM, so a plain `systemctl stop` leaves the unit "failed".
+
+# The X socket (/tmp/.X11-unix) stays inside this unit. (The NVIDIA driver also binds an abstract
+# sideband socket that PrivateTmp can't hide: README → Security → Known limits.)
+PrivateTmp=yes
+# The voice card's device files (bus 0b: /dev/nvidia0, card0, renderD128; check with
+# `ls -l /dev/dri/by-path`). X and Chrome then can't even open it; --preflight fails if these names
+# ever point at the display card. Plus host folders the kiosk has no business reading: other apps'
+# data, some of it world-readable (Paperless index, Immich, configs under /opt).
+InaccessiblePaths=-/dev/nvidia0 -/dev/dri/card0 -/dev/dri/renderD128
+InaccessiblePaths=-/mnt -/home -/root -/srv -/opt/conjure -/opt/homepage -/opt/apps
+# Chrome sandboxes itself with user namespaces (allowed by Ubuntu's AppArmor `chrome` profile), not
+# its setuid helper, so no-new-privileges is fine. Not here: MemoryDenyWriteExecute (V8),
+# PrivateDevices (GPU), RestrictNamespaces (Chrome's sandbox), ProtectHome (hides /run/user).
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+UMask=0077
+
+[Install]
+WantedBy=graphical.target

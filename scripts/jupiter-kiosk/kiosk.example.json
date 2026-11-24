@@ -1,0 +1,26 @@
+{
+  "chrome": "/opt/google/chrome/chrome",
+  "timezone": "America/Chicago",
+  "host_map": {
+    "jupiter-amds.tail74fc4a.ts.net": "100.64.0.1"
+  },
+  "screens": [
+    {
+      "name": "left",
+      "output": "HDMI-0",
+      "rotate": "left",
+      "url": "https://jupiter-amds.tail74fc4a.ts.net:3000/d/jess-glance?orgId=1&kiosk&refresh=30s",
+      "login": "grafana",
+      "reload_minutes": 360
+    },
+    {
+      "name": "right",
+      "output": "HDMI-1",
+      "rotate": "right",
+      "url": "https://jupiter-amds.tail74fc4a.ts.net/dashboard",
+      "login": "dashboard",
+      "reload_minutes": 5,
+      "hide_nav": true
+    }
+  ]
+}

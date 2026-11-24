@@ -4,6 +4,49 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Closet monitors kiosk on Jupiter (2026-11-24)
+
+Branch `feat/jupiter-kiosk`. The two portrait monitors in the server closet, on Jupiter's bus-0c RTX 5080, show Grafana **Jess Glance** (left) and the dashboard `/dashboard` (right, no menus), unattended: the kiosk logs itself in, retries while a server is down, waits while the monitors are off and restarts a dead browser. Succeeds the Callisto Pi kiosk (retired 2026-10-14). Authoritative doc: `scripts/jupiter-kiosk/README.md`.
+
+### Upgrade action
+
+- None for other installs: no compose or orchestrator change, and CI never deploys the kiosk. The dashboard display mode and the Jess Glance zero fallback ship with the normal deploy.
+- Jupiter: installed and running since 2026-11-24. Host install steps (and re-install after a script or unit change, uninstall): `scripts/jupiter-kiosk/README.md` → Install. Re-run `make_logins.py` and restart `jupiter-kiosk` after changing `DASHBOARD_TOKEN`.
+
+### Kiosk (`scripts/jupiter-kiosk/`, host-side, stdlib Python)
+
+- `kiosk.py`: X client under `xinit`, as nologin user `kiosk`. One Chrome per screen (own profile, `--kiosk`) driven over `--remote-debugging-pipe` (no DevTools port). Logs into Grafana (Viewer `closet-kiosk`, from an isolated world, only on Grafana's login page) and the dashboard (session cookie). Reloads Chrome error pages and HTTP 5xx every 30 s; waits while no monitor is connected; exits on a monitor change so systemd restarts it with a fresh layout; restarts a dead, hung or crash-looping Chrome with backoff, and the browsers after a Chrome upgrade. SIGUSR1 = one PNG per screen (mode 600, runtime dir). `--preflight` (ExecStartPre) refuses to start if the X `BusID` card is the voice card pinned in `/etc/voxcpm-tts.env`, or if the unit's `InaccessiblePaths` masks hide the display card. Config `/etc/jupiter-kiosk/kiosk.json`, unknown keys refused (`kiosk.example.json`: timezone `America/Chicago`, `host_map`, left Grafana `jess-glance` on `HDMI-0` rotate left, right `/dashboard` on `HDMI-1` rotate right with `hide_nav`).
+- `make_logins.py` (root): derives the dashboard cookie HMAC(`DASHBOARD_TOKEN`, label) and checks it against the live frontend, creates or re-enables + re-passwords the Grafana org Viewer `closet-kiosk`, then writes `/etc/jupiter-kiosk/secrets.json` (root:kiosk 0640). Sends credentials only to ports the host's docker-proxy holds, never across a redirect.
+- `start-x.sh` (fresh MIT-MAGIC-COOKIE per start); `jupiter-kiosk.service` (`User=kiosk`, `PAMName=jupiter-kiosk`, tty1, `Conflicts=getty@tty1`, `PrivateTmp`, `InaccessiblePaths` for the voice card's device files + `/mnt /home /root /srv` and a few `/opt` app folders, `NoNewPrivileges`, `SyslogIdentifier=jupiter-kiosk`); `jupiter-kiosk.xorg.conf` (`BusID "PCI:12:0:0"` = bus 0c, `ProbeAllGpus "false"`, no input devices, no VT switch); `jupiter-kiosk.pam`; `jupiter-kiosk.polkit.rules` (user `kiosk` is denied every action); `kiosk-user-slice.conf` (`MemoryMax=3G`, `TasksMax=1024`, `CPUWeight=20`, `IPAddressAllow` = Jupiter's Tailscale IP only, not even loopback); `kiosk-user-manager.conf` (same hardening for `user@<uid>.service`).
+- Measured 2026-11-24: Xorg ~66 MiB + Chrome ~105 MiB on the bus-0c card, no memory or context on the voice card.
+- No metrics or alerts by design (a broken screen is visible to whoever looks); logs `journalctl -t jupiter-kiosk` (screen names, states, status codes, error kinds only).
+
+### Frontend
+
+- Display mode: `src/lib/display-mode.ts` (`DISPLAY_COOKIE = '__Host-jess_display'`, `isKioskDisplay`) + `src/lib/display-mode.server.ts` (`isKioskDisplayRequest()`). `(private)/layout.tsx` leaves out `<Sidebar>` and `<MobileNav>` when the cookie is exactly `kiosk`. Cosmetic only: middleware and auth unchanged, no UI switch. `docs/FRONTEND.md` → Mobile Navigation → Display mode.
+
+### Monitoring
+
+- Jess Glance (`dashgen/dashboards/jess_glance.py` + regenerated `jess-glance.json`): request rate, p95, error %, tool calls / min and the latency, tool-calls-by-tool and LLM-errors graphs read 0 instead of "No data" when idle or after an orchestrator restart (`or on() vector(0)`; idle latency NaN filtered with `>= 0`; per-label graphs fall back to one `none` series). Temperature panels still show "No data" (= sensor missing).
+
+### CI
+
+- `lint-python`: ruff check + format check also cover `scripts/jupiter-kiosk`.
+
+### Known limits
+
+- `scripts/jupiter-kiosk/README.md` → Known limits: the NVIDIA X driver's abstract `@tmp/nvidia-xdriver-*` sideband socket is reachable from host-networked containers (HA, Pi-hole); the dashboard cookie is a master credential (same value as every device, revoked only by changing `DASHBOARD_TOKEN`; follow-up: a read-only kiosk session); Xorg still gets a `card0` fd for the voice card from logind (no memory or context there); Chrome upgrades only by hand; Jess Glance's landscape layout leaves the bottom ~40 % of the portrait screen empty; no night schedule.
+
+### Tests
+
+- New `orchestrator/tests/test_jupiter_kiosk.py` + `test_jupiter_kiosk_logins.py` (368 together; load `scripts/jupiter-kiosk/*.py` by path, no X, Chrome, GPU, root or network; run in the standard throwaway-container command). Frontend: `src/lib/display-mode.test.ts`, `src/app/(private)/layout.test.tsx`.
+
+### Docs
+
+- New `scripts/jupiter-kiosk/README.md`. `CLAUDE.md`, `docs/FRONTEND.md`, `monitoring/README.md`, `docs/DEV.md`, `COMMANDS.md`.
+
+---
+
 ## [Unreleased] — Jupiter voice moved to the bus-0b 5080 (2026-11-24)
 
 Host change, done live; this entry and the doc edits record it. The bus-0c RTX 5080 has two HDMI ports and the bus-0b card one, so the two closet monitors stay on bus 0c and the voice (`voxcpm-tts`) moved to bus 0b.
