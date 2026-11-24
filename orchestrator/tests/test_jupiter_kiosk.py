@@ -779,6 +779,45 @@ def test_visible_x_sockets_ignores_x_ends_of_our_own_connections():
     assert kiosk.visible_x_sockets(kiosk.unix_sockets(UNIX_ISOLATED), 0) == []
 
 
+def _proc_net_unix() -> list[tuple[str, str]]:
+    """The kernel's own /proc/self/net/unix, parsed by unix_sockets()."""
+    try:
+        with open(kiosk.NET_UNIX, encoding="utf-8", errors="replace") as f:
+            return kiosk.unix_sockets(f.read())
+    except OSError:
+        pytest.skip(f"{kiosk.NET_UNIX} not readable")
+
+
+def test_held_name_is_exact_and_padding_is_another_name():
+    # xcb connects to the exact name (no trailing NULs); the kernel shows each NUL as "@".
+    n = _free_display()
+    with kiosk.hold_x_abstract_name(n), socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as padded:
+        padded.bind(f"\0/tmp/.X11-unix/X{n}\0\0\0".encode())  # a different address: no EADDRINUSE
+        sockets = _proc_net_unix()
+        assert ("01", f"@/tmp/.X11-unix/X{n}") in sockets
+        assert ("01", f"@/tmp/.X11-unix/X{n}@@@") in sockets
+        assert kiosk.visible_x_sockets(sockets, n) == []  # neither is X's listener
+
+
+def test_visible_x_sockets_on_real_kernel_sockets(tmp_path, monkeypatch):
+    # A listener named like the X socket counts; the server end of an accepted connection (all the
+    # host namespace sees of an X in its own) carries the listener's path, St 03, and doesn't.
+    monkeypatch.setattr(kiosk, "X_SOCKET_DIR", str(tmp_path))
+    path = str(tmp_path / "X0")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(path)
+            listener.listen(1)
+            client.connect(path)
+            server_end, _ = listener.accept()
+            assert kiosk.visible_x_sockets(_proc_net_unix(), 0) == [path]
+        with server_end:
+            sockets = _proc_net_unix()
+            assert ("03", path) in sockets
+            assert ("01", path) not in sockets
+            assert kiosk.visible_x_sockets(sockets, 0) == []
+
+
 NET_DEV_HEAD = (
     "Inter-|   Receive                                                |  Transmit\n"
     " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n"
@@ -1039,6 +1078,15 @@ def test_preflight_x_server_still_checks_the_gpu(host, caplog, monkeypatch):
     host.voice.write_text(f"CUDA_VISIBLE_DEVICES={U_DISPLAY}\n", encoding="utf-8")
     assert kiosk.preflight(host.cfg, x_server=True) == 1
     assert "is a voice card" in caplog.text
+
+
+def test_preflight_x_server_checks_the_namespace_first(host, caplog, monkeypatch):
+    monkeypatch.setattr(kiosk, "private_network", lambda: False)
+    host.xorg.unlink()  # an error of its own, if preflight got that far
+    assert kiosk.preflight(host.cfg, x_server=True) == 1
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1  # one clear line, and it's the namespace
+    assert "not in a private network namespace" in errors[0]
 
 
 def test_preflight_warns_when_voice_card_is_reachable(host, caplog):
@@ -2078,12 +2126,17 @@ def test_main_holds_the_abstract_name_while_it_runs(main_env, monkeypatch, tmp_p
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         with client, pytest.raises(ConnectionRefusedError):  # held, not listening: xcb falls back to /tmp
             client.connect(f"\0/tmp/.X11-unix/X{n}")
+        # A free abstract name refuses connects too: only a second bind failing proves it's held.
+        with pytest.raises(OSError) as taken:
+            kiosk.hold_x_abstract_name(n)
+        seen["errno"] = taken.value.errno
         seen["xauthority"] = os.environ["XAUTHORITY"]
         seen["number"] = number
         return 5
 
     monkeypatch.setattr(kiosk, "run_kiosk", fake_run_kiosk)
     assert kiosk.main(_argv(main_env)) == 5
+    assert seen["errno"] == errno.EADDRINUSE
     assert seen["xauthority"] == str(tmp_path / "jupiter-kiosk.Xauthority")
     assert seen["number"] == n
     again = kiosk.hold_x_abstract_name(n)  # released on the way out
@@ -2121,6 +2174,40 @@ def test_main_needs_a_runtime_dir_for_the_cookie(main_env, monkeypatch, caplog):
     monkeypatch.setattr(kiosk, "hold_x_abstract_name", lambda n: pytest.fail("must not get this far"))
     assert kiosk.main(_argv(main_env)) == 2
     assert "can't find the X auth cookie" in caplog.text
+
+
+def test_main_cookie_falls_back_to_home_like_start_x(main_env, monkeypatch, tmp_path):
+    start_x = _KIOSK_PATH.with_name("start-x.sh")
+    if not start_x.is_file():
+        pytest.skip("start-x.sh not found")
+    # ":-": an empty XDG_RUNTIME_DIR counts as unset there, and must here too, or X and kiosk.py
+    # would look for the cookie in different places.
+    assert 'runtime="${XDG_RUNTIME_DIR:-$HOME}"' in start_x.read_text(encoding="utf-8")
+    n = _free_display()
+    monkeypatch.setenv("DISPLAY", f":{n}")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    seen = []
+    monkeypatch.setattr(kiosk, "run_kiosk", lambda *a: seen.append(os.environ["XAUTHORITY"]) or 0)
+    assert kiosk.main(_argv(main_env)) == 0
+    assert seen == [str(tmp_path / "jupiter-kiosk.Xauthority")]
+
+
+def test_main_releases_the_name_when_the_kiosk_raises(main_env, monkeypatch, tmp_path):
+    n = _free_display()
+    monkeypatch.setenv("DISPLAY", f":{n}")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+
+    def crash(cfg, secrets, stop, runners, number):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(kiosk, "run_kiosk", crash)
+    with pytest.raises(RuntimeError) as raised:
+        kiosk.main(_argv(main_env))
+    # The traceback keeps main()'s frame, and so the socket object, alive: only closing it on the way
+    # out frees the name.
+    assert raised.traceback
+    kiosk.hold_x_abstract_name(n).close()
 
 
 @pytest.fixture
@@ -2166,6 +2253,196 @@ def test_run_kiosk_stopped_while_waiting_for_x(run_env, monkeypatch, caplog):
     run_env.args[2].set()
     assert kiosk.run_kiosk(*run_env.args) == 0
     assert "didn't answer" not in caplog.text
+
+
+def test_run_kiosk_checks_isolation_after_x_answers(run_env, monkeypatch, caplog):
+    def x_comes_up(stop, timeout=60):
+        run_env.net_unix.write_text(UNIX_EXPOSED, "utf-8")  # X's sockets exist once X runs
+        return True
+
+    monkeypatch.setattr(kiosk, "wait_for_x", x_comes_up)
+    monkeypatch.setattr(kiosk, "wait_for_monitor", lambda stop: pytest.fail("must not lay out the screens"))
+    assert kiosk.run_kiosk(*run_env.args) == 1
+    assert "reachable from the host network namespace" in caplog.text
+
+
+@pytest.fixture
+def loop_env(monkeypatch, tmp_path, zoneinfo):
+    """run_kiosk() past the X checks: the real wait_for_monitor() and setup_display() on a fake xrandr
+    (answers by "--query" / "--current" / command name; a callable is called, an exception raised),
+    ScreenRunner replaced (no thread, no Chrome), and a stop Event whose wait() runs the test's ticks
+    instead of sleeping. When the ticks run out, the kiosk is stopped."""
+    net_unix = tmp_path / "unix"
+    net_unix.write_text(UNIX_ISOLATED, "utf-8")
+    monkeypatch.setattr(kiosk, "NET_UNIX", str(net_unix))
+    monkeypatch.setattr(kiosk, "wait_for_x", lambda stop, timeout=60: True)
+    monkeypatch.setattr(kiosk, "OUTPUT_CHECK_SECONDS", 0)  # look at the monitors on every tick
+    env = SimpleNamespace(xrandr={"--query": XRANDR, "--current": XRANDR}, commands=[], made=[], ticks=[])
+    env.on_start = None
+
+    def fake_run(cmd, timeout=15):
+        env.commands.append(cmd)
+        key = cmd[1] if cmd[0] == "xrandr" and cmd[1] in ("--query", "--current") else cmd[0]
+        answer = env.xrandr.get(key, "")
+        if callable(answer):
+            answer = answer()
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    class FakeRunner:
+        def __init__(self, cfg, screen, geometry, secrets, stop):
+            self.cfg, self.screen, self.geometry, self.secrets, self.stop = cfg, screen, geometry, secrets, stop
+            self.wake = threading.Event()
+            self.snapshot_wanted = threading.Event()
+            self.alive = False
+            self.joined = None
+            env.made.append(self)
+
+        def start(self):
+            self.alive = True
+            if env.on_start:
+                env.on_start(self)
+
+        def is_alive(self):
+            return self.alive
+
+        def join(self, timeout=None):
+            self.joined = timeout
+
+    event = threading.Event()
+
+    def wait(timeout):
+        if env.ticks:
+            env.ticks.pop(0)()
+        else:
+            event.set()
+        return event.is_set()
+
+    monkeypatch.setattr(kiosk, "_run", fake_run)
+    monkeypatch.setattr(kiosk, "ScreenRunner", FakeRunner)
+    env.event = event
+    env.stop = _Proxy(event, wait=wait)
+    env.runners = []
+    env.secrets = {"dashboard_session": GOOD_SESSION}
+    env.args = (kiosk.load_config(_cfg(GRAFANA_SCREEN, DASH_SCREEN)), env.secrets, env.stop, env.runners, 0)
+    return env
+
+
+def _layout_done(env) -> list[list[str]]:
+    """The commands run_kiosk() ran after setup_display() turned blanking off."""
+    return env.commands[env.commands.index(["xset", "s", "off", "s", "noblank", "-dpms"]) + 1 :]
+
+
+def test_run_kiosk_runs_a_browser_per_placed_screen(loop_env, caplog):
+    caplog.set_level(logging.INFO, logger="jupiter-kiosk")
+    loop_env.ticks.append(lambda: None)  # one steady check: same monitors, nothing restarts
+    assert kiosk.run_kiosk(*loop_env.args) == 0
+    made = loop_env.made
+    # In the list main() passed: its signal handlers wake these runners.
+    assert loop_env.runners == made
+    assert [(r.screen.name, r.geometry) for r in made] == [
+        ("left", (1080, 1920, 0, 0)),
+        ("right", (1080, 1920, 1080, 0)),
+    ]
+    assert all(r.alive and r.secrets is loop_env.secrets and r.stop is loop_env.stop for r in made)
+    assert all(r.wake.is_set() and r.joined == 20 for r in made)  # stopped: woken, then waited for
+    assert loop_env.event.is_set()
+    assert "stopping" in caplog.text
+
+
+def test_run_kiosk_restarts_when_monitors_change(loop_env, caplog):
+    caplog.set_level(logging.INFO, logger="jupiter-kiosk")
+
+    def unplug():
+        loop_env.xrandr["--current"] = XRANDR.replace("DP-2 connected", "DP-2 disconnected")
+
+    loop_env.ticks += [lambda: None, unplug]
+    assert kiosk.run_kiosk(*loop_env.args) == 3
+    assert "monitors changed (2 connected, was 3)" in caplog.text
+    # The read-back, then one look per tick, never re-probing (--query can make a screen flicker).
+    assert _layout_done(loop_env) == [["xrandr", "--current"]] * 3
+    assert loop_env.event.is_set() and all(r.joined == 20 for r in loop_env.made)
+
+
+def test_run_kiosk_rides_out_a_failed_monitor_check(loop_env):
+    def x_hiccup():
+        loop_env.xrandr["--current"] = kiosk.subprocess.TimeoutExpired(["xrandr"], 15)
+
+    def x_back():
+        loop_env.xrandr["--current"] = XRANDR
+
+    loop_env.ticks += [x_hiccup, x_back]
+    assert kiosk.run_kiosk(*loop_env.args) == 0  # not a crash, and not a monitor change
+    assert _layout_done(loop_env) == [["xrandr", "--current"]] * 3
+
+
+def test_run_kiosk_stops_every_screen_when_one_runner_dies(loop_env, caplog):
+    def left_dies():
+        loop_env.made[0].alive = False
+
+    loop_env.ticks.append(left_dies)
+    assert kiosk.run_kiosk(*loop_env.args) == 1
+    assert "screen runner(s) stopped: left" in caplog.text
+    right = loop_env.made[1]
+    assert loop_env.event.is_set() and right.wake.is_set() and right.joined == 20
+
+
+@pytest.mark.parametrize(
+    "key, answer, logged",
+    [
+        pytest.param(
+            "--query",
+            kiosk.subprocess.CalledProcessError(1, ["xrandr"], "", "Can't open display :0\n"),
+            "CalledProcessError",
+            id="x-gone",
+        ),
+        pytest.param(
+            "xrandr",
+            kiosk.subprocess.CalledProcessError(1, ["xrandr"], "", "xrandr: Configure crtc 0 failed\n"),
+            "CalledProcessError",
+            id="layout-refused",
+        ),
+        pytest.param("xset", FileNotFoundError("xset"), "FileNotFoundError", id="no-xset"),
+    ],
+)
+def test_run_kiosk_display_setup_fails(loop_env, caplog, key, answer, logged):
+    loop_env.xrandr[key] = answer
+    assert kiosk.run_kiosk(*loop_env.args) == 1
+    assert f"display setup failed: {logged}\n" in caplog.text  # the error kind only
+    assert "Can't open display" not in caplog.text and "crtc" not in caplog.text
+    assert loop_env.made == []
+
+
+def test_run_kiosk_monitor_gone_before_layout(loop_env, caplog):
+    queries = iter([XRANDR, "HDMI-0 disconnected (normal)\n"])
+    loop_env.xrandr["--query"] = lambda: next(queries)
+    assert kiosk.run_kiosk(*loop_env.args) == 1
+    assert "display setup failed: no connected monitor on the display card" in caplog.text
+    assert loop_env.made == []
+
+
+def test_main_signals_reach_the_runners(main_env, loop_env, monkeypatch, tmp_path):
+    # main()'s handlers act on the runners run_kiosk() starts; Chrome gets the cookie main() chose.
+    handlers = {}
+    monkeypatch.setattr(kiosk, "signal", _Proxy(kiosk.signal, signal=lambda sig, h: handlers.__setitem__(sig, h)))
+    n = _free_display()
+    monkeypatch.setenv("DISPLAY", f":{n}")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    seen = {}
+
+    def on_start(runner):
+        seen["cookie"] = kiosk.chrome_env(runner.cfg).get("XAUTHORITY")
+        handlers[kiosk.signal.SIGUSR1](kiosk.signal.SIGUSR1, None)
+        seen["snapshot"] = runner.snapshot_wanted.is_set() and runner.wake.is_set()
+        runner.wake.clear()
+        handlers[kiosk.signal.SIGTERM](kiosk.signal.SIGTERM, None)
+        seen["stopped"] = runner.stop.is_set() and runner.wake.is_set()
+
+    loop_env.on_start = on_start
+    assert kiosk.main(_argv(main_env)) == 0
+    assert [r.screen.name for r in loop_env.made] == ["right"]
+    assert seen == {"cookie": str(tmp_path / "jupiter-kiosk.Xauthority"), "snapshot": True, "stopped": True}
 
 
 # ------------------------------------------------------------------------------------- unit files
@@ -2236,6 +2513,14 @@ def test_browser_unit_shares_only_x_tmp_and_keeps_the_host_network():
     assert b[("Service", "ExecStart")] == ["/usr/local/lib/jupiter-kiosk/kiosk.py"]
     assert b[("Service", "Environment")] == ["DISPLAY=:0"]
     assert b[("Install", "WantedBy")] == ["graphical.target"]
+
+
+def test_x_unit_is_not_ordered_after_the_browser_unit():
+    # The unit started first sets up the namespaces the other joins; if that were the browser unit,
+    # systemd would drop X's PrivateNetwork= without a word (and --preflight --x-server refuses X).
+    x = _unit(X_UNIT)
+    assert BROWSER_UNIT not in _words(x, "Unit", "After")
+    assert X_UNIT not in _words(_unit(BROWSER_UNIT), "Unit", "Before")  # nor the same thing said there
 
 
 @pytest.mark.parametrize("name", [X_UNIT, BROWSER_UNIT])
