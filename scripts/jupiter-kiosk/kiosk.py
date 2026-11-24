@@ -30,7 +30,8 @@ What it does:
      it. No debugging port is opened.
   3. Every CHECK_SECONDS it reads the page address and HTTP status:
      - a login page: log in. Grafana through a view-only account (POST /login from the page itself);
-       the Jess dashboard by setting its session cookie;
+       the Jess dashboard by setting its read-only kiosk session cookie (it opens /dashboard and the
+       GETs that page makes, nothing else: frontend/src/lib/kiosk-session.ts);
      - a Chrome error page, or HTTP 5xx (server down or still starting, e.g. Tailscale Serve's 502):
        load the page again every ERROR_RETRY_SECONDS;
      - every reload_minutes: reload.
@@ -43,7 +44,7 @@ Files:
                                    hide_nav), the chrome path and host_map. No secrets. See
                                    kiosk.example.json.
   /etc/jupiter-kiosk/secrets.json  root:kiosk 0640, written by make_logins.py: grafana_user,
-                                   grafana_password, dashboard_session.
+                                   grafana_password, dashboard_kiosk_session.
 
 Logs (journal, SyslogIdentifier=jupiter-kiosk): screen names, states, HTTP status codes and error
 kinds only. Never page text, cookies, passwords or URLs. A page that keeps failing logs once when it
@@ -305,15 +306,22 @@ def load_secrets(data: object, cfg: Config) -> dict[str, str]:
     if "grafana" in logins:
         needed += ["grafana_user", "grafana_password"]
     if "dashboard" in logins:
-        needed.append("dashboard_session")
+        needed.append("dashboard_kiosk_session")
+    if "dashboard_session" in data:
+        # The master cookie that older make_logins.py wrote: it opens the whole dashboard. Don't run
+        # with it lying around; make_logins.py rewrites the file without it.
+        raise ConfigError(
+            "secrets.json still holds dashboard_session, the full dashboard login: re-run make_logins.py, "
+            "which replaces it with the read-only kiosk session"
+        )
     out = {}
     for key in needed:
         value = data.get(key)
         if not isinstance(value, str) or not value:
             raise ConfigError(f"secrets.json is missing {key} (run make_logins.py)")
         out[key] = value
-    if "dashboard_session" in out and not HEX64_RE.fullmatch(out["dashboard_session"]):
-        raise ConfigError("secrets.json dashboard_session must be 64 hex characters (run make_logins.py)")
+    if "dashboard_kiosk_session" in out and not HEX64_RE.fullmatch(out["dashboard_kiosk_session"]):
+        raise ConfigError("secrets.json dashboard_kiosk_session must be 64 hex characters (run make_logins.py)")
     return out
 
 
@@ -1018,7 +1026,7 @@ def screen_cookies(screen: Screen, secrets: dict[str, str]) -> list[dict]:
 
     cookies = []
     if screen.login == "dashboard":
-        cookies.append(cookie(DASHBOARD_COOKIE, secrets["dashboard_session"]))
+        cookies.append(cookie(DASHBOARD_COOKIE, secrets["dashboard_kiosk_session"]))
     if screen.hide_nav:
         cookies.append(cookie(DISPLAY_COOKIE, "kiosk"))
     return cookies
@@ -1231,7 +1239,7 @@ class ScreenRunner(threading.Thread):
         if self.screen.login == "dashboard":
             log.warning(
                 "screen %s: dashboard asked for a login; setting the session cookie again "
-                "(if this repeats, DASHBOARD_TOKEN changed: re-run make_logins.py)",
+                "(if this repeats, KIOSK_TOKEN changed: re-run make_logins.py)",
                 self.screen.name,
             )
             self._set_cookies()

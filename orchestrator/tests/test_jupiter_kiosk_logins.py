@@ -1,7 +1,7 @@
 """
 Tests for scripts/jupiter-kiosk/make_logins.py, the root-run helper that writes
-/etc/jupiter-kiosk/secrets.json (dashboard session cookie + a view-only Grafana
-account).
+/etc/jupiter-kiosk/secrets.json (read-only kiosk session cookie for the dashboard + a
+view-only Grafana account).
 
 No root, no network, no real .env: the .env parser and the cookie derivation
 are pure; the "is that port really docker-proxy?" check runs against a faked
@@ -12,6 +12,7 @@ _request(); write_secrets() writes into tmp_path with chown faked.
 from __future__ import annotations
 
 import base64
+import email.message
 import hashlib
 import hmac
 import importlib.util
@@ -23,6 +24,8 @@ import stat
 import subprocess
 import sys
 import urllib.error
+import urllib.request
+import urllib.response
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -127,57 +130,102 @@ def test_parse_env_quoted_value_with_inline_comment(line):
     assert ml.parse_env(line + "\n") == {"DASHBOARD_TOKEN": "v"}
 
 
-# -------------------------------------------------------------------------------- dashboard_session
+# ------------------------------------------------------------------------------------ kiosk_session
+
+KIOSK_TOKEN = "kiosk-token-0123456789abcdef"
+DASH_TOKEN = "test-token-123"
 
 
-def test_dashboard_session_is_the_frontend_hmac():
-    expected = hmac.new(b"tok-123", b"brain-gateway-dashboard-session-v1", hashlib.sha256).hexdigest()
-    assert ml.dashboard_session("  tok-123\n") == expected  # trimmed like the frontend's .trim()
+def test_kiosk_session_is_the_frontend_hmac():
+    expected = hmac.new(KIOSK_TOKEN.encode(), b"brain-gateway-kiosk-session-v1", hashlib.sha256).hexdigest()
+    assert ml.kiosk_session(f"  {KIOSK_TOKEN}\n", DASH_TOKEN) == expected  # trimmed like the frontend's .trim()
     assert re.fullmatch(r"[0-9a-f]{64}", expected)
-    assert ml.dashboard_session("tok-124") != expected
+    assert ml.kiosk_session(KIOSK_TOKEN + "x", DASH_TOKEN) != expected
 
 
-def test_dashboard_session_value_is_accepted_by_the_kiosk():
+def test_kiosk_session_is_never_the_full_login():
+    # Same key, other label: even a token reused as both would give different cookies (the frontend
+    # also refuses equal tokens, and so does kiosk_session()).
+    full = hmac.new(KIOSK_TOKEN.encode(), b"brain-gateway-dashboard-session-v1", hashlib.sha256).hexdigest()
+    assert ml.kiosk_session(KIOSK_TOKEN, DASH_TOKEN) != full
+
+
+def test_kiosk_session_value_is_accepted_by_the_kiosk():
     kiosk_path = _FOLDER / "kiosk.py"
     kiosk = _load(kiosk_path, "jupiter_kiosk_for_logins")
     cfg = kiosk.load_config({"screens": [{"name": "right", "url": "https://host.example/", "login": "dashboard"}]})
-    value = ml.dashboard_session("some-long-dashboard-token")
-    assert kiosk.load_secrets({"dashboard_session": value}, cfg) == {"dashboard_session": value}
+    value = ml.kiosk_session(KIOSK_TOKEN, DASH_TOKEN)
+    assert kiosk.load_secrets({"dashboard_kiosk_session": value}, cfg) == {"dashboard_kiosk_session": value}
     assert kiosk.DASHBOARD_COOKIE == ml.DASHBOARD_COOKIE
 
 
+def test_kiosk_session_accepts_exactly_24_characters():
+    assert re.fullmatch(r"[0-9a-f]{64}", ml.kiosk_session("k" * 24, DASH_TOKEN))
+
+
+def test_kiosk_session_length_is_checked_after_trimming():
+    # The frontend trims KIOSK_TOKEN before its length rule: padding doesn't make 23 characters enough,
+    # and a padded 24-character token gives the unpadded token's cookie.
+    with pytest.raises(Refused, match="shorter than 24"):
+        ml.kiosk_session("  " + "k" * 23 + " \n", DASH_TOKEN)
+    assert ml.kiosk_session(" " + "k" * 24 + "\t", DASH_TOKEN) == ml.kiosk_session("k" * 24, DASH_TOKEN)
+
+
 @pytest.mark.parametrize(
-    "token",
+    ("kiosk_token", "dash_token", "message"),
     [
-        pytest.param("", id="empty"),
-        pytest.param("   \n", id="blank"),
-        pytest.param("changeme", id="changeme"),
-        pytest.param("  changeme  ", id="changeme-padded"),
-        pytest.param("${DASHBOARD_PASSWORD}", id="interpolation"),
-        pytest.param("abc${X}def", id="interpolation-inside"),
+        pytest.param("", DASH_TOKEN, "KIOSK_TOKEN is not set", id="kiosk-empty"),
+        pytest.param("   \n", DASH_TOKEN, "KIOSK_TOKEN is not set", id="kiosk-blank"),
+        pytest.param("changeme", DASH_TOKEN, "KIOSK_TOKEN is not set", id="kiosk-changeme"),
+        pytest.param("k" * 23, DASH_TOKEN, "shorter than 24", id="kiosk-23"),
+        pytest.param(KIOSK_TOKEN, KIOSK_TOKEN, "same as DASHBOARD_TOKEN", id="kiosk-equals-dashboard"),
+        pytest.param(KIOSK_TOKEN, f" {KIOSK_TOKEN}\n", "same as DASHBOARD_TOKEN", id="equal-after-trim"),
+        pytest.param("${KIOSK_SECRET}-0123456789abcdef", DASH_TOKEN, "KIOSK_TOKEN uses", id="kiosk-interpolation"),
+        pytest.param(KIOSK_TOKEN, "", "DASHBOARD_TOKEN is unset", id="dashboard-empty"),
+        pytest.param(KIOSK_TOKEN, "  changeme  ", "DASHBOARD_TOKEN is unset", id="dashboard-changeme"),
+        pytest.param(KIOSK_TOKEN, "abc${X}def", "DASHBOARD_TOKEN uses", id="dashboard-interpolation"),
     ],
 )
-def test_dashboard_session_refuses(token):
-    with pytest.raises(Refused) as err:
-        ml.dashboard_session(token)
-    if token.strip():
-        assert token.strip() not in str(err.value)
+def test_kiosk_session_refuses(kiosk_token, dash_token, message):
+    with pytest.raises(Refused, match=re.escape(message)) as err:
+        ml.kiosk_session(kiosk_token, dash_token)
+    for token in (kiosk_token.strip(), dash_token.strip()):
+        if len(token) > 8:
+            assert token not in str(err.value)
 
 
 def test_constants_match_the_frontend():
-    assert ml.SESSION_LABEL == b"brain-gateway-dashboard-session-v1"
+    assert ml.KIOSK_SESSION_LABEL == b"brain-gateway-kiosk-session-v1"
+    assert ml.MIN_KIOSK_TOKEN_LENGTH == 24
     assert ml.DASHBOARD_COOKIE == "brain_token"
     assert {"", "changeme"} == ml.PLACEHOLDER_TOKENS
+    assert not hasattr(ml, "SESSION_LABEL")  # the full-login label has no business here any more
     auth = _first_existing(
         _REPO / "frontend" / "src" / "lib" / "dashboard-auth.ts", Path("/app/frontend_lib/dashboard-auth.ts")
     )
     if auth is None:
         pytest.skip("frontend/src/lib not mounted")
     text = auth.read_text(encoding="utf-8")
-    assert f"const SESSION_LABEL = '{ml.SESSION_LABEL.decode()}';" in text
+    assert f"const KIOSK_SESSION_LABEL = '{ml.KIOSK_SESSION_LABEL.decode()}';" in text
+    assert f"export const MIN_KIOSK_TOKEN_LENGTH = {ml.MIN_KIOSK_TOKEN_LENGTH};" in text
     assert f"export const COOKIE_NAME = '{ml.DASHBOARD_COOKIE}';" in text
     assert "new Set(['', 'changeme'])" in text
-    assert "hmacHex(token, SESSION_LABEL)" in text  # key = token, message = label
+    assert "hmacHex(token, KIOSK_SESSION_LABEL)" in text  # key = kiosk token, message = label
+
+
+def test_refused_paths_are_outside_the_kiosk_allow_list():
+    lib = _first_existing(
+        _REPO / "frontend" / "src" / "lib" / "kiosk-session.ts", Path("/app/frontend_lib/kiosk-session.ts")
+    )
+    if lib is None:
+        pytest.skip("frontend/src/lib not mounted")
+    text = lib.read_text(encoding="utf-8")
+    assert "export const KIOSK_PAGES: readonly string[] = ['/dashboard'];" in text
+    allowed = set(re.findall(r"^  '(/[^']*)',", text, flags=re.M))
+    assert "/api/reminders" in allowed  # the parse found the list
+    for path in ml.KIOSK_REFUSED_PATHS:  # what check_dashboard_cookie() expects a 403 for
+        assert path != "/dashboard"
+        assert path.removeprefix("/api/proxy") not in allowed
 
 
 # ------------------------------------------------------------------------------- port_owner_problem
@@ -371,12 +419,12 @@ def test_no_redirect_handler_never_follows():
 @pytest.fixture
 def dashboard(monkeypatch):
     calls = []
-    state = SimpleNamespace(status=200)
+    state = SimpleNamespace(status={"/dashboard": 200, "/chat": 403, "/api/proxy/api/inbox": 403})
     monkeypatch.setattr(ml, "require_docker_proxy", lambda port, what: calls.append(("proxy-check", port)))
 
     def fake_request(method, url, headers, body=None):
         calls.append((method, url, headers))
-        return state.status, {}
+        return state.status[url.removeprefix(ml.DASHBOARD)], {}
 
     monkeypatch.setattr(ml, "_request", fake_request)
     return SimpleNamespace(calls=calls, state=state)
@@ -384,26 +432,133 @@ def dashboard(monkeypatch):
 
 def test_check_dashboard_cookie_ok(dashboard):
     ml.check_dashboard_cookie("ab" * 32)
+    cookie = {"Cookie": "brain_token=" + "ab" * 32}
     assert dashboard.calls == [
         ("proxy-check", 3001),
-        ("GET", "http://127.0.0.1:3001/dashboard", {"Cookie": "brain_token=" + "ab" * 32}),
+        ("GET", "http://127.0.0.1:3001/dashboard", cookie),
+        ("GET", "http://127.0.0.1:3001/chat", cookie),
+        ("GET", "http://127.0.0.1:3001/api/proxy/api/inbox", cookie),
     ]
+    assert all(method == "GET" for method, *_ in dashboard.calls[1:])  # never a write, even as a probe
 
 
 @pytest.mark.parametrize(
-    ("status", "message"),
+    ("path", "status", "message"),
     [
-        pytest.param(302, "redirects to /login", id="302"),
-        pytest.param(307, "redirects to /login", id="307"),
-        pytest.param(502, "HTTP 502", id="502"),
-        pytest.param(404, "HTTP 404", id="404"),
+        pytest.param("/dashboard", 302, "redirects to /login", id="dashboard-302"),
+        pytest.param("/dashboard", 307, "redirects to /login", id="dashboard-307"),
+        pytest.param("/dashboard", 502, "HTTP 502", id="dashboard-502"),
+        pytest.param("/dashboard", 404, "HTTP 404", id="dashboard-404"),
+        pytest.param("/chat", 200, "HTTP 200 for /chat instead of 403", id="chat-open"),
+        pytest.param("/chat", 307, "HTTP 307 for /chat instead of 403", id="chat-login-redirect"),
+        pytest.param("/api/proxy/api/inbox", 200, "for /api/proxy/api/inbox instead of 403", id="proxy-open"),
+        pytest.param("/api/proxy/api/inbox", 401, "for /api/proxy/api/inbox instead of 403", id="proxy-401"),
     ],
 )
-def test_check_dashboard_cookie_refuses(dashboard, status, message):
-    dashboard.state.status = status
+def test_check_dashboard_cookie_refuses(dashboard, path, status, message):
+    dashboard.state.status[path] = status
     with pytest.raises(Refused, match=re.escape(message)) as err:
         ml.check_dashboard_cookie("ab" * 32)
     assert "ab" * 32 not in str(err.value)
+
+
+def test_check_dashboard_cookie_sends_nothing_when_port_is_not_docker_proxy(monkeypatch):
+    sent = []
+
+    def refuse(port, what):
+        raise Refused(f"127.0.0.1:{port}: held by pid 77, which is not the host's docker-proxy; not sending the {what}")
+
+    monkeypatch.setattr(ml, "require_docker_proxy", refuse)
+    monkeypatch.setattr(ml, "_request", lambda *a, **k: sent.append(a) or (200, {}))
+    with pytest.raises(Refused, match=re.escape("127.0.0.1:3001:")):
+        ml.check_dashboard_cookie("ab" * 32)
+    assert sent == []  # the cookie never reached whoever holds the port
+
+
+@pytest.mark.parametrize("status", [pytest.param(s, id=str(s)) for s in (301, 302, 303, 307, 308)])
+def test_check_dashboard_cookie_wrong_token_stops_at_the_dashboard(dashboard, status):
+    # A cookie the frontend doesn't know, answered the way it does: pages redirect to /login, the proxy
+    # says 401. The message must name the token mismatch (not "/chat answered 307"), and the cookie
+    # goes no further than /dashboard.
+    dashboard.state.status.update({"/dashboard": status, "/chat": status, "/api/proxy/api/inbox": 401})
+    with pytest.raises(Refused, match="KIOSK_TOKEN in this .env differs"):
+        ml.check_dashboard_cookie("ab" * 32)
+    assert [c[1] for c in dashboard.calls[1:]] == [ml.DASHBOARD + "/dashboard"]
+
+
+class _FakeFrontend:
+    """The network under the module's real _OPENER (urllib's error processing and its redirect
+    handler stay real): answers http_open from `routes` {url: (status, headers)}, 404 for anything
+    else, and records every URL asked for."""
+
+    def __init__(self, routes: dict[str, tuple[int, dict[str, str]]]):
+        self.routes = routes
+        self.requests: list[urllib.request.Request] = []
+
+    def http_open(self, req):
+        self.requests.append(req)
+        status, headers = self.routes.get(req.full_url, (404, {}))
+        msg = email.message.Message()
+        for name, value in headers.items():
+            msg[name] = value
+        response = urllib.response.addinfourl(io.BytesIO(b"<!DOCTYPE html>"), msg, req.full_url, status)
+        response.msg = "fake"
+        return response
+
+
+def _frontend(monkeypatch, routes: dict[str, tuple[int, dict[str, str]]]) -> _FakeFrontend:
+    monkeypatch.setattr(ml, "require_docker_proxy", lambda port, what: None)
+    fake = _FakeFrontend({ml.DASHBOARD + path: answer for path, answer in routes.items()})
+    (http,) = [h for h in ml._OPENER.handlers if isinstance(h, urllib.request.HTTPHandler)]
+    monkeypatch.setattr(http, "http_open", fake.http_open)  # only the socket is faked
+    return fake
+
+
+LOGIN_REDIRECT = (307, {"Location": "/login?redirect=%2Fdashboard"})
+
+
+def test_check_dashboard_cookie_through_urllib_read_only_frontend(monkeypatch):
+    # The frontend's 403s reach _request as urllib HTTPErrors: they are the answer we want, not a failure.
+    fake = _frontend(monkeypatch, {"/dashboard": (200, {}), "/chat": (403, {}), "/api/proxy/api/inbox": (403, {})})
+    ml.check_dashboard_cookie("ab" * 32)
+    assert [r.full_url for r in fake.requests] == [
+        ml.DASHBOARD + "/dashboard",
+        ml.DASHBOARD + "/chat",
+        ml.DASHBOARD + "/api/proxy/api/inbox",
+    ]
+    for r in fake.requests:
+        assert r.get_method() == "GET"
+        assert r.data is None
+        assert r.get_header("Cookie") == "brain_token=" + "ab" * 32
+
+
+@pytest.mark.parametrize(
+    ("routes", "message"),
+    [
+        pytest.param(
+            {"/dashboard": LOGIN_REDIRECT, "/login?redirect=%2Fdashboard": (200, {})},  # a login page
+            "redirects to /login",
+            id="wrong-token",
+        ),
+        pytest.param(
+            {"/dashboard": (200, {}), "/chat": LOGIN_REDIRECT, "/login?redirect=%2Fdashboard": (200, {})},
+            "HTTP 307 for /chat instead of 403",
+            id="chat-redirects",
+        ),
+        pytest.param(
+            {"/dashboard": (200, {}), "/chat": (200, {})},
+            "HTTP 200 for /chat instead of 403",
+            id="chat-open",
+        ),
+    ],
+)
+def test_check_dashboard_cookie_through_urllib_refuses(monkeypatch, routes, message):
+    fake = _frontend(monkeypatch, routes)
+    with pytest.raises(Refused, match=re.escape(message)) as err:
+        ml.check_dashboard_cookie("ab" * 32)
+    assert "ab" * 32 not in str(err.value)
+    # A redirect is reported, never followed: the cookie is not re-sent to the Location.
+    assert all("/login" not in r.full_url for r in fake.requests)
 
 
 # ------------------------------------------------------------------------------ ensure_grafana_viewer
@@ -542,7 +697,7 @@ def test_write_secrets_atomic_0640(tmp_path, monkeypatch, capsys):
     chowned = []
     monkeypatch.setattr(ml, "os", _Proxy(os, chown=lambda path, uid, gid: chowned.append((path, uid, gid))))
     target = tmp_path / "secrets.json"
-    data = {"grafana_user": "closet-kiosk", "grafana_password": "s3cret-grafana", "dashboard_session": "ab" * 32}
+    data = {"grafana_user": "closet-kiosk", "grafana_password": "s3cret-grafana", "dashboard_kiosk_session": "ab" * 32}
     ml.write_secrets(str(target), 1234, data)
     assert json.loads(target.read_text(encoding="utf-8")) == data
     assert stat.S_IMODE(target.stat().st_mode) == 0o640
@@ -569,11 +724,16 @@ def test_write_secrets_failure_leaves_old_file(tmp_path, monkeypatch):
 
 # -------------------------------------------------------------------------------------------- main
 
+_REAL_WRITE_SECRETS = ml.write_secrets  # main_env stubs it; the round-trip test puts it back
+
 
 @pytest.fixture
 def main_env(tmp_path, monkeypatch):
     env_file = tmp_path / "env"
-    env_file.write_text("DASHBOARD_TOKEN=test-token-123\nGF_SECURITY_ADMIN_PASSWORD='adm1n-pw'\n", encoding="utf-8")
+    env_file.write_text(
+        f"DASHBOARD_TOKEN={DASH_TOKEN}\nKIOSK_TOKEN={KIOSK_TOKEN}\nGF_SECURITY_ADMIN_PASSWORD='adm1n-pw'\n",
+        encoding="utf-8",
+    )
     out_dir = tmp_path / "etc"
     out_dir.mkdir()
     out = out_dir / "secrets.json"
@@ -591,7 +751,7 @@ def main_env(tmp_path, monkeypatch):
 
 def test_main_order_dashboard_then_grafana_then_file(main_env):
     assert ml.main() == 0
-    session = ml.dashboard_session("test-token-123")
+    session = ml.kiosk_session(KIOSK_TOKEN, DASH_TOKEN)
     assert main_env.steps == [
         ("dashboard", session),
         ("grafana", "admin", "adm1n-pw"),
@@ -599,14 +759,15 @@ def test_main_order_dashboard_then_grafana_then_file(main_env):
             "write",
             str(main_env.out),
             1234,
-            {"grafana_user": "closet-kiosk", "grafana_password": "new-grafana-pw", "dashboard_session": session},
+            {"grafana_user": "closet-kiosk", "grafana_password": "new-grafana-pw", "dashboard_kiosk_session": session},
         ),
     ]
 
 
 def test_main_uses_configured_admin_user(main_env):
     main_env.env_file.write_text(
-        "DASHBOARD_TOKEN=test-token-123\nGF_SECURITY_ADMIN_USER=root-admin\nGF_SECURITY_ADMIN_PASSWORD=x\n",
+        f"DASHBOARD_TOKEN={DASH_TOKEN}\nKIOSK_TOKEN={KIOSK_TOKEN}\nGF_SECURITY_ADMIN_USER=root-admin\n"
+        "GF_SECURITY_ADMIN_PASSWORD=x\n",
         encoding="utf-8",
     )
     assert ml.main() == 0
@@ -635,9 +796,20 @@ def test_main_grafana_failure_writes_nothing(main_env, monkeypatch):
 @pytest.mark.parametrize(
     "env_text",
     [
-        pytest.param("DASHBOARD_TOKEN=test-token-123\n", id="no-admin-password"),
-        pytest.param("GF_SECURITY_ADMIN_PASSWORD=x\n", id="no-dashboard-token"),
-        pytest.param("DASHBOARD_TOKEN=changeme\nGF_SECURITY_ADMIN_PASSWORD=x\n", id="placeholder-token"),
+        pytest.param(f"DASHBOARD_TOKEN={DASH_TOKEN}\nKIOSK_TOKEN={KIOSK_TOKEN}\n", id="no-admin-password"),
+        pytest.param(f"KIOSK_TOKEN={KIOSK_TOKEN}\nGF_SECURITY_ADMIN_PASSWORD=x\n", id="no-dashboard-token"),
+        pytest.param(
+            f"DASHBOARD_TOKEN=changeme\nKIOSK_TOKEN={KIOSK_TOKEN}\nGF_SECURITY_ADMIN_PASSWORD=x\n",
+            id="placeholder-token",
+        ),
+        pytest.param(f"DASHBOARD_TOKEN={DASH_TOKEN}\nGF_SECURITY_ADMIN_PASSWORD=x\n", id="no-kiosk-token"),
+        pytest.param(
+            f"DASHBOARD_TOKEN={DASH_TOKEN}\nKIOSK_TOKEN=short\nGF_SECURITY_ADMIN_PASSWORD=x\n", id="short-kiosk-token"
+        ),
+        pytest.param(
+            f"DASHBOARD_TOKEN={KIOSK_TOKEN}\nKIOSK_TOKEN={KIOSK_TOKEN}\nGF_SECURITY_ADMIN_PASSWORD=x\n",
+            id="kiosk-equals-dashboard",
+        ),
     ],
 )
 def test_main_refuses_before_any_request(main_env, env_text):
@@ -674,3 +846,48 @@ def test_main_needs_root(main_env, monkeypatch, capsys):
     assert ml.main() == 1
     assert "run as root" in capsys.readouterr().err
     assert main_env.steps == []
+
+
+def test_main_prints_no_secret_values(main_env, capsys):
+    assert ml.main() == 0
+    out = capsys.readouterr()
+    printed = out.out + out.err
+    assert "read-only" in out.out
+    for value in (KIOSK_TOKEN, DASH_TOKEN, ml.kiosk_session(KIOSK_TOKEN, DASH_TOKEN), "adm1n-pw", "new-grafana-pw"):
+        assert value not in printed
+
+
+def test_main_file_round_trips_through_the_kiosk(main_env, monkeypatch):
+    # The upgrade: the file an older make_logins.py wrote (the full login as dashboard_session) is in
+    # place and the kiosk refuses it; make_logins.py replaces the whole file; the kiosk then loads it and
+    # sets exactly the read-only cookie. Real write_secrets() and kiosk.py, so the key names can't drift.
+    kiosk = _load(_FOLDER / "kiosk.py", "jupiter_kiosk_round_trip")
+    cfg = kiosk.load_config(
+        {
+            "screens": [
+                {"name": "left", "url": "https://host.example:3000/d/x", "login": "grafana"},
+                {"name": "right", "url": "https://host.example/dashboard", "login": "dashboard"},
+            ]
+        }
+    )
+    full_login = hmac.new(DASH_TOKEN.encode(), b"brain-gateway-dashboard-session-v1", hashlib.sha256).hexdigest()
+    old = {"grafana_user": "closet-kiosk", "grafana_password": "old-grafana-pw", "dashboard_session": full_login}
+    main_env.out.write_text(json.dumps(old), encoding="utf-8")
+    with pytest.raises(kiosk.ConfigError, match="still holds dashboard_session"):
+        kiosk.load_secrets(kiosk.read_json(str(main_env.out)), cfg)
+
+    monkeypatch.setattr(ml, "write_secrets", _REAL_WRITE_SECRETS)
+    monkeypatch.setattr(ml, "os", _Proxy(os, geteuid=lambda: 0, chown=lambda path, uid, gid: None))
+    assert ml.main() == 0
+
+    assert full_login not in main_env.out.read_text(encoding="utf-8")
+    secrets = kiosk.load_secrets(kiosk.read_json(str(main_env.out)), cfg)
+    kiosk_cookie = hmac.new(KIOSK_TOKEN.encode(), b"brain-gateway-kiosk-session-v1", hashlib.sha256).hexdigest()
+    assert secrets == {
+        "grafana_user": "closet-kiosk",
+        "grafana_password": "new-grafana-pw",
+        "dashboard_kiosk_session": kiosk_cookie,
+    }
+    dashboard_screen = next(s for s in cfg.screens if s.login == "dashboard")
+    cookies = kiosk.screen_cookies(dashboard_screen, secrets)
+    assert [(c["name"], c["value"]) for c in cookies] == [("brain_token", kiosk_cookie)]

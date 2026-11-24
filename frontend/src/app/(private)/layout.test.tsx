@@ -4,11 +4,11 @@ import { render, screen } from '@testing-library/react';
 
 // The display-mode branch is the only thing under test: everything the layout fetches or mounts
 // besides the two menus is stubbed out.
-const state = vi.hoisted(() => ({ kiosk: false, authenticated: true }));
+const state = vi.hoisted(() => ({ kiosk: false, session: 'full' as 'full' | 'kiosk' | null }));
 const redirect = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/display-mode.server', () => ({ isKioskDisplayRequest: () => state.kiosk }));
-vi.mock('@/lib/auth', () => ({ isAuthenticated: async () => state.authenticated }));
+vi.mock('@/lib/auth', () => ({ currentSession: async () => state.session }));
 vi.mock('@/lib/features.server', () => ({ getFeatureFlags: async () => ({}) }));
 vi.mock('@/lib/branding.server', () => ({ getAssistantName: async () => 'Jess' }));
 vi.mock('next/navigation', () => ({ redirect }));
@@ -29,7 +29,7 @@ async function renderLayout() {
 describe('PrivateLayout display mode', () => {
   beforeEach(() => {
     state.kiosk = false;
-    state.authenticated = true;
+    state.session = 'full';
     redirect.mockReset();
   });
 
@@ -51,8 +51,17 @@ describe('PrivateLayout display mode', () => {
 
   it('still sends a visitor without a session to /login, kiosk or not', async () => {
     state.kiosk = true;
-    state.authenticated = false;
+    state.session = null;
     await renderLayout();
     expect(redirect).toHaveBeenCalledWith('/login');
+  });
+
+  it('hides both menus for a kiosk session even without the display cookie', async () => {
+    state.session = 'kiosk';
+    await renderLayout();
+    expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('mobile-nav')).not.toBeInTheDocument();
+    expect(screen.getByText('page body')).toBeInTheDocument();
+    expect(redirect).not.toHaveBeenCalled();
   });
 });

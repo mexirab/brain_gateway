@@ -45,6 +45,12 @@ describe('POST /api/auth/login', () => {
     expect(res.cookies.get('brain_token')).toBeUndefined();
   });
 
+  it('answers an empty password with 401, not a crash', async () => {
+    const res = await login('');
+    expect(res.status).toBe(401);
+    expect(res.cookies.get('brain_token')).toBeUndefined();
+  });
+
   it('locks a client out after repeated failures, even for the right password', async () => {
     const ip = { 'x-forwarded-for': '100.64.1.2' };
     for (let i = 0; i < MAX_FAILURES_PER_CLIENT; i++) expect((await login('nope', ip)).status).toBe(401);

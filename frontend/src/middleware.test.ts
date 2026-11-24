@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { expectedSessionValue } from './lib/dashboard-auth';
+import { expectedKioskSessionValue, expectedSessionValue } from './lib/dashboard-auth';
 import { PROTECTED_PATHS, config, middleware } from './middleware';
 
 // Every top-level route under app/(private)/ renders the private shell. Next
@@ -29,10 +29,14 @@ function topLevelRoutes(dir: string): string[] {
 
 const privateRoutes = topLevelRoutes(fileURLToPath(new URL('./app/(private)', import.meta.url)));
 const validToken = 'test-dashboard-token';
+const kioskToken = 'test-kiosk-token-0123456789';
 let session = '';
+let kioskSession = '';
 beforeEach(async () => {
   vi.stubEnv('DASHBOARD_TOKEN', validToken);
+  vi.stubEnv('KIOSK_TOKEN', kioskToken);
   session = (await expectedSessionValue())!;
+  kioskSession = (await expectedKioskSessionValue())!;
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -102,5 +106,55 @@ describe('middleware route protection', () => {
     for (const path of ['/', '/login', '/design-system']) {
       expect((await middleware(request(path))).headers.get('x-middleware-next')).toBe('1');
     }
+  });
+});
+
+describe('middleware with a kiosk (read-only) session', () => {
+  async function expectForbidden(path: string) {
+    const res = await middleware(request(path, kioskSession));
+    expect(res.status).toBe(403);
+    expect(res.headers.get('location')).toBeNull();
+    expect(res.headers.get('x-middleware-next')).toBeNull();
+  }
+
+  it('opens /dashboard', async () => {
+    const res = await middleware(request('/dashboard', kioskSession));
+    expect(res.headers.get('x-middleware-next')).toBe('1');
+  });
+
+  it('opens /dashboard with a query (Next RSC fetches carry ?_rsc=)', async () => {
+    expect((await middleware(request('/dashboard?_rsc=abc', kioskSession))).headers.get('x-middleware-next')).toBe('1');
+  });
+
+  it.each(privateRoutes.filter((r) => r !== '/dashboard'))('gets 403 on %s', async (route) => {
+    await expectForbidden(route);
+  });
+
+  it.each(PROTECTED_PATHS.filter((p) => p !== '/dashboard'))('gets 403 on protected path %s', async (path) => {
+    await expectForbidden(path);
+  });
+
+  it.each(['/dashboard/x', '/finance/transactions', '/avatar/jess.vrm', '/settings?tab=voice'])(
+    'gets 403 on nested %s',
+    async (path) => {
+      await expectForbidden(path);
+    },
+  );
+
+  it('a full session still opens everything', async () => {
+    for (const route of [...privateRoutes, '/avatar/jess.vrm']) {
+      expect((await middleware(request(route, session))).headers.get('x-middleware-next')).toBe('1');
+    }
+  });
+
+  it.each([undefined, '', 'changeme', 'short-kiosk-token'])('is a login redirect when KIOSK_TOKEN is %j', async (k) => {
+    vi.stubEnv('KIOSK_TOKEN', k as string);
+    expectLoginRedirect(await middleware(request('/dashboard', kioskSession)), '/dashboard');
+  });
+
+  it('is a login redirect when KIOSK_TOKEN equals DASHBOARD_TOKEN', async () => {
+    vi.stubEnv('DASHBOARD_TOKEN', kioskToken);
+    // the old kiosk cookie is dead, and the equal token gives no kiosk session at all
+    expectLoginRedirect(await middleware(request('/dashboard', kioskSession)), '/dashboard');
   });
 });

@@ -40,6 +40,7 @@ After any change under `frontend/`, or when adding a new dashboard page, widget,
 - Hit it in a browser at `https://jupiter-amds.tail74fc4a.ts.net` (Tailscale Serve → Jupiter :3001) and verify the happy path AND one error path (e.g., orchestrator down, empty response)
 - Check the browser console for warnings/errors
 - If the change affects the closet kiosk, test at kiosk resolution (1080x1920 portrait) and in kiosk display mode (cookie `__Host-jess_display=kiosk`: no sidebar or mobile nav; `docs/FRONTEND.md` → Display mode)
+- The kiosk logs in with a read-only session that may only make the GETs in `KIOSK_PROXY_GETS` (`src/lib/kiosk-session.ts`). A new or changed `/dashboard` card call fails `kiosk-session.test.tsx` until it's added there; add it only if a screen in the closet may show that data (`docs/FRONTEND.md` → Auth → Kiosk session)
 
 ## Output format
 

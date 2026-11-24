@@ -287,8 +287,10 @@ def test_example_config_loads(zoneinfo):
         assert host == host.lower()
         assert ip == str(ipaddress.ip_address(ip))
     # The example needs every secret make_logins.py writes.
-    secrets = kiosk.load_secrets({"grafana_user": "u", "grafana_password": "p", "dashboard_session": "a" * 64}, cfg)
-    assert set(secrets) == {"grafana_user", "grafana_password", "dashboard_session"}
+    secrets = kiosk.load_secrets(
+        {"grafana_user": "u", "grafana_password": "p", "dashboard_kiosk_session": "a" * 64}, cfg
+    )
+    assert set(secrets) == {"grafana_user", "grafana_password", "dashboard_kiosk_session"}
 
 
 def test_example_config_with_real_zoneinfo():
@@ -308,19 +310,35 @@ def _cfg_with(*logins: str):
 
 
 def test_load_secrets_only_what_the_logins_need():
-    data = {"grafana_user": "u", "grafana_password": "p", "dashboard_session": GOOD_SESSION, "other": "x"}
+    data = {"grafana_user": "u", "grafana_password": "p", "dashboard_kiosk_session": GOOD_SESSION, "other": "x"}
     assert kiosk.load_secrets(data, _cfg_with("none")) == {}
     assert kiosk.load_secrets(data, _cfg_with("grafana")) == {"grafana_user": "u", "grafana_password": "p"}
-    assert kiosk.load_secrets(data, _cfg_with("dashboard")) == {"dashboard_session": GOOD_SESSION}
+    assert kiosk.load_secrets(data, _cfg_with("dashboard")) == {"dashboard_kiosk_session": GOOD_SESSION}
     assert set(kiosk.load_secrets(data, _cfg_with("grafana", "dashboard"))) == {
         "grafana_user",
         "grafana_password",
-        "dashboard_session",
+        "dashboard_kiosk_session",
     }
 
 
 def test_load_secrets_none_login_needs_no_file_content():
     assert kiosk.load_secrets({}, _cfg_with("none", "none")) == {}
+
+
+@pytest.mark.parametrize("logins", [("dashboard",), ("grafana",), ("none",)])
+def test_load_secrets_refuses_the_old_master_cookie(logins):
+    # Older make_logins.py wrote the full dashboard login as dashboard_session. Refuse to run while
+    # it is still in the file (whatever the screens need), and never echo it.
+    data = {
+        "grafana_user": "u",
+        "grafana_password": "p",
+        "dashboard_kiosk_session": GOOD_SESSION,
+        "dashboard_session": "fedcba9876543210" * 4,
+    }
+    with pytest.raises(ConfigError, match="re-run make_logins.py") as err:
+        kiosk.load_secrets(data, _cfg_with(*logins))
+    assert "fedcba98" not in str(err.value)
+    assert GOOD_SESSION not in str(err.value)
 
 
 @pytest.mark.parametrize(
@@ -331,12 +349,12 @@ def test_load_secrets_none_login_needs_no_file_content():
         pytest.param(("grafana",), {"grafana_user": "u", "grafana_password": ""}, id="grafana-password-empty"),
         pytest.param(("grafana",), {"grafana_user": 5, "grafana_password": "p"}, id="grafana-user-not-str"),
         pytest.param(("dashboard",), {}, id="session-missing"),
-        pytest.param(("dashboard",), {"dashboard_session": GOOD_SESSION.upper()}, id="session-uppercase"),
-        pytest.param(("dashboard",), {"dashboard_session": GOOD_SESSION[:63]}, id="session-63"),
-        pytest.param(("dashboard",), {"dashboard_session": GOOD_SESSION + "0"}, id="session-65"),
-        pytest.param(("dashboard",), {"dashboard_session": GOOD_SESSION + "\n"}, id="session-trailing-newline"),
-        pytest.param(("dashboard",), {"dashboard_session": "g" * 64}, id="session-not-hex"),
-        pytest.param(("dashboard",), {"dashboard_session": 1}, id="session-not-str"),
+        pytest.param(("dashboard",), {"dashboard_kiosk_session": GOOD_SESSION.upper()}, id="session-uppercase"),
+        pytest.param(("dashboard",), {"dashboard_kiosk_session": GOOD_SESSION[:63]}, id="session-63"),
+        pytest.param(("dashboard",), {"dashboard_kiosk_session": GOOD_SESSION + "0"}, id="session-65"),
+        pytest.param(("dashboard",), {"dashboard_kiosk_session": GOOD_SESSION + "\n"}, id="session-trailing-newline"),
+        pytest.param(("dashboard",), {"dashboard_kiosk_session": "g" * 64}, id="session-not-hex"),
+        pytest.param(("dashboard",), {"dashboard_kiosk_session": 1}, id="session-not-str"),
     ],
 )
 def test_load_secrets_rejects(logins, data):
@@ -1311,7 +1329,7 @@ COOKIE_KEYS = {"name", "value", "url", "path", "secure", "httpOnly", "sameSite"}
 
 def test_screen_cookies_dashboard_and_display_mode():
     s = Screen(name="right", url="https://Host.Example/dashboard", login="dashboard", hide_nav=True)
-    cookies = kiosk.screen_cookies(s, {"dashboard_session": GOOD_SESSION})
+    cookies = kiosk.screen_cookies(s, {"dashboard_kiosk_session": GOOD_SESSION})
     assert [(c["name"], c["value"]) for c in cookies] == [
         ("brain_token", GOOD_SESSION),
         ("__Host-jess_display", "kiosk"),
@@ -1339,7 +1357,7 @@ def test_screen_cookies_keep_the_port():
 )
 def test_screen_cookies_per_screen(login, hide_nav, names):
     s = Screen(name="x", url="https://host.example/", login=login, hide_nav=hide_nav)
-    secrets = {"dashboard_session": GOOD_SESSION} if login == "dashboard" else {}
+    secrets = {"dashboard_kiosk_session": GOOD_SESSION} if login == "dashboard" else {}
     assert [c["name"] for c in kiosk.screen_cookies(s, secrets)] == names
 
 
@@ -1759,7 +1777,11 @@ def runner_factory(tmp_path, monkeypatch, zoneinfo):
 
     def make(screen: dict, answers: dict | None = None):
         cfg = kiosk.load_config({"chrome": str(chrome), "screens": [screen]})
-        secrets = {"grafana_user": "closet-kiosk", "grafana_password": PASSWORD, "dashboard_session": GOOD_SESSION}
+        secrets = {
+            "grafana_user": "closet-kiosk",
+            "grafana_password": PASSWORD,
+            "dashboard_kiosk_session": GOOD_SESSION,
+        }
         runner = kiosk.ScreenRunner(cfg, cfg.screens[0], (1080, 1920, 0, 0), secrets, threading.Event())
         runner.cdp = ScriptedCdp(answers or {})
         runner.proc = FakeProc()
@@ -2045,7 +2067,7 @@ def main_env(monkeypatch, tmp_path, zoneinfo):
     config = tmp_path / "kiosk.json"
     secrets = tmp_path / "secrets.json"
     config.write_text(json.dumps(_cfg(DASH_SCREEN)), encoding="utf-8")
-    secrets.write_text(json.dumps({"dashboard_session": GOOD_SESSION}), encoding="utf-8")
+    secrets.write_text(json.dumps({"dashboard_kiosk_session": GOOD_SESSION}), encoding="utf-8")
     # main() sets XAUTHORITY itself: set-then-delete makes monkeypatch restore "absent" afterwards, so
     # the value doesn't leak into later tests.
     monkeypatch.setenv("XAUTHORITY", "x")
@@ -2079,7 +2101,28 @@ def test_main_refuses_without_secrets(main_env, monkeypatch, caplog):
     monkeypatch.setattr(kiosk, "preflight", lambda cfg: pytest.fail("preflight must not run"))
     main_env.secrets.write_text("{}", encoding="utf-8")
     assert kiosk.main(_argv(main_env, "--preflight")) == 2
-    assert "dashboard_session" in caplog.text
+    assert "dashboard_kiosk_session" in caplog.text
+
+
+OLD_MASTER_COOKIE = "fedcba9876543210" * 4
+
+
+@pytest.mark.parametrize(
+    "screen", [pytest.param(DASH_SCREEN, id="dashboard"), pytest.param(GRAFANA_SCREEN, id="grafana")]
+)
+def test_main_refuses_a_secrets_file_from_the_old_make_logins(main_env, monkeypatch, caplog, screen):
+    # Once this deploys, the service restarts on the exact file the old make_logins.py wrote (the full
+    # dashboard login, no kiosk session). It must not start (no preflight, no X), say why, and not log it.
+    monkeypatch.setattr(kiosk, "preflight", lambda cfg: pytest.fail("preflight must not run"))
+    monkeypatch.setattr(kiosk, "wait_for_monitor", lambda stop: pytest.fail("must not touch X"))
+    monkeypatch.setenv("DISPLAY", ":0")
+    main_env.config.write_text(json.dumps(_cfg(screen)), encoding="utf-8")
+    old = {"grafana_user": "closet-kiosk", "grafana_password": "old-grafana-pw", "dashboard_session": OLD_MASTER_COOKIE}
+    main_env.secrets.write_text(json.dumps(old), encoding="utf-8")
+    assert kiosk.main(_argv(main_env)) == 2
+    assert "still holds dashboard_session" in caplog.text
+    assert OLD_MASTER_COOKIE not in caplog.text
+    assert "old-grafana-pw" not in caplog.text
 
 
 def test_main_refuses_bad_config(main_env):

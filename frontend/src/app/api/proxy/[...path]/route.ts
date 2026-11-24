@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { COOKIE_NAME, isValidDashboardSession } from '@/lib/dashboard-auth';
+import { COOKIE_NAME, dashboardSessionKind } from '@/lib/dashboard-auth';
+import { kioskMayProxy, logKioskRefusal } from '@/lib/kiosk-session';
 import { asAttachment } from '@/lib/content-disposition';
 import { buildUpstreamUrl } from '@/lib/proxy-url';
 import { upstreamTimeoutMs } from '@/lib/proxy-timeout';
@@ -87,11 +88,15 @@ async function relay(res: Response, route: string, method: Method): Promise<Resp
 }
 
 async function forward(request: NextRequest, { params }: Ctx, method: Method): Promise<Response> {
-  if (!(await isValidDashboardSession(request.cookies.get(COOKIE_NAME)?.value))) {
-    return jsonError('Unauthorized', 401);
-  }
+  const session = await dashboardSessionKind(request.cookies.get(COOKIE_NAME)?.value);
+  if (session === null) return jsonError('Unauthorized', 401);
   const { path } = await params;
   const route = routeLabel(path);
+  // Kiosk (read-only display) sessions: only the dashboard page's own GETs (lib/kiosk-session.ts).
+  if (session === 'kiosk' && !kioskMayProxy(method, path, request.nextUrl.search)) {
+    logKioskRefusal(method, path);
+    return jsonError('Not allowed for this screen', 403);
+  }
   if (method !== 'GET' && isCrossSiteRequest(request.headers)) {
     logEvent('warning', '[PROXY] Cross-site write refused', {
       route,
