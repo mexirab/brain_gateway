@@ -11,7 +11,7 @@ Branch `docs/container-host-reachability` (PR #176). Measured 2026-11-21: every 
 ### Upgrade action
 
 - The unit is already installed (observe). CI never deploys it; re-run the `install` lines in the runbook after a script or unit change.
-- After the compose change deploys: confirm both networks exist and carry `GwPriority` 1, then delete the two `TRANSITION` allow lines from `/etc/jess-docker-input.conf` and the repo copy and `sudo systemctl reload jess-docker-input`.
+- After the compose change deploys: confirm both networks exist and carry `GwPriority` 1, then delete the two `TRANSITION` allow lines from `/etc/jess-docker-input.conf` and the repo copy and `sudo systemctl reload jess-docker-input`. Done on Jupiter 2026-11-24.
 - Switching to enforce is a manual owner step, behind the gates in the runbook (Observe).
 
 ### Host tooling

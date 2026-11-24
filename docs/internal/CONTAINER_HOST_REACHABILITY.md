@@ -162,7 +162,7 @@ Host-side jobs are also outside the chain: backups, CI runner, Tailscale Serve, 
   - Only the containers that need host access get it. On gateway-net, radicale, actual-budget, loki and the frontend would have got HA too.
   - The orchestrator's plain-HTTP HA traffic no longer shares a bridge (L2) with other containers.
 - **A fixed bridge name** keeps the rule valid if the network is ever recreated.
-- **Until the compose change is deployed,** the config also carries two `TRANSITION` lines for gateway-net and monitoring-net. Delete them before enforce.
+- **Transition (done 2026-11-24):** until the compose change deployed, the config also carried two `TRANSITION` lines for gateway-net and monitoring-net. They were removed once the new networks were verified.
 
 ### How it is applied
 
@@ -182,7 +182,7 @@ Host-side jobs are also outside the chain: backups, CI runner, Tailscale Serve, 
 
 See `monitoring/README.md` → Container → host firewall. In short:
 1. **Observe** (now).
-2. **Gates:** monitoring healthy 24 h; compose change deployed and `TRANSITION` lines gone; 24 h of observe covering backups, the self-audit, a CI deploy and Paperless; `summary` clean; alerts loaded.
+2. **Gates:** monitoring healthy 24 h; compose change deployed and `TRANSITION` lines gone (both done 2026-11-24); 24 h of observe covering backups, the self-audit, a CI deploy and Paperless; `summary` clean; alerts loaded.
 3. **Enforce:** `mode enforce` + reload, then re-probe with new connections.
 
 Rollback is `sudo systemctl disable --now jess-docker-input`.
@@ -204,7 +204,7 @@ Rollback is `sudo systemctl disable --now jess-docker-input`.
   - **Bad config:** `systemctl reload` failed and the rules stayed. A good reload then succeeded.
   - **Crash:** after `kill -9`, the unit kept the chains ("keeping the chains for the restart") and re-applied them.
   - **Metrics:** the textfile metrics appear on node-exporter `:9100/metrics`.
-- **Still to check, once host-scrape exists:** Prometheus scrapes and the blackbox probes through host-scrape, and the Alertmanager webhook.
+- **Checked after the 2026-11-24 deploy** (below): Prometheus scrapes and the blackbox probes through host-scrape. The Alertmanager → orchestrator webhook goes through DNAT/FORWARD, not this chain.
 
 **2026-11-24 (after the reboot at 00:35 UTC):**
 - **Reboot survived:** the unit re-applied both chains, jumps on top, observe mode.
@@ -213,6 +213,16 @@ Rollback is `sudo systemctl disable --now jess-docker-input`.
   - blackbox-exporter's Conjure probe (`10.0.0.248:5050`) and its new TTS probe (`host.docker.internal:8004`, since VoxCPM moved to Jupiter) both left through `frontend-probe-net`. In enforce mode both would have been rejected.
   - Fix: `host-scrape` carries blackbox's default route, and its allow line gained 8004.
 - **Ignore the self-port hits** (`immich_default` → :2283, `audiobookshelf_default` → :13378, `paperless_default` → :8777, `monitoring_loki-push-net` → :3101). They came from throwaway probe containers another session started at 00:49–00:51, not from the apps.
+
+**2026-11-24, PR #176 deployed (`19c2459`):**
+- **Networks:** the orchestrator carries `host-access` with `GwPriority` 1; Prometheus and blackbox-exporter carry `host-scrape` with `GwPriority` 1. The watcher picked both networks up from the Docker events by itself (`allow_rules=4`).
+- **Traffic on the new bridges:** within a minute, the `host-access` and `host-scrape` allow rules carried 59 and 60 packets. The old gateway-net and monitoring-net lines carried none, apart from 6 packets from the old Prometheus before it was recreated. Nothing went unmatched.
+- **Paths:**
+  - orchestrator → HA `/api/` returns 200;
+  - Jupiter scrapes are up: `node-exporter`, `netdata`, `conjure`, `gpu-exporter`;
+  - blackbox probes succeed: `conjure`, `orchestrator`, `tts-voxcpm`;
+  - Alertmanager is up.
+- **TRANSITION lines removed:** from `/etc/jess-docker-input.conf` (previous copy kept as `/etc/jess-docker-input.conf.with-transition`) and from the repo copy. After the reload: `allow_rules=2`, `networks_missing 0`, traffic still on both allow rules, nothing unmatched.
 
 ## Not covered by this change
 

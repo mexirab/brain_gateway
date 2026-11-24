@@ -607,10 +607,10 @@ Expected output:
    - `up{job=~"node-exporter|netdata|conjure"}` = 1 (Jupiter targets);
    - `probe_success{service="conjure"}` = 1;
    - Alertmanager running.
-2. **Compose change deployed** (PR #176): `docker network ls | grep -E 'host-access|host-scrape'` lists both networks.
+2. **Compose change deployed** (PR #176; done 2026-11-24): `docker network ls | grep -E 'host-access|host-scrape'` lists both networks.
    - `docker inspect -f '{{json .NetworkSettings.Networks}}' brain-orchestrator` shows `host-access` with `GwPriority` 1.
    - The same holds for `prometheus` and `blackbox-exporter` with `host-scrape`.
-   - Then **delete the two `TRANSITION` allow lines** from `/etc/jess-docker-input.conf` and the repo copy, and run `sudo systemctl reload jess-docker-input`.
+   - The two temporary `TRANSITION` allow lines (gateway-net, monitoring-net) were removed from `/etc/jess-docker-input.conf` and the repo copy after that check. On a fresh install there are none.
 3. **Observe for 24 h** with all of these inside the window: the 03:30–04:05 backups, the 07:00 self-audit plus one alert webhook, one CI deploy, and Paperless running.
 4. **Read the summary:**
    - `sudo jess-docker-input summary --hours 24`: every row is either a known probe or something to explain. A legitimate (network, port) pair goes into the allow-list.

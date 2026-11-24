@@ -799,6 +799,9 @@ def test_sync_detects_rule_replaced_in_place(host, conf, mdir):
 
 
 def test_sync_reloads_only_drifted_family(host, conf, mdir):
+    # The repo's allow-listed networks have fixed bridge names, which survive a
+    # recreate; allow one whose bridge name comes from its id for the last step.
+    conf.write_text(conf.read_text() + f"allow {GWNET} tcp 8123\n")
     w = jdi.Watcher(conf, mdir)
     w.sync()
     del host.chains["ipv6"][V6_CHAIN][-1]
@@ -1067,7 +1070,7 @@ def test_main_check_prints_one_line(host, conf, capsys):
     assert out == ""
     (line,) = err.splitlines()
     assert re.fullmatch(
-        r"jess-docker-input: config ok: mode=observe allow_rules=4 ipv4=[0-9a-f]{12} ipv6=[0-9a-f]{12}", line
+        r"jess-docker-input: config ok: mode=observe allow_rules=2 ipv4=[0-9a-f]{12} ipv6=[0-9a-f]{12}", line
     )
     assert host.writes() == []
 
