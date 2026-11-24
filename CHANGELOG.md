@@ -6,11 +6,11 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ## [Unreleased] — Read-only kiosk session for the closet dashboard (2026-11-24)
 
-Stacked on `feat/jupiter-kiosk`. The closet kiosk logged in with the phone's own session cookie (HMAC of `DASHBOARD_TOKEN`): it opened every page and every proxied write, and could only be revoked by logging the phone out too. It now gets its own read-only session.
+Branch `claude/bold-liskov-95be2e`, on top of the X network-namespace entry below. The closet kiosk logged in with the phone's own session cookie (HMAC of `DASHBOARD_TOKEN`): it opened every page and every proxied write, and could only be revoked by logging the phone out too. It now gets its own read-only session.
 
 ### Operator steps
 - Other installs: none. `KIOSK_TOKEN` unset = kiosk sessions off; nothing changes for the phone or `/login`.
-- Jupiter, **wait for the X-unit split too**: the live kiosk runs `kiosk.py` from branch `claude/compassionate-curran-979c3d` (X in its own `jupiter-kiosk-x.service`, `--preflight --x-server`), not yet on main. The `kiosk.py` installed below must carry both changes, so do the switch from a main that has both.
+- Jupiter: the live kiosk runs the two-unit X layout (entry below); this branch's `kiosk.py` carries both changes, so install it from `main` after this merges, never from an older checkout.
 - Jupiter, **before this deploys**: add `KIOSK_TOKEN` (≥ 24 chars, not `DASHBOARD_TOKEN`) to `.env`, so the deploy's frontend recreate picks it up (else `docker compose up -d --force-recreate frontend` afterwards). Then, after the deploy: `sudo python3 -I scripts/jupiter-kiosk/make_logins.py`, straight away `sudo install -m 755 scripts/jupiter-kiosk/kiosk.py /usr/local/lib/jupiter-kiosk/ && sudo systemctl restart jupiter-kiosk`, and a SIGUSR1 snapshot. Optional afterwards: change `DASHBOARD_TOKEN` (phone logs in once), since the old master cookie sat in a kiosk-readable file. `scripts/jupiter-kiosk/README.md` → Secrets → Moving a kiosk off the old master cookie (also: rolling the frontend back).
 
 ### Frontend

@@ -161,7 +161,8 @@ cookie, cache or crash dump reaches the disk.
    lines above; a normal deploy recreates it too, if the token is in `.env` first).
 2. `sudo python3 -I make_logins.py`: rewrites `secrets.json` with `dashboard_kiosk_session` only.
 3. Straight after: `sudo install -m 755 kiosk.py /usr/local/lib/jupiter-kiosk/ && sudo systemctl restart jupiter-kiosk`.
-   Install the `kiosk.py` that matches the installed units (a checkout of current `main`).
+   Install it from a checkout of current `main`: its `kiosk.py` also carries the two-unit X layout
+   (`jupiter-kiosk-x.service`), which the live units need.
    If the old `kiosk.py` restarts between 2 and 3 it fails with `missing dashboard_kiosk_session`:
    step 3 fixes that, re-running `make_logins.py` doesn't.
 4. Check: a SIGUSR1 snapshot (Day to day) shows the dashboard on the right screen;
@@ -173,8 +174,9 @@ cookie, cache or crash dump reaches the disk.
 **Rolling the frontend back** to a version without kiosk sessions logs the right screen out, and
 the new `make_logins.py` refuses to write a cookie the old frontend would treat as a full login.
 Either wait for the re-deploy, or go back to the master cookie with the old scripts:
-`git show c249eae^:scripts/jupiter-kiosk/make_logins.py > /tmp/ml.py && sudo python3 -I /tmp/ml.py`,
-then the same for `kiosk.py` into `/usr/local/lib/jupiter-kiosk/` and restart.
+`git show cdb0ba9:scripts/jupiter-kiosk/make_logins.py > /tmp/ml.py && sudo python3 -I /tmp/ml.py`,
+then the same for `kiosk.py` into `/usr/local/lib/jupiter-kiosk/` and restart (`cdb0ba9` = the last
+`main` before the kiosk session, with the two-unit X layout).
 `[AUTH] KIOSK_TOKEN is set but ignored` in `docker logs brain-frontend` means the token is there but
 too short, equal to `DASHBOARD_TOKEN`, or `DASHBOARD_TOKEN` is unset.
 
