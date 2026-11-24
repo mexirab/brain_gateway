@@ -22,8 +22,10 @@
 # mode="reduce-overhead" (CUDA graphs), and the two were never tested together.
 #
 # Experiments MUST be pinned to the other card, by UUID: llama.cpp auto-fit and most tools use every
-# GPU they can see, and single-GPU tools take cuda:0. Put the voice on the card with the HIGHER PCI bus
-# number, so cuda:0 (CUDA orders identical cards by bus) is the experiment card, and pin anyway:
+# GPU they can see, and single-GPU tools take cuda:0. Since 2026-11-24 the voice is on the LOWER-bus
+# card (bus 0b), because the bus-0c card has the two HDMI ports and drives the closet monitors. So
+# cuda:0 (CUDA orders identical cards by bus) IS the voice card: an unpinned single-GPU tool lands on
+# the voice. Always pin:
 #   export CUDA_DEVICE_ORDER=PCI_BUS_ID
 #   export CUDA_VISIBLE_DEVICES=GPU-<experiment card uuid>
 # Docker containers need nvidia-container-toolkit (not installed on Jupiter) and then
@@ -61,8 +63,8 @@
 # from the internet into a shell. Keep /home/labadmin at mode 750: the service never needs to traverse
 # it (systemd bind-mounts the four dirs below into an otherwise empty /home).
 #   0. `nvidia-smi -L` lists both RTX 5080s. Note both UUIDs (GPU-xxxxxxxx-...) somewhere on Jupiter,
-#      never in the repo or the PR: the higher-bus card is the voice (step 5), the other the experiment
-#      pin. `nvidia-smi --query-compute-apps=gpu_bus_id,pid,process_name,used_memory --format=csv` shows
+#      never in the repo or the PR: the bus-0b card is the voice (step 5), the bus-0c card (it drives
+#      the monitors) the experiment pin. `nvidia-smi --query-compute-apps=gpu_bus_id,pid,process_name,used_memory --format=csv` shows
 #      nothing on the voice card. Both cards need "Above 4G Decoding" on in the BIOS (with it off the
 #      second card fails with "BAR1 is 0M" in dmesg and nvidia-smi lists one card).
 #   1. Service user (no login, no home):  sudo useradd -r -M -s /usr/sbin/nologin voxcpm
