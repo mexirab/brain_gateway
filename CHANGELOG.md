@@ -10,6 +10,7 @@ Stacked on `feat/jupiter-kiosk`. The closet kiosk logged in with the phone's own
 
 ### Operator steps
 - Other installs: none. `KIOSK_TOKEN` unset = kiosk sessions off; nothing changes for the phone or `/login`.
+- Jupiter, **wait for the X-unit split too**: the live kiosk runs `kiosk.py` from branch `claude/compassionate-curran-979c3d` (X in its own `jupiter-kiosk-x.service`, `--preflight --x-server`), not yet on main. The `kiosk.py` installed below must carry both changes, so do the switch from a main that has both.
 - Jupiter, **before this deploys**: add `KIOSK_TOKEN` (≥ 24 chars, not `DASHBOARD_TOKEN`) to `.env`, so the deploy's frontend recreate picks it up (else `docker compose up -d --force-recreate frontend` afterwards). Then, after the deploy: `sudo python3 -I scripts/jupiter-kiosk/make_logins.py`, straight away `sudo install -m 755 scripts/jupiter-kiosk/kiosk.py /usr/local/lib/jupiter-kiosk/ && sudo systemctl restart jupiter-kiosk`, and a SIGUSR1 snapshot. Optional afterwards: change `DASHBOARD_TOKEN` (phone logs in once), since the old master cookie sat in a kiosk-readable file. `scripts/jupiter-kiosk/README.md` → Secrets → Moving a kiosk off the old master cookie (also: rolling the frontend back).
 
 ### Frontend
@@ -29,7 +30,7 @@ Stacked on `feat/jupiter-kiosk`. The closet kiosk logged in with the phone's own
 
 ### Tests
 - Frontend: `src/lib/kiosk-session.test.tsx` (new: allow-list + renders the dashboard page and compares its calls with `KIOSK_PROXY_GETS`), `dashboard-auth.test.ts`, `middleware.test.ts`, `app/api/proxy/[...path]/route.test.ts`, `(private)/layout.test.tsx` cover both kinds.
-- `orchestrator/tests/test_jupiter_kiosk_logins.py` + `test_jupiter_kiosk.py`: kiosk cookie derivation and refusals, the 200/403/403 check, the new secrets key and the refusal of the old one.
+- `orchestrator/tests/test_jupiter_kiosk_logins.py` + `test_jupiter_kiosk.py` (400 together): kiosk cookie derivation and refusals, the 200/403/403 check (also through the real urllib opener: a 307 is never followed), the new secrets key and the refusal of the old one, and an old-file → `make_logins` → `kiosk.py` round trip.
 
 ### Docs
 - `scripts/jupiter-kiosk/README.md` (Secrets, Install, Security → known limits), `docs/FRONTEND.md` → Auth, `docs/ENV_VARS.md` (`KIOSK_TOKEN`).

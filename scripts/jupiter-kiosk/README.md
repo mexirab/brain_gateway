@@ -161,6 +161,7 @@ cookie, cache or crash dump reaches the disk.
    lines above; a normal deploy recreates it too, if the token is in `.env` first).
 2. `sudo python3 -I make_logins.py`: rewrites `secrets.json` with `dashboard_kiosk_session` only.
 3. Straight after: `sudo install -m 755 kiosk.py /usr/local/lib/jupiter-kiosk/ && sudo systemctl restart jupiter-kiosk`.
+   Install the `kiosk.py` that matches the installed units (a checkout of current `main`).
    If the old `kiosk.py` restarts between 2 and 3 it fails with `missing dashboard_kiosk_session`:
    step 3 fixes that, re-running `make_logins.py` doesn't.
 4. Check: a SIGUSR1 snapshot (Day to day) shows the dashboard on the right screen;

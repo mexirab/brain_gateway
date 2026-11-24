@@ -2104,6 +2104,27 @@ def test_main_refuses_without_secrets(main_env, monkeypatch, caplog):
     assert "dashboard_kiosk_session" in caplog.text
 
 
+OLD_MASTER_COOKIE = "fedcba9876543210" * 4
+
+
+@pytest.mark.parametrize(
+    "screen", [pytest.param(DASH_SCREEN, id="dashboard"), pytest.param(GRAFANA_SCREEN, id="grafana")]
+)
+def test_main_refuses_a_secrets_file_from_the_old_make_logins(main_env, monkeypatch, caplog, screen):
+    # Once this deploys, the service restarts on the exact file the old make_logins.py wrote (the full
+    # dashboard login, no kiosk session). It must not start (no preflight, no X), say why, and not log it.
+    monkeypatch.setattr(kiosk, "preflight", lambda cfg: pytest.fail("preflight must not run"))
+    monkeypatch.setattr(kiosk, "wait_for_monitor", lambda stop: pytest.fail("must not touch X"))
+    monkeypatch.setenv("DISPLAY", ":0")
+    main_env.config.write_text(json.dumps(_cfg(screen)), encoding="utf-8")
+    old = {"grafana_user": "closet-kiosk", "grafana_password": "old-grafana-pw", "dashboard_session": OLD_MASTER_COOKIE}
+    main_env.secrets.write_text(json.dumps(old), encoding="utf-8")
+    assert kiosk.main(_argv(main_env)) == 2
+    assert "still holds dashboard_session" in caplog.text
+    assert OLD_MASTER_COOKIE not in caplog.text
+    assert "old-grafana-pw" not in caplog.text
+
+
 def test_main_refuses_bad_config(main_env):
     main_env.config.write_text("{", encoding="utf-8")
     assert kiosk.main(_argv(main_env)) == 2
