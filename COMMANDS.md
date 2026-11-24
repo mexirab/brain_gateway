@@ -366,12 +366,15 @@ docker ps --filter label=jess-coder=1   # open boxes (CoderGuardBlocked: docker 
 ## Closet monitors kiosk (Jupiter; `scripts/jupiter-kiosk/README.md`)
 
 ```bash
-systemctl status jupiter-kiosk
-journalctl -t jupiter-kiosk -f                # kiosk.py + X + preflight
-sudo systemctl restart jupiter-kiosk           # after editing /etc/jupiter-kiosk/kiosk.json
+systemctl status jupiter-kiosk jupiter-kiosk-x   # browser unit + X unit
+journalctl -t jupiter-kiosk -t jupiter-kiosk-x -f   # kiosk.py, X, both preflights
+journalctl -u jupiter-kiosk -u jupiter-kiosk-x -b   # systemd's own lines (exit codes, restarts, PAM)
+sudo systemctl restart jupiter-kiosk           # after editing /etc/jupiter-kiosk/kiosk.json; restarts X too
 sudo systemctl stop jupiter-kiosk && sudo systemctl start getty@tty1   # text console back on tty1
+sudo systemctl kill -s USR1 --kill-whom=main jupiter-kiosk   # PNG per screen in /run/user/$(id -u kiosk)/jupiter-kiosk/ (personal data: delete after)
+ss -xl | grep nvidia-xdriver                   # must print nothing (X has its own network namespace)
 cd ~/gateway_nerves/scripts/jupiter-kiosk && sudo python3 -I make_logins.py   # after changing DASHBOARD_TOKEN, then restart
-nvidia-smi                                     # Xorg + chrome on GPU bus 0C only
+sudo nvidia-smi                                # Xorg + chrome on GPU bus 0C only (without sudo: Xorg only)
 ```
 
 ---
