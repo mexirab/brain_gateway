@@ -373,7 +373,7 @@ sudo systemctl restart jupiter-kiosk           # after editing /etc/jupiter-kios
 sudo systemctl stop jupiter-kiosk && sudo systemctl start getty@tty1   # text console back on tty1
 sudo systemctl kill -s USR1 --kill-whom=main jupiter-kiosk   # PNG per screen in /run/user/$(id -u kiosk)/jupiter-kiosk/ (personal data: delete after)
 ss -xl | grep nvidia-xdriver                   # must print nothing (X has its own network namespace)
-cd ~/gateway_nerves/scripts/jupiter-kiosk && sudo python3 -I make_logins.py   # after changing DASHBOARD_TOKEN, then restart
+cd ~/gateway_nerves/scripts/jupiter-kiosk && sudo python3 -I make_logins.py   # after changing KIOSK_TOKEN, then restart
 sudo nvidia-smi                                # Xorg + chrome on GPU bus 0C only (without sudo: Xorg only)
 ```
 
