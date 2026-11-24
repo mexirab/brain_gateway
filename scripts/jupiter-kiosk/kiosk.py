@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
 import fcntl
 import ipaddress
 import json
@@ -481,15 +482,34 @@ def hold_x_abstract_name(number: int) -> socket.socket:
     return sock
 
 
+def x_failure_kind(error: BaseException) -> str:
+    """Why an xrandr call failed, in our words (its output stays out of the log)."""
+    if isinstance(error, subprocess.TimeoutExpired):
+        return "xrandr hung"
+    if isinstance(error, subprocess.CalledProcessError):
+        text = error.stderr if isinstance(error.stderr, str) else ""
+        if "uthoriz" in text or "No protocol specified" in text:
+            return "X refused the auth cookie (XAUTHORITY isn't the file start-x.sh wrote)"
+        return "no X server on the display"
+    if isinstance(error, FileNotFoundError):
+        return "xrandr not installed"
+    return type(error).__name__
+
+
 def wait_for_x(stop: threading.Event, timeout: float = X_START_SECONDS) -> bool:
-    """True once the X server answers; False if it doesn't within timeout, or if asked to stop."""
+    """True once the X server answers; False if it doesn't within timeout (logged), or if asked to stop."""
     deadline = time.monotonic() + timeout
     while not stop.is_set():
         try:
             _run(["xrandr", "--current"], timeout=10)
             return True
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError) as e:
             if time.monotonic() >= deadline:
+                log.error(
+                    "the X server (jupiter-kiosk-x.service) didn't answer within %d s: %s",
+                    int(timeout),
+                    x_failure_kind(e),
+                )
                 return False
         stop.wait(1)
     return False
@@ -525,14 +545,15 @@ def interface_names(text: str) -> list[str]:
     return [line.split(":", 1)[0].strip() for line in text.splitlines()[2:] if ":" in line]
 
 
-def private_network(path: str = NET_DEV) -> bool:
-    """True if this process sees no network interface but loopback, i.e. a private network namespace."""
+def private_network(path: str | None = None) -> bool:
+    """True if this process sees loopback and nothing else, i.e. a private network namespace. Every
+    network namespace has lo, so an empty or unreadable list counts as NOT private (fail closed)."""
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path or NET_DEV, encoding="utf-8") as f:
             names = interface_names(f.read())
     except OSError:
         return False
-    return set(names) <= {"lo"}
+    return names == ["lo"]
 
 
 def setup_display(cfg: Config) -> list[tuple[Screen, tuple[int, int, int, int]]]:
@@ -1275,14 +1296,13 @@ class ScreenRunner(threading.Thread):
 # ------------------------------------------------------------------------------------------- main
 
 
-def run_kiosk(cfg: Config, secrets: dict[str, str], stop: threading.Event, runners: list[ScreenRunner]) -> int:
-    """Everything after the X socket name is held: wait for X, check its isolation, lay out, run the screens."""
+def run_kiosk(
+    cfg: Config, secrets: dict[str, str], stop: threading.Event, runners: list[ScreenRunner], number: int
+) -> int:
+    """Everything after display `number`'s abstract name is held: wait for X, check its isolation, lay
+    out, run the screens."""
     if not wait_for_x(stop):
-        if stop.is_set():
-            return 0
-        log.error("the X server (jupiter-kiosk-x.service) didn't answer within %d s", X_START_SECONDS)
-        return 1
-    number = display_number(os.environ["DISPLAY"])
+        return 0 if stop.is_set() else 1
     try:
         with open(NET_UNIX, encoding="utf-8", errors="replace") as f:
             exposed = visible_x_sockets(unix_sockets(f.read()), number)
@@ -1386,19 +1406,25 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as e:
         log.error("%s", e)
         return 2
-    runtime = os.environ.get("XDG_RUNTIME_DIR") or os.environ.get("HOME") or ""
-    os.environ.setdefault("XAUTHORITY", os.path.join(runtime, XAUTHORITY_NAME))  # same path as start-x.sh
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or os.environ.get("HOME")
+    if not runtime:
+        log.error("neither XDG_RUNTIME_DIR nor HOME is set: can't find the X auth cookie")
+        return 2
+    # Always the file start-x.sh gave X (it sets XAUTHORITY the same way), whatever came from outside.
+    os.environ["XAUTHORITY"] = os.path.join(runtime, XAUTHORITY_NAME)
     try:
         held = hold_x_abstract_name(number)
     except OSError as e:
-        log.error(
-            "the X display's abstract socket name is taken in the host network namespace (%s): something "
-            "may be posing as the X server; refusing to connect",
-            e.strerror or type(e).__name__,
-        )
+        if e.errno == errno.EADDRINUSE:
+            log.error(
+                "the X display's abstract socket name is taken in the host network namespace: something "
+                "may be posing as the X server; refusing to connect"
+            )
+        else:
+            log.error("can't hold the X display's abstract socket name (%s)", e.strerror or type(e).__name__)
         return 1
     with held:
-        return run_kiosk(cfg, secrets, stop, runners)
+        return run_kiosk(cfg, secrets, stop, runners, number)
 
 
 if __name__ == "__main__":

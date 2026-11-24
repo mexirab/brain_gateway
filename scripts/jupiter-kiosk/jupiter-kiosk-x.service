@@ -80,6 +80,9 @@ LockPersonality=yes
 RestrictRealtime=yes
 RestrictNamespaces=yes
 SystemCallArchitectures=native
-# X needs no IP at all: AF_UNIX (its socket, D-Bus to logind, the sideband) and AF_NETLINK (udev).
+# X needs no IP at all: AF_UNIX (its socket, D-Bus to logind, the sideband) and AF_NETLINK (libudev).
+# In this network namespace udev events don't arrive. Input and GPU hotplug are off in the X config;
+# the NVIDIA driver should report monitor hotplug through its own kernel interface, not udev (not
+# yet checked with a real unplug: README → Known limits (display)).
 RestrictAddressFamilies=AF_UNIX AF_NETLINK
 UMask=0077

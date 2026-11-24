@@ -701,12 +701,30 @@ def test_wait_for_x_polls_until_x_answers(monkeypatch):
     assert calls == [["xrandr", "--current"]] * 3
 
 
-def test_wait_for_x_gives_up(monkeypatch):
+_XRANDR_NO_AUTH = "Authorization required, but no authorization protocol specified\n\nCan't open display :0\n"
+
+
+@pytest.mark.parametrize(
+    "error, kind",
+    [
+        (FileNotFoundError("xrandr"), "xrandr not installed"),
+        (kiosk.subprocess.TimeoutExpired(["xrandr"], 10), "xrandr hung"),
+        (kiosk.subprocess.CalledProcessError(1, ["xrandr"], "", "Can't open display :0\n"), "no X server"),
+        (kiosk.subprocess.CalledProcessError(1, ["xrandr"], "", _XRANDR_NO_AUTH), "refused the auth cookie"),
+        (kiosk.subprocess.CalledProcessError(1, ["xrandr"], "", "No protocol specified\n"), "refused the auth cookie"),
+        (kiosk.subprocess.CalledProcessError(1, ["xrandr"]), "no X server"),
+        (PermissionError("xrandr"), "PermissionError"),
+    ],
+)
+def test_wait_for_x_gives_up_and_says_why(monkeypatch, caplog, error, kind):
     def fake_run(cmd, timeout=15):
-        raise FileNotFoundError(cmd[0])
+        raise error
 
     monkeypatch.setattr(kiosk, "_run", fake_run)
     assert kiosk.wait_for_x(threading.Event(), timeout=0) is False
+    assert "didn't answer within 0 s" in caplog.text
+    assert kind in caplog.text
+    assert "Can't open display" not in caplog.text  # our words, not xrandr's output
 
 
 def test_wait_for_x_stops():
@@ -774,7 +792,8 @@ def test_interface_names():
 
 @pytest.mark.parametrize(
     "interfaces, expected",
-    [(["lo"], True), ([], True), (["lo", "enp7s0"], False), (["lo", "tailscale0", "docker0"], False)],
+    # Every network namespace has lo: an empty list means the file didn't parse, so not private.
+    [(["lo"], True), ([], False), (["lo", "enp7s0"], False), (["lo", "tailscale0", "docker0"], False)],
 )
 def test_private_network(tmp_path, interfaces, expected):
     dev = tmp_path / "dev"
@@ -786,9 +805,14 @@ def test_private_network_unreadable_is_not_private(tmp_path):
     assert kiosk.private_network(str(tmp_path / "missing")) is False
 
 
-def test_private_network_reads_this_process_by_default():
+def test_private_network_reads_net_dev_at_call_time(tmp_path, monkeypatch):
     assert kiosk.NET_DEV == "/proc/self/net/dev"
-    assert kiosk.private_network.__defaults__ == (kiosk.NET_DEV,)
+    dev = tmp_path / "dev"
+    dev.write_text(NET_DEV_HEAD + "  lo: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n", "utf-8")
+    monkeypatch.setattr(kiosk, "NET_DEV", str(dev))
+    assert kiosk.private_network() is True
+    dev.write_text(NET_DEV_HEAD + "  lo: 0\n  enp7s0: 0\n", "utf-8")
+    assert kiosk.private_network() is False
 
 
 # ------------------------------------------------------------------------------------- preflight
@@ -1974,6 +1998,10 @@ def main_env(monkeypatch, tmp_path, zoneinfo):
     secrets = tmp_path / "secrets.json"
     config.write_text(json.dumps(_cfg(DASH_SCREEN)), encoding="utf-8")
     secrets.write_text(json.dumps({"dashboard_session": GOOD_SESSION}), encoding="utf-8")
+    # main() sets XAUTHORITY itself: set-then-delete makes monkeypatch restore "absent" afterwards, so
+    # the value doesn't leak into later tests.
+    monkeypatch.setenv("XAUTHORITY", "x")
+    monkeypatch.delenv("XAUTHORITY")
     return SimpleNamespace(config=config, secrets=secrets, installed=installed)
 
 
@@ -2043,19 +2071,21 @@ def test_main_holds_the_abstract_name_while_it_runs(main_env, monkeypatch, tmp_p
     n = _free_display()
     monkeypatch.setenv("DISPLAY", f":{n}")
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    monkeypatch.delenv("XAUTHORITY", raising=False)
+    monkeypatch.setenv("XAUTHORITY", "/somewhere/else")  # always the file start-x.sh gave X
     seen = {}
 
-    def fake_run_kiosk(cfg, secrets, stop, runners):
+    def fake_run_kiosk(cfg, secrets, stop, runners, number):
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         with client, pytest.raises(ConnectionRefusedError):  # held, not listening: xcb falls back to /tmp
             client.connect(f"\0/tmp/.X11-unix/X{n}")
         seen["xauthority"] = os.environ["XAUTHORITY"]
+        seen["number"] = number
         return 5
 
     monkeypatch.setattr(kiosk, "run_kiosk", fake_run_kiosk)
     assert kiosk.main(_argv(main_env)) == 5
     assert seen["xauthority"] == str(tmp_path / "jupiter-kiosk.Xauthority")
+    assert seen["number"] == n
     again = kiosk.hold_x_abstract_name(n)  # released on the way out
     again.close()
 
@@ -2071,6 +2101,28 @@ def test_main_refuses_when_the_abstract_name_is_taken(main_env, monkeypatch, cap
     assert "abstract socket name is taken" in caplog.text
 
 
+def test_main_other_hold_errors_are_not_called_posing(main_env, monkeypatch, caplog):
+    monkeypatch.setenv("DISPLAY", ":0")
+
+    def no_fds(number):
+        raise OSError(errno.EMFILE, "Too many open files")
+
+    monkeypatch.setattr(kiosk, "hold_x_abstract_name", no_fds)
+    monkeypatch.setattr(kiosk, "run_kiosk", lambda *a: pytest.fail("must not connect to X"))
+    assert kiosk.main(_argv(main_env)) == 1
+    assert "can't hold the X display's abstract socket name (Too many open files)" in caplog.text
+    assert "posing" not in caplog.text
+
+
+def test_main_needs_a_runtime_dir_for_the_cookie(main_env, monkeypatch, caplog):
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.setattr(kiosk, "hold_x_abstract_name", lambda n: pytest.fail("must not get this far"))
+    assert kiosk.main(_argv(main_env)) == 2
+    assert "can't find the X auth cookie" in caplog.text
+
+
 @pytest.fixture
 def run_env(monkeypatch, tmp_path, zoneinfo):
     """run_kiosk() with X answering, a clean /proc/net/unix and no monitor (so it returns early)."""
@@ -2081,7 +2133,7 @@ def run_env(monkeypatch, tmp_path, zoneinfo):
     monkeypatch.setattr(kiosk, "wait_for_x", lambda stop, timeout=60: True)
     monkeypatch.setattr(kiosk, "wait_for_monitor", lambda stop: None)
     cfg = kiosk.load_config(_cfg(DASH_SCREEN))
-    return SimpleNamespace(net_unix=net_unix, cfg=cfg, args=(cfg, {}, threading.Event(), []))
+    return SimpleNamespace(net_unix=net_unix, cfg=cfg, args=(cfg, {}, threading.Event(), [], 0))
 
 
 def test_run_kiosk_goes_on_when_x_is_isolated(run_env, caplog):
@@ -2103,10 +2155,10 @@ def test_run_kiosk_refuses_without_net_unix(run_env, monkeypatch, caplog):
     assert "can't read" in caplog.text
 
 
-def test_run_kiosk_x_not_answering(run_env, monkeypatch, caplog):
-    monkeypatch.setattr(kiosk, "wait_for_x", lambda stop, timeout=60: False)
+def test_run_kiosk_x_not_answering(run_env, monkeypatch):
+    monkeypatch.setattr(kiosk, "wait_for_x", lambda stop, timeout=60: False)  # wait_for_x logs why
+    monkeypatch.setattr(kiosk, "wait_for_monitor", lambda stop: pytest.fail("must not lay out the screens"))
     assert kiosk.run_kiosk(*run_env.args) == 1
-    assert "didn't answer within" in caplog.text
 
 
 def test_run_kiosk_stopped_while_waiting_for_x(run_env, monkeypatch, caplog):
@@ -2206,6 +2258,8 @@ def test_both_units_keep_the_exec_time_hardening(name):
 
 def test_user_manager_hides_the_voice_card_too():
     path = _KIOSK_PATH.with_name("kiosk-user-manager.conf")
+    if not path.is_file():
+        pytest.skip("kiosk-user-manager.conf not found")
     words = {
         w
         for line in path.read_text(encoding="utf-8").splitlines()
