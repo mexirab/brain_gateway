@@ -84,7 +84,12 @@ services:
       - '--storage.tsdb.retention.time=30d'
       - '--web.enable-lifecycle'
     networks:
-      - monitoring-net
+      # host-scrape carries the default route (gw_priority): the node-exporter,
+      # Netdata and Conjure scrapes of 10.0.0.248 must arrive on the bridge the host
+      # firewall allows (scripts/container-firewall/).
+      host-scrape:
+        gw_priority: 1
+      monitoring-net: {}
 
   # ============================================
   # LOKI - Log Aggregation
@@ -273,16 +278,31 @@ services:
     # searxng-probe-net: probes searxng:8080/healthz (published on loopback
     # only).
     networks:
-      - monitoring-net
-      - frontend-probe-net
-      - grist-probe-net
-      - searxng-probe-net
+      # host-scrape carries the default route (gw_priority): the Conjure probe
+      # (10.0.0.248:5050) must arrive on the bridge the host firewall allows
+      # (scripts/container-firewall/). Without it Docker picks the network whose
+      # name sorts first (frontend-probe-net).
+      host-scrape:
+        gw_priority: 1
+      monitoring-net: {}
+      frontend-probe-net: {}
+      grist-probe-net: {}
+      searxng-probe-net: {}
 
   # NODE EXPORTER runs on host (systemd), not in container
 
 networks:
   monitoring-net:
     driver: bridge
+  # Only Prometheus + blackbox-exporter, as their default route. The host firewall
+  # (jess-docker-input, scripts/container-firewall/) lets this bridge alone reach
+  # Jupiter's node-exporter 9100, Netdata 19999, Conjure 5050 and GPU exporter 9400.
+  # Fixed bridge name = stable rule.
+  host-scrape:
+    name: monitoring_host-scrape
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-jess-scrape
   # Created by the main compose project; Loki joins it so the orchestrator can
   # reach it. Bring the main stack up first (`docker compose down` there deletes
   # the network); if it was recreated, re-run `up -d` here. Every compose command

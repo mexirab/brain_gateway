@@ -156,6 +156,14 @@ route:
         - alertname=~"DiskSpaceLow|HighVRAMUsage|TTSGPUMemoryLow|TTSGPUUnmonitored|NvidiaModuleMissing"
       receiver: "pushover-quiet"
       repeat_interval: 24h
+    # Container -> host firewall on Jupiter (scripts/container-firewall/). A stopped
+    # watcher is the old "containers reach every host port" state, a failed check or
+    # an allow-list gap waits for an owner fix, and a container that keeps poking a
+    # blocked port keeps its alert active: once a day is enough.
+    - matchers:
+        - alertname=~"ContainerFirewallNotRunning|ContainerFirewallCheckFailing|ContainerFirewallRejecting|ContainerFirewallStillObserving"
+      receiver: "pushover-quiet"
+      repeat_interval: 24h
     # Brain API-key mismatch (llama-server --api-key-file): quiet, actionable.
     - matchers:
         - alertname=~"BrainAuthRejected|BrainMetricsScrapeRejected"

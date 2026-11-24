@@ -1,0 +1,66 @@
+# Repo copy of the Jupiter unit. Install path: /etc/systemd/system/jess-docker-input.service
+#
+# Limits which Jupiter host ports Docker containers can reach: chains
+# JESS-DOCKER-IN (IPv4) and JESS-DOCKER-IN6 (IPv6) on INPUT, for traffic from
+# Docker bridges only (br-+, docker0). Loopback, LAN and tailnet traffic never
+# enters them, so they cannot lock out SSH.
+# Design + measurements: docs/internal/CONTAINER_HOST_REACHABILITY.md
+# Runbook (install, upgrade, observe -> enforce, rollback, alerts):
+#   monitoring/README.md -> Container -> host firewall
+#
+# Service running = filtering on. A clean stop (systemctl stop/disable --now)
+# removes the jumps and chains (ExecStopPost). A crash keeps them in place for
+# the restart (--only-if-clean-stop).
+#
+# Install / upgrade (manual owner step; CI never touches the host), from the repo root:
+#   sudo install -m 0755 scripts/container-firewall/jess_docker_input.py /usr/local/sbin/jess-docker-input
+#   sudo install -m 0644 scripts/container-firewall/jess-docker-input.service /etc/systemd/system/
+#   first install only:  sudo install -m 0644 scripts/container-firewall/jess-docker-input.conf /etc/jess-docker-input.conf
+#   sudo systemctl daemon-reload && sudo systemctl enable jess-docker-input && sudo systemctl restart jess-docker-input
+#   sudo jess-docker-input status      # sha256 = `sha256sum scripts/container-firewall/jess_docker_input.py`
+#
+# Rollback (seconds):  sudo systemctl disable --now jess-docker-input
+#                      sudo rm /home/labadmin/node_exporter/textfile_collector/jess_docker_input.prom
+# Unit broken:         sudo /usr/local/sbin/jess-docker-input remove
+[Unit]
+Description=Limit which host ports Docker containers can reach (JESS-DOCKER-IN)
+Documentation=file:///home/labadmin/gateway_nerves/monitoring/README.md
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I -u /usr/local/sbin/jess-docker-input watch --config /etc/jess-docker-input.conf --metrics-dir /home/labadmin/node_exporter/textfile_collector
+# Validate first: a bad config makes `systemctl reload` fail loudly instead of
+# silently keeping the old mode.
+ExecReload=/usr/bin/python3 -I /usr/local/sbin/jess-docker-input check --config /etc/jess-docker-input.conf
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStopPost=/usr/bin/python3 -I -u /usr/local/sbin/jess-docker-input remove --only-if-clean-stop
+Restart=always
+RestartSec=5
+# Root for the iptables and docker CLIs. Limits accidents, not a sandbox: it
+# still holds CAP_NET_ADMIN and the docker socket (root-equivalent).
+# ProtectSystem=full, not strict: /run/xtables.lock must stay writable.
+# CAP_DAC_OVERRIDE: the textfile directory belongs to labadmin.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=-/home/labadmin/node_exporter/textfile_collector
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target

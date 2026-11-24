@@ -138,6 +138,16 @@ journalctl -u usb-storage-stale-check -n 20        # latest 10-min check: which 
 ```
 Never `docker compose start` a whole project. Manual fallback, verification, install: `monitoring/README.md` → USB Storage.
 
+### Container → host firewall (Jupiter; `jess-docker-input`, observe mode until switched)
+```bash
+sudo jess-docker-input status                  # script sha256 + both chains with packet counters
+sudo jess-docker-input summary --hours 24      # unmatched traffic grouped by network, address, port
+sudo jess-docker-input render                  # what it would load (changes nothing)
+sudo systemctl reload jess-docker-input        # after editing /etc/jess-docker-input.conf (fails on a bad config, old rules stay)
+journalctl -u jess-docker-input -n 30
+```
+Install, gates before enforce, switch to enforce, rollback: `monitoring/README.md` → Container → host firewall.
+
 ### Hardware audit across cluster
 ```bash
 /opt/gateway_mvp/monitoring/lab_hw_audit.sh
