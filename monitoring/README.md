@@ -532,8 +532,8 @@ Re-run the `install` lines after any change to the script or units. The udev rul
 
 ## Container → host firewall (Jupiter)
 
-A host unit limits which Jupiter host ports Docker containers can reach. Installed 2026-11-22 in **observe** mode (logs, blocks nothing); switching to enforce is a manual owner step behind the gates in Observe below. Before it, every container on an ordinary network reached SSH, SMB, Pi-hole, HA, Netdata, node-exporter and the rest; over IPv6 link-local, so did a container with `NET_RAW`. ufw is inactive.
-- Design and measurements: `docs/internal/CONTAINER_HOST_REACHABILITY.md`.
+A host unit limits what Docker containers can reach: Jupiter's own host ports (INPUT, installed 2026-11-22) and private destinations off the box: the LAN, the router, the tailnet and Jupiter's published ports (FORWARD, added 2026-11-24). Both are in **observe** mode (they log and block nothing). Switching each to enforce is a manual owner step behind its gates below. Before it, every container on an ordinary network reached SSH, SMB, Pi-hole, HA, Netdata, node-exporter and the rest (over IPv6 link-local too, given `NET_RAW`). It also reached the router, Helios and every LAN and tailnet device. ufw is inactive.
+- Design and measurements: `docs/internal/CONTAINER_HOST_REACHABILITY.md` (INPUT), `docs/internal/CONTAINER_LAN_REACHABILITY.md` (FORWARD).
 - Code: `scripts/container-firewall/`. The script's docstring is the spec.
 
 **How it works.**
@@ -552,11 +552,21 @@ A host unit limits which Jupiter host ports Docker containers can reach. Install
   | `gateway_nerves_host-access` | orchestrator | `br-jess-hostacc` | HA 8123, Pi-hole 8053, VoxCPM 8004, 8888 hairpin |
   | `monitoring_host-scrape` | prometheus, blackbox-exporter | `br-jess-scrape` | Conjure 5050, VoxCPM 8004 (TTS probe), node-exporter 9100, GPU exporter 9400, Netdata 19999 |
 
-  - Container-to-container traffic and published ports reached from another network (Docker DNAT → FORWARD) never enter the chains.
+  - Container-to-container traffic and published ports reached from another network (Docker DNAT → FORWARD) never enter the INPUT chains.
   - A one-network `scripts/container-firewall/probe_host_ports.py` container shows what each network reaches.
+- **Source check** (IPv4, both paths): a packet on a bridge whose source isn't that bridge's subnet is counted, logged (`jess-docker-spoof`) and, in enforce, dropped. Only a root `NET_RAW` container can send one: it forges an address, or routes through a two-network neighbour (containers inherit `ip_forward = 1`) to borrow that neighbour's allow lines. Replies are exempt. It follows `mode` on INPUT and `forward-mode` on FORWARD.
+- **FORWARD** (`forward-mode off|observe|enforce`; off or missing = no FORWARD chains): `JESS-DOCKER-FWD` (+ `-FWD-LAN`, `-FWD-SPOOF`) and `JESS-DOCKER-FWD6`, jumped from the **top of FORWARD** for `-i br-+`/`-i docker0`.
+  - Not from `DOCKER-USER`: tailscaled re-inserts `ts-forward` (which accepts everything to `tailscale0`) at FORWARD 1 on every start, and the watcher moves our jumps back above it.
+  - Private destinations (`10/8`, `172.16/12`, `192.168/16`, `100.64/10`, `169.254/16`, `192.0.0.0/24`) and every DNAT'd connection to a published port must match a `forward <network> <address>[/len] <tcp|udp> <ports>` line, on the address and port the container asked for. Otherwise they are counted, logged (`jess-docker-fwd`) and, in enforce, rejected with ICMP admin-prohibited ("No route to host" to the app).
+  - The internet and container-to-container traffic are not filtered.
+  - Replies to LAN clients of published ports pass.
+  - IPv6 forwarding is off; `JESS-DOCKER-FWD6` drops anything a bridge sends there (enforce).
+  - `scripts/container-firewall/probe_lan_reach.py` shows what each network reaches off the box.
+  - `scripts/container-firewall/selftest_netns.py` tests the chains end to end in throwaway namespaces (`sudo python3 -I …`, 37 checks).
 - **Watcher** (`jess-docker-input watch`, unit `jess-docker-input.service`):
-  - refills each chain atomically (`*-restore --noflush`);
-  - re-checks every 60 s and on Docker network create/destroy: a recreated network, an edited chain, or a jump displaced by a tailscaled restart is repaired;
+  - refills each hook's chains atomically (`*-restore --noflush`);
+  - re-checks every 60 s and on Docker network create/destroy: a recreated network, an edited chain, or a jump displaced by a tailscaled or dockerd restart is repaired;
+  - `forward-mode off` removes the FORWARD chains and their jumps at the next sync and leaves INPUT alone;
   - on a bad config or an unreachable dockerd, leaves the chains as they are;
   - a clean stop removes the chains; a crash keeps them for the restart.
 
@@ -568,11 +578,15 @@ A host unit limits which Jupiter host ports Docker containers can reach. Install
 | `jess_docker_input_last_apply_timestamp_seconds` | last chain reload |
 | `jess_docker_input_started_timestamp_seconds` | watcher start |
 | `jess_docker_input_check_ok` | last sync succeeded |
-| `jess_docker_input_enforcing` | 1 = enforce |
-| `jess_docker_input_networks_missing` | allow-listed networks that don't exist |
-| `jess_docker_input_networks_uncovered` | bridges outside the jumps: bridge name not `br-*`/`docker0`, or IPv6 on |
-| `jess_docker_input_unmatched_packets_total{family}` | packets no rule allowed (resets on a chain reload) |
+| `jess_docker_input_enforcing` | 1 = INPUT enforce |
+| `jess_docker_input_forward_active` / `_forward_enforcing` | FORWARD chains on / in enforce |
+| `jess_docker_input_networks_missing` | allow- or forward-listed networks that don't exist |
+| `jess_docker_input_networks_uncovered` | networks outside the chains: bridge name not `br-*`/`docker0`, IPv6 on, not exactly one IPv4 subnet (no source check), or a macvlan/ipvlan driver |
+| `jess_docker_input_unmatched_packets_total{family}` | packets to the host no rule allowed (resets on a chain reload) |
 | `jess_docker_input_logged_packets_total{family}` | of those, the ones that were logged |
+| `jess_docker_input_forward_unmatched_packets_total{family}` | packets to private destinations no `forward` line allowed (only while FORWARD is on) |
+| `jess_docker_input_forward_logged_packets_total{family}` | of those, the ones that were logged |
+| `jess_docker_input_spoofed_packets_total{path}` | packets with a forged or borrowed source (`path` = `input`/`forward`) |
 | `jess_docker_input_info{sha256}` | which script revision is installed |
 
 **Alerts** (group `container_firewall`, all `pushover-quiet` with a 24 h repeat):
@@ -583,6 +597,9 @@ A host unit limits which Jupiter host ports Docker containers can reach. Install
 | `ContainerFirewallCheckFailing` | `check_ok == 0`, or an uncovered bridge, or (enforce) a missing allow-listed network, for 15 m | the journal names the cause; `sudo jess-docker-input render` |
 | `ContainerFirewallRejecting` | enforce mode blocked packets in the last 15 m | `sudo jess-docker-input summary --hours 1` |
 | `ContainerFirewallStillObserving` | still in observe after 72 h | nudge to finish the rollout; drop the rule once enforce is on for good |
+| `ContainerFirewallForwardRejecting` | forward-mode enforce rejected packets in the last 15 m | `sudo jess-docker-input summary --hours 1` (path `fwd`) |
+| `ContainerFirewallSpoofedPackets` | a forged or borrowed source in the last 15 m, either mode | `sudo journalctl -k -g jess-docker-spoof --since -1h` (IN=, SRC=, DST=) |
+| `ContainerFirewallForwardStillObserving` | FORWARD still in observe after 72 h | as for INPUT |
 
 ### Install or upgrade
 
@@ -663,10 +680,59 @@ Expected results:
 
   Stop the unit first, or its drift check puts the jumps back within 60 s.
 
+### FORWARD: observe, enforce, rollback
+
+**Observe gates** (all inside one window of at least 24 h):
+1. **Builds and throwaway containers resolve DNS.** The window includes one uncached image build (`docker build --no-cache` of the orchestrator image) and one throwaway test-container run. Both use router DNS from the default `bridge`, which is the `forward bridge 10.0.0.1 …` lines.
+2. **Helios awake** for part of it, with a voice turn (STT 8003), a Paperless tool call (8777) and an alert webhook (Alertmanager → 8888).
+3. **Read `summary`:** every `fwd` row is either a probe run or a missing line. Read `bridge` rows as real traffic, not probe noise. The `spoof` rows should be empty.
+4. **Before enforce:**
+   - PR #176's compose change is deployed and the FORWARD `TRANSITION` lines are deleted;
+   - the satellite flashing command (`docs/VOICE_AND_TTS.md`) uses `--network host`;
+   - a TTS rollback to Helios is still covered: 8004 is allowed, 8002 (Qwen-TTS) would need a line.
+
+**Switch to enforce:**
+
+```bash
+sudo sed -i 's/^forward-mode observe$/forward-mode enforce/' /etc/jess-docker-input.conf
+sudo systemctl reload jess-docker-input     # fails loudly on a bad config, old rules stay
+```
+
+**Check it,** with the probe on a content network and on the orchestrator's network:
+
+```bash
+docker run --rm --cap-drop ALL --network homepage_default \
+  -v "$PWD/scripts/container-firewall/probe_lan_reach.py:/probe.py:ro" \
+  --entrypoint python gateway_nerves-orchestrator -I /probe.py --label homepage_default --recheck
+```
+
+Expected:
+- Every LAN, router and tailnet target shows `blocked` or `timeout`; the internet is `open`.
+- One `ContainerFirewallForwardRejecting` notice follows; that one is expected.
+- Chat works, a voice turn works, Prometheus's Helios targets stay up.
+
+**Rollback:**
+- **Soft:** `forward-mode observe` + `sudo systemctl reload jess-docker-input`.
+- **FORWARD off:** `forward-mode off` + reload. That removes the FORWARD chains and their jumps and leaves INPUT alone. Check: `sudo iptables -S FORWARD | grep -c jess-docker-input` prints `0`.
+- **Emergency (unit broken):** stop the unit first (its drift check would put the jumps back), then:
+
+  ```bash
+  sudo iptables -D FORWARD -i br-+ -m comment --comment jess-docker-input -j JESS-DOCKER-FWD
+  sudo iptables -D FORWARD -i docker0 -m comment --comment jess-docker-input -j JESS-DOCKER-FWD
+  sudo ip6tables -D FORWARD -i br-+ -m comment --comment jess-docker-input -j JESS-DOCKER-FWD6
+  sudo ip6tables -D FORWARD -i docker0 -m comment --comment jess-docker-input -j JESS-DOCKER-FWD6
+  ```
+
+**Symptoms in enforce:**
+- "Temporary failure in name resolution" in a build or a `docker run` points at the `bridge` DNS lines.
+- "No route to host" in an app points at a missing `forward` line.
+- An orchestrator cut off from Helios looks like "brain asleep".
+- Either way, `sudo jess-docker-input summary --hours 1` names the flow.
+
 ### Known limits
 
 - **Allow-list granularity:** per network, not per container. That is why the allowed networks hold only the containers that need them.
-- **FORWARD is untouched:** container → LAN and container → internet still work for every container. `DOCKER-USER` rules would be a separate change.
+- **FORWARD leaves the internet open:** a content container can still send data out. The router's own services also stay reachable through its public address (NAT loopback).
 - **The LAN and the tailnet** still reach the host services (ufw inactive).
 - **Containers holding the Docker socket** (promtail, Homepage) are root-equivalent. No firewall rule contains them.
 - **Fail-open windows of seconds:** at boot (containers start before the first apply) and at shutdown.

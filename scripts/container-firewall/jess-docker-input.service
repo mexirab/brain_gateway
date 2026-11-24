@@ -1,10 +1,12 @@
 # Repo copy of the Jupiter unit. Install path: /etc/systemd/system/jess-docker-input.service
 #
-# Limits which Jupiter host ports Docker containers can reach: chains
-# JESS-DOCKER-IN (IPv4) and JESS-DOCKER-IN6 (IPv6) on INPUT, for traffic from
-# Docker bridges only (br-+, docker0). Loopback, LAN and tailnet traffic never
-# enters them, so they cannot lock out SSH.
-# Design + measurements: docs/internal/CONTAINER_HOST_REACHABILITY.md
+# Limits what Docker containers can reach: Jupiter's host ports (chains
+# JESS-DOCKER-IN / -IN6 on INPUT) and, with `forward-mode` on, private
+# destinations off the box (JESS-DOCKER-FWD / -FWD6 on FORWARD), for traffic
+# from Docker bridges only (br-+, docker0). Loopback, LAN and tailnet traffic
+# never enters them, so they cannot lock out SSH.
+# Design + measurements: docs/internal/CONTAINER_HOST_REACHABILITY.md (INPUT),
+#   docs/internal/CONTAINER_LAN_REACHABILITY.md (FORWARD)
 # Runbook (install, upgrade, observe -> enforce, rollback, alerts):
 #   monitoring/README.md -> Container -> host firewall
 #
@@ -23,7 +25,7 @@
 #                      sudo rm /home/labadmin/node_exporter/textfile_collector/jess_docker_input.prom
 # Unit broken:         sudo /usr/local/sbin/jess-docker-input remove
 [Unit]
-Description=Limit which host ports Docker containers can reach (JESS-DOCKER-IN)
+Description=Limit what Docker containers can reach on and off Jupiter (JESS-DOCKER-IN/-FWD)
 Documentation=file:///home/labadmin/gateway_nerves/monitoring/README.md
 After=docker.service
 Wants=docker.service

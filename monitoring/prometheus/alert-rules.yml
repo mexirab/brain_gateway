@@ -1554,7 +1554,8 @@ groups:
           description: "Jupiter can't scrape the switch on Saturn (:9466), its checker has not run for 5 minutes, or DEADMAN_DRY_RUN is still on — so a Jupiter outage would page nobody. On Saturn: `systemctl status jupiter-deadman`, `journalctl -u jupiter-deadman -n 50`, `curl -s localhost:9466/metrics | grep dry_run`. See monitoring/deadman/README.md."
 
   # Container -> host firewall on Jupiter (jess-docker-input, scripts/container-firewall/;
-  # docs/internal/CONTAINER_HOST_REACHABILITY.md). Host unit installed by hand (CI never
+  # docs/internal/CONTAINER_HOST_REACHABILITY.md, and for the FORWARD chains
+  # docs/internal/CONTAINER_LAN_REACHABILITY.md). Host unit installed by hand (CI never
   # deploys it); it rewrites the node_exporter textfile jess_docker_input.prom every 60 s.
   # Absent metrics (never installed, or the .prom removed after a deliberate rollback)
   # = none of these fire. All quiet: a dead watcher is the pre-2026-11-22 "containers
@@ -1577,19 +1578,20 @@ groups:
 
       # The chains are left as they were on a failed sync, so a network recreated since
       # then has no allow rule. networks_missing only matters in enforce mode (observe
-      # blocks nothing); an uncovered bridge (custom bridge name not br-*, or IPv6 on) is
-      # a hole in either mode.
+      # blocks nothing); an uncovered network (bridge name not br-*, IPv6 on, not exactly
+      # one IPv4 subnet, or a macvlan/ipvlan driver) is a hole in either mode.
       - alert: ContainerFirewallCheckFailing
         expr: >-
           jess_docker_input_check_ok == 0
           or jess_docker_input_networks_uncovered > 0
-          or (jess_docker_input_networks_missing > 0 and on(instance) jess_docker_input_enforcing == 1)
+          or (jess_docker_input_networks_missing > 0 and on(instance)
+              (jess_docker_input_enforcing == 1 or jess_docker_input_forward_enforcing == 1))
         for: 15m
         labels:
           severity: warning
         annotations:
-          summary: "Jupiter's container firewall can't apply its rules, misses an allow-listed network, or can't see a bridge"
-          description: "One of: the last sync failed (bad /etc/jess-docker-input.conf, dockerd unreachable, iptables failed); in enforce mode an allow-listed network no longer exists (its containers' host traffic, e.g. orchestrator -> Home Assistant, is rejected); or a Docker bridge network is outside the jumps (bridge name not br-*/docker0, or IPv6 enabled). `journalctl -u jess-docker-input -n 30` names the cause; `sudo jess-docker-input render` shows what it would load; `docker network ls` for the real names. Fix the conf, then `sudo systemctl reload jess-docker-input` (the reload fails loudly on a bad config)."
+          summary: "Jupiter's container firewall can't apply its rules, misses an allow-listed network, or can't see a network"
+          description: "One of: the last sync failed (bad /etc/jess-docker-input.conf, dockerd unreachable, iptables failed); in enforce mode an allow- or forward-listed network no longer exists (its containers' traffic, e.g. orchestrator -> Home Assistant or -> Helios, is rejected); or a Docker network is outside the chains (bridge name not br-*/docker0, IPv6 enabled, not exactly one IPv4 subnet so no source check, or a macvlan/ipvlan driver). `journalctl -u jess-docker-input -n 30` names the cause; `sudo jess-docker-input render` shows what it would load; `docker network ls` for the real names. Fix the conf, then `sudo systemctl reload jess-docker-input` (the reload fails loudly on a bad config)."
 
       # min_over_time keeps packets counted in observe mode just before a switch to
       # enforce from firing this. Expected once after a probe_host_ports.py run.
@@ -1613,3 +1615,38 @@ groups:
         annotations:
           summary: "Jupiter's container firewall has been in observe mode for 3+ days"
           description: "Observe mode logs but blocks nothing. Read `sudo jess-docker-input summary --hours 72`, then follow monitoring/README.md -> Container -> host firewall -> Switch to enforce."
+
+      # FORWARD twin of ContainerFirewallRejecting: in forward-mode enforce a container
+      # reached for a private destination (LAN, router, tailnet, a published port) no
+      # `forward` line allows. Expected once after a probe_lan_reach.py run. To the app it
+      # looks like "No route to host" (an orchestrator cut off from Helios looks asleep).
+      - alert: ContainerFirewallForwardRejecting
+        expr: >-
+          sum by (instance, family) (increase(jess_docker_input_forward_unmatched_packets_total[15m])) > 0
+          and on(instance) min_over_time(jess_docker_input_forward_enforcing[15m]) == 1
+        labels:
+          severity: info
+        annotations:
+          summary: "Jupiter's container firewall blocked {{ $value | humanize }} {{ $labels.family }} packet(s) from containers to private destinations in 15 min"
+          description: "In forward-mode enforce JESS-DOCKER-FWD-LAN (or -FWD6) rejected traffic from a container to the LAN, the router, the tailnet or a published Jupiter port. Either a container is probing the house, or a legitimate path is missing (then something is broken: builds failing DNS, the orchestrator unable to reach Helios or a satellite). `sudo jess-docker-input summary --hours 1` (path fwd) lists network, destination and port. Legitimate: add a `forward` line to /etc/jess-docker-input.conf and the repo copy, then `sudo systemctl reload jess-docker-input`. Urgent: `forward-mode observe` + reload stops the rejecting at once."
+
+      # Packets on a bridge whose source is not that bridge's subnet: a forged address, or
+      # a container routing through a neighbour on two networks to borrow its allow lines.
+      # Never legitimate (replies are exempt), so it fires in observe mode too.
+      - alert: ContainerFirewallSpoofedPackets
+        expr: sum by (instance, path) (increase(jess_docker_input_spoofed_packets_total[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanize }} packet(s) with a forged or borrowed source address arrived from a Docker bridge on Jupiter ({{ $labels.path }}) in 15 min"
+          description: "A container sent packets whose source address doesn't belong to the bridge they arrived on. Only a root container with NET_RAW can do that, by forging the address or by routing through a container that sits on two networks. Dropped in enforce (INPUT: `mode`, FORWARD: `forward-mode`), passed in observe. `sudo journalctl -k -g jess-docker-spoof --since -1h` shows IN= (the bridge), SRC= and DST=; `docker network inspect` maps the bridge to its containers. Treat as a possibly compromised container unless a probe test explains it."
+
+      # Nudge so the FORWARD rollout doesn't stall in observe. Drop once enforce is on for good.
+      - alert: ContainerFirewallForwardStillObserving
+        expr: jess_docker_input_forward_active == 1 and jess_docker_input_forward_enforcing == 0
+        for: 72h
+        labels:
+          severity: info
+        annotations:
+          summary: "Jupiter's container firewall FORWARD chains have been in observe mode for 3+ days"
+          description: "forward-mode observe logs but blocks nothing. Read `sudo jess-docker-input summary --hours 72` (path fwd and spoof), then follow monitoring/README.md -> Container -> host firewall -> FORWARD: switch to enforce."

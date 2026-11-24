@@ -161,7 +161,7 @@ route:
     # an allow-list gap waits for an owner fix, and a container that keeps poking a
     # blocked port keeps its alert active: once a day is enough.
     - matchers:
-        - alertname=~"ContainerFirewallNotRunning|ContainerFirewallCheckFailing|ContainerFirewallRejecting|ContainerFirewallStillObserving"
+        - alertname=~"ContainerFirewallNotRunning|ContainerFirewallCheckFailing|ContainerFirewallRejecting|ContainerFirewallStillObserving|ContainerFirewallForwardRejecting|ContainerFirewallSpoofedPackets|ContainerFirewallForwardStillObserving"
       receiver: "pushover-quiet"
       repeat_interval: 24h
     # Brain API-key mismatch (llama-server --api-key-file): quiet, actionable.
