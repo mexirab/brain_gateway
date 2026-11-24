@@ -62,7 +62,7 @@ IPv6: no network has IPv6 enabled, and containers have IPv6 disabled on `eth0`. 
 
 **Not probed** (UDP without a protocol to test): nmbd 137/138, HA mDNS 5353 and SSDP 1900 also listen on every bridge address. The proposed rule covers them too.
 
-**Also reachable from every NAT network:** the internet and the LAN (e.g. Helios `:8080`). That is the `FORWARD` path, by design, and out of scope here.
+**Also reachable from every NAT network:** the internet and the LAN (e.g. Helios `:8080`). That is the `FORWARD` path, out of scope here; see [`CONTAINER_LAN_REACHABILITY.md`](CONTAINER_LAN_REACHABILITY.md).
 
 ## Findings: networks
 
@@ -218,7 +218,8 @@ Rollback is `sudo systemctl disable --now jess-docker-input`.
 
 - **The allow-list is per network, not per container.** That is why the two allowed networks hold only the containers that need them. Adding a container to host-access or host-scrape gives it those ports.
 - **Published `0.0.0.0` ports** (8888, 2283, 13378) stay reachable from every container, through DNAT and `FORWARD`. They are LAN-facing by design anyway.
-- **Container → LAN and container → internet** (`FORWARD`) are untouched. Any container can still reach Helios, the router and IoT devices. `DOCKER-USER` rules would be the next step, as a separate task.
+- **Container → LAN and container → internet** (`FORWARD`) are untouched. Any container can still reach Helios, the router and IoT devices. Measured 2026-11-24, with a proposed `FORWARD` allow-list: [`CONTAINER_LAN_REACHABILITY.md`](CONTAINER_LAN_REACHABILITY.md).
+- **Allow lines can be borrowed.** A root container with `NET_RAW` that shares a network with the orchestrator, Prometheus or blackbox can route packets through it, because containers inherit `ip_forward = 1`. The packets then arrive on `host-access`/`host-scrape` and match their allow lines. A source-address check per bridge closes it; it is proposed in [`CONTAINER_LAN_REACHABILITY.md`](CONTAINER_LAN_REACHABILITY.md) → Chains.
 - **The LAN and the tailnet still reach these host services**, since ufw is inactive. This change is about containers only.
 - **promtail and Homepage mount the Docker socket.** A `:ro` bind does not stop API calls (tested: `GET /version` → 200 through a read-only mount), so both are root-equivalent on Jupiter. No firewall rule contains them.
 - **`coder-net`** (see `CODER_PLAN.md`) is `isolated`, so it has no host address. It still needs its fixed bridge name to start with `br-`, so the chains cover it as the backstop the spike asks for. A bridge outside `br-*`/`docker0` shows up as `jess_docker_input_networks_uncovered` → `ContainerFirewallCheckFailing`.
