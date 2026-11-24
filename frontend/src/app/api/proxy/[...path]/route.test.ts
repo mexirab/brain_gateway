@@ -1,16 +1,21 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { expectedSessionValue } from '@/lib/dashboard-auth';
-import { DELETE, GET, POST } from './route';
+import { expectedKioskSessionValue, expectedSessionValue } from '@/lib/dashboard-auth';
+import { KIOSK_PROXY_GETS } from '@/lib/kiosk-session';
+import { DELETE, GET, PATCH, POST, PUT } from './route';
 
 const TOKEN = 'test-dashboard-token';
+const KIOSK_TOKEN = 'test-kiosk-token-0123456789';
 const fetchMock = vi.fn();
 let SESSION = '';
+let KIOSK = '';
 
 beforeEach(async () => {
   vi.stubEnv('DASHBOARD_TOKEN', TOKEN);
+  vi.stubEnv('KIOSK_TOKEN', KIOSK_TOKEN);
   SESSION = (await expectedSessionValue())!;
+  KIOSK = (await expectedKioskSessionValue())!;
   fetchMock.mockReset();
   fetchMock.mockResolvedValue(Response.json({ ok: true }));
   vi.stubGlobal('fetch', fetchMock);
@@ -291,5 +296,78 @@ describe('more responses', () => {
   it('allows writes without Sec-Fetch-Site or Origin (non-browser clients)', async () => {
     const res = await POST(req('/api/proxy/api/tasks', undefined, { method: 'POST', body: '{}' }), ctx(['api', 'tasks']));
     expect(res.status).toBe(200);
+  });
+});
+
+// A kiosk session reads exactly what the dashboard page shows and writes nothing. Like the refused
+// paths above, the property that matters is that a refused call never reaches fetch.
+describe('kiosk (read-only) session', () => {
+  function split(entry: string): [string[], string] {
+    const [path, query] = entry.split('?');
+    return [path.slice(1).split('/'), query ? `?${query}` : ''];
+  }
+
+  it.each(KIOSK_PROXY_GETS.map((e) => [e]))('GET %s is forwarded', async (entry) => {
+    const [segments] = split(entry);
+    const res = await GET(req(`/api/proxy${entry}`, KIOSK), ctx(segments));
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const url = new URL(fetchMock.mock.calls[0][0]);
+    expect(url.pathname + url.search).toBe(entry);
+  });
+
+  it.each([
+    ['/api/proxy/api/inbox', ['api', 'inbox']],
+    ['/api/proxy/api/ha/entities', ['api', 'ha', 'entities']],
+    ['/api/proxy/api/config/personal-facts', ['api', 'config', 'personal-facts']],
+    ['/api/proxy/api/tasks?status=done', ['api', 'tasks']],
+    ['/api/proxy/api/tasks', ['api', 'tasks']],
+    ['/api/proxy/api/announcements/history?limit=1000', ['api', 'announcements', 'history']],
+    ['/api/proxy/api/reminders?extra=1', ['api', 'reminders']],
+    ['/api/proxy/api%2Freminders', ['api/reminders']],
+  ])('GET %s gets 403 without fetching', async (url, segments) => {
+    const res = await GET(req(url, KIOSK), ctx(segments));
+    expect(res.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  const writes = [
+    ['POST', POST, ['v1', 'chat', 'completions']],
+    ['POST', POST, ['api', 'ha', 'command']],
+    ['POST', POST, ['api', 'reminder', 'complete', 'r1']],
+    ['POST', POST, ['api', 'tasks', 't1', 'complete']],
+    ['POST', POST, ['api', 'focus', 'start']],
+    ['PUT', PUT, ['api', 'config', 'identity']],
+    ['PATCH', PATCH, ['api', 'tasks', 't1']],
+    ['DELETE', DELETE, ['api', 'announcements', 'history']],
+    ['POST', POST, ['api', 'reminders']], // a path the kiosk may GET
+  ] as const;
+
+  it.each(writes)('same-origin %s %j gets 403 without fetching', async (method, handler, segments) => {
+    const res = await handler(
+      req(`/api/proxy/${segments.join('/')}`, KIOSK, { method, body: method === 'DELETE' ? undefined : '{}', headers: sameOrigin }),
+      ctx([...segments]),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'Not allowed for this screen' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('a full session still reaches non-dashboard paths and writes', async () => {
+    fetchMock.mockImplementation(async () => Response.json({ ok: true })); // one fresh body per call
+    expect((await GET(req('/api/proxy/api/inbox'), ctx(['api', 'inbox']))).status).toBe(200);
+    const res = await POST(
+      req('/api/proxy/api/ha/command', undefined, { method: 'POST', body: '{}', headers: sameOrigin }),
+      ctx(['api', 'ha', 'command']),
+    );
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('a kiosk cookie with KIOSK_TOKEN unset gets 401', async () => {
+    vi.stubEnv('KIOSK_TOKEN', '');
+    const res = await GET(req('/api/proxy/health', KIOSK), ctx(['health']));
+    expect(res.status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

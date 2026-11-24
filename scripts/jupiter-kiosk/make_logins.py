@@ -6,22 +6,26 @@
 (Not called make_secrets.py: the repo .gitignore drops every *secret* file.)
 
 In this order, so a failure leaves nothing half-changed:
-  1. Jess dashboard: derives the session cookie value, HMAC-SHA256(DASHBOARD_TOKEN,
-     "brain-gateway-dashboard-session-v1") - what the login route sets (frontend/src/lib/
-     dashboard-auth.ts), so the dashboard password itself is never written here - and checks it
-     against the running dashboard (GET http://127.0.0.1:3001/dashboard must not redirect to /login).
-     The cookie and the admin password only go to a port the host's own docker-proxy holds (uid 0,
-     host mount namespace, docker-proxy's inode): while a container is recreated, any local process
-     could take the port.
+  1. Jess dashboard: derives the READ-ONLY kiosk session cookie, HMAC-SHA256(KIOSK_TOKEN,
+     "brain-gateway-kiosk-session-v1") (frontend/src/lib/dashboard-auth.ts), so neither token is
+     written here, and the full login (DASHBOARD_TOKEN's cookie) never is either. The kiosk session
+     opens /dashboard and the GET calls that page makes, nothing else (lib/kiosk-session.ts). Then it
+     checks the running dashboard: GET /dashboard must answer 200 (not a redirect to /login), and
+     GET /chat and GET /api/proxy/api/inbox must answer 403 - proof that the frontend treats the
+     cookie as read-only. The cookie and the admin password only go to a port the host's own
+     docker-proxy holds (uid 0, host mount namespace, docker-proxy's inode): while a container is
+     recreated, any local process could take the port.
   2. Grafana: creates the view-only user `closet-kiosk`, or re-enables it and gives it a fresh random
      password (set last), through the admin API on http://127.0.0.1:3000 with GF_SECURITY_ADMIN_USER /
      GF_SECURITY_ADMIN_PASSWORD from the repo .env. Org 1 role Viewer, never a Grafana admin. Never
      sent across a redirect.
   3. Writes the file root:kiosk 0640, atomically.
 
-The cookie opens the whole dashboard, so treat the file like the dashboard password. Re-run after
-DASHBOARD_TOKEN or the Grafana admin password changes, then `sudo systemctl restart jupiter-kiosk`.
-Prints no secret values. Standard library only.
+KIOSK_TOKEN (.env, at least 24 characters, not DASHBOARD_TOKEN) must be set and the frontend
+recreated first. The cookie still shows what the dashboard shows (calendar, tasks, reminders,
+self-care, finance snapshot), so keep the file private. Changing KIOSK_TOKEN logs out only the kiosk.
+Re-run after KIOSK_TOKEN or the Grafana admin password changes, then
+`sudo systemctl restart jupiter-kiosk`. Prints no secret values. Standard library only.
 """
 
 from __future__ import annotations
@@ -48,9 +52,13 @@ DASHBOARD = "http://127.0.0.1:3001"
 KIOSK_USER = "closet-kiosk"
 KIOSK_GROUP = "kiosk"
 DOCKER_PROXY = "/usr/bin/docker-proxy"
-SESSION_LABEL = b"brain-gateway-dashboard-session-v1"  # frontend/src/lib/dashboard-auth.ts SESSION_LABEL
+KIOSK_SESSION_LABEL = b"brain-gateway-kiosk-session-v1"  # frontend/src/lib/dashboard-auth.ts KIOSK_SESSION_LABEL
+MIN_KIOSK_TOKEN_LENGTH = 24  # frontend/src/lib/dashboard-auth.ts MIN_KIOSK_TOKEN_LENGTH
 DASHBOARD_COOKIE = "brain_token"  # frontend/src/lib/dashboard-auth.ts COOKIE_NAME
 PLACEHOLDER_TOKENS = {"", "changeme"}  # the frontend refuses these too
+# Must answer 403 to the kiosk cookie: a page and a proxy GET the dashboard page doesn't make.
+KIOSK_REFUSED_PATHS = ("/chat", "/api/proxy/api/inbox")
+REDIRECTS = (301, 302, 303, 307, 308)
 
 
 class Refused(Exception):
@@ -90,13 +98,21 @@ def parse_env(text: str) -> dict[str, str]:
     return values
 
 
-def dashboard_session(token: str) -> str:
-    token = token.strip()  # the frontend trims DASHBOARD_TOKEN the same way
-    if token in PLACEHOLDER_TOKENS:
-        raise Refused("DASHBOARD_TOKEN is unset or a placeholder: the dashboard has no login to copy")
-    if "${" in token:
-        raise Refused("DASHBOARD_TOKEN uses ${...} interpolation, which this script doesn't expand")
-    return hmac.new(token.encode(), SESSION_LABEL, hashlib.sha256).hexdigest()
+def kiosk_session(kiosk_token: str, dashboard_token: str) -> str:
+    """The kiosk cookie value, after the frontend's rules for when kiosk sessions are on."""
+    kiosk_token, dashboard_token = kiosk_token.strip(), dashboard_token.strip()  # the frontend trims both
+    for name, value in (("DASHBOARD_TOKEN", dashboard_token), ("KIOSK_TOKEN", kiosk_token)):
+        if "${" in value:
+            raise Refused(f"{name} uses ${{...}} interpolation, which this script doesn't expand")
+    if dashboard_token in PLACEHOLDER_TOKENS:
+        raise Refused("DASHBOARD_TOKEN is unset or a placeholder: the dashboard has no login, so no kiosk login")
+    if kiosk_token in PLACEHOLDER_TOKENS:
+        raise Refused("KIOSK_TOKEN is not set: add one to the .env and recreate the frontend (README → Secrets)")
+    if len(kiosk_token) < MIN_KIOSK_TOKEN_LENGTH:
+        raise Refused(f"KIOSK_TOKEN is shorter than {MIN_KIOSK_TOKEN_LENGTH} characters: the frontend ignores it")
+    if kiosk_token == dashboard_token:
+        raise Refused("KIOSK_TOKEN is the same as DASHBOARD_TOKEN: the frontend ignores it; pick a new one")
+    return hmac.new(kiosk_token.encode(), KIOSK_SESSION_LABEL, hashlib.sha256).hexdigest()
 
 
 def _request(method: str, url: str, headers: dict[str, str], body: dict | None = None) -> tuple[int, dict]:
@@ -161,15 +177,24 @@ def require_docker_proxy(port: int, what: str) -> None:
 
 
 def check_dashboard_cookie(session_value: str) -> None:
+    """The running frontend opens /dashboard for the cookie, and refuses it everything else we try."""
     require_docker_proxy(3001, "dashboard cookie")
-    status, _ = _request("GET", f"{DASHBOARD}/dashboard", {"Cookie": f"{DASHBOARD_COOKIE}={session_value}"})
-    if status in (301, 302, 303, 307, 308):
+    cookie = {"Cookie": f"{DASHBOARD_COOKIE}={session_value}"}
+    status, _ = _request("GET", f"{DASHBOARD}/dashboard", cookie)
+    if status in REDIRECTS:
         raise Refused(
-            "the dashboard rejects the derived cookie (redirects to /login): DASHBOARD_TOKEN in this .env "
-            "differs from the running frontend's"
+            "the dashboard rejects the kiosk cookie (redirects to /login): KIOSK_TOKEN in this .env differs "
+            "from the running frontend's, or the frontend wasn't recreated after setting it"
         )
     if status != 200:
         raise Refused(f"the dashboard answered HTTP {status} for /dashboard: is the frontend up?")
+    for path in KIOSK_REFUSED_PATHS:
+        status, _ = _request("GET", f"{DASHBOARD}{path}", cookie)
+        if status != 403:
+            raise Refused(
+                f"the dashboard answered HTTP {status} for {path} instead of 403: the running frontend doesn't "
+                "treat the kiosk cookie as read-only, so it isn't written"
+            )
 
 
 def ensure_grafana_viewer(admin_user: str, admin_password: str) -> str:
@@ -244,7 +269,9 @@ def write_secrets(path: str, gid: int, data: dict[str, str]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Write the closet kiosk's logins (run as root on Jupiter)")
-    parser.add_argument("--env", default=ENV_DEFAULT, help="repo .env with DASHBOARD_TOKEN and GF_SECURITY_ADMIN_*")
+    parser.add_argument(
+        "--env", default=ENV_DEFAULT, help="repo .env with KIOSK_TOKEN, DASHBOARD_TOKEN and GF_SECURITY_ADMIN_*"
+    )
     parser.add_argument("--out", default=SECRETS_PATH)
     args = parser.parse_args()
     if os.geteuid() != 0:
@@ -265,14 +292,14 @@ def main() -> int:
         admin_password = env.get("GF_SECURITY_ADMIN_PASSWORD", "")
         if not admin_password:
             raise Refused("GF_SECURITY_ADMIN_PASSWORD is not in the .env")
-        session = dashboard_session(env.get("DASHBOARD_TOKEN", ""))
+        session = kiosk_session(env.get("KIOSK_TOKEN", ""), env.get("DASHBOARD_TOKEN", ""))
         check_dashboard_cookie(session)
-        print("dashboard cookie: matches the running frontend")
+        print("dashboard kiosk cookie: opens /dashboard, refused elsewhere (read-only)")
         grafana_password = ensure_grafana_viewer(env.get("GF_SECURITY_ADMIN_USER") or "admin", admin_password)
         write_secrets(
             args.out,
             gid,
-            {"grafana_user": KIOSK_USER, "grafana_password": grafana_password, "dashboard_session": session},
+            {"grafana_user": KIOSK_USER, "grafana_password": grafana_password, "dashboard_kiosk_session": session},
         )
     except Refused as e:
         print(f"refused: {e}", file=sys.stderr)

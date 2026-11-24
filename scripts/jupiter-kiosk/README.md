@@ -46,7 +46,7 @@ card.
 | `kiosk-user-slice.conf` | `/etc/systemd/system/user-<kiosk uid>.slice.d/50-jupiter-kiosk.conf` | Memory/task/CPU limits + network allow-list |
 | `kiosk-user-manager.conf` | `/etc/systemd/system/user@<kiosk uid>.service.d/50-jupiter-kiosk.conf` | Same hardening for the kiosk user's systemd manager |
 | `kiosk.example.json` | `/etc/jupiter-kiosk/kiosk.json` (root:kiosk 0640) | Screens, URLs, rotation. No secrets |
-| `make_logins.py` | writes `/etc/jupiter-kiosk/secrets.json` (root:kiosk 0640) | Grafana viewer login + dashboard cookie |
+| `make_logins.py` | writes `/etc/jupiter-kiosk/secrets.json` (root:kiosk 0640) | Grafana viewer login + read-only dashboard (kiosk) cookie |
 
 `make_logins.py` isn't called `make_secrets.py` because the repo `.gitignore` drops every `*secret*`
 file.
@@ -71,7 +71,10 @@ sudo install -m 644 kiosk-user-manager.conf /etc/systemd/system/user@$(id -u kio
 sudo install -d -m 750 -o root -g kiosk /etc/jupiter-kiosk
 sudo install -m 640 -o root -g kiosk kiosk.example.json /etc/jupiter-kiosk/kiosk.json
 sudoedit /etc/jupiter-kiosk/kiosk.json      # host_map IP = `tailscale ip -4`; outputs/rotation (below)
-sudo python3 -I make_logins.py              # checks the dashboard cookie, makes Grafana user closet-kiosk
+# KIOSK_TOKEN: the kiosk's own read-only dashboard login (Secrets below). Once; prints nothing.
+grep -q '^KIOSK_TOKEN=.' ../../.env || python3 -c 'import secrets; print("KIOSK_TOKEN=" + secrets.token_urlsafe(32))' >> ../../.env
+(cd ../.. && docker compose up -d --force-recreate frontend)
+sudo python3 -I make_logins.py              # checks the kiosk cookie is read-only, makes Grafana user closet-kiosk
 sudo -u kiosk /usr/local/lib/jupiter-kiosk/kiosk.py --preflight   # warns about the voice card: masks apply inside the units only
 sudo install -m 644 jupiter-kiosk-x.service jupiter-kiosk.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now jupiter-kiosk   # starts the X unit first
@@ -123,19 +126,41 @@ Live (2026-11-24): `HDMI-0` = left monitor, rotate `left`; `HDMI-1` = right moni
 
 `make_logins.py` reads the repo `.env` and changes things in this order, so a failure leaves nothing
 half-changed:
-1. **Dashboard:** derives the session **cookie value**, `HMAC(DASHBOARD_TOKEN, label)`, rather than
-   storing the password, and checks it against the running dashboard.
+1. **Dashboard:** derives the kiosk's **read-only session cookie**, `HMAC(KIOSK_TOKEN, kiosk label)`,
+   rather than storing a token, and checks it against the running dashboard: `/dashboard` must open,
+   `/chat` and a proxy GET the dashboard doesn't make must answer 403. If they don't (an older
+   frontend, `KIOSK_TOKEN` not loaded yet), nothing is written.
 2. **Grafana:** creates (or re-enables and re-passwords) the user `closet-kiosk`: org 1 Viewer,
    never a Grafana admin, random password. It sends the admin password only after checking that
    docker-proxy owns 127.0.0.1:3000, and never across a redirect.
 3. Writes `secrets.json`.
 
-The cookie still opens the whole dashboard (chat, Home Assistant controls, settings), so the file is
-root:kiosk 0640. In the browser it is a session cookie, set again at every start, and the Chrome
-profiles live in the kiosk user's runtime dir (`/run/user/<uid>/jupiter-kiosk/profiles`, tmpfs,
-cleared when the kiosk stops). No cookie, cache or crash dump reaches the disk. **Re-run it after changing `DASHBOARD_TOKEN`**, then restart the kiosk. Until you
+**What the kiosk cookie can do** (`frontend/src/lib/kiosk-session.ts`): open `/dashboard`, and make
+exactly the GET calls that page makes (calendar today, open tasks, reminders, self-care today, focus,
+progress, the last 15 announcements, temperatures, system health, the budget snapshot). Every other
+page, every other proxy path or query, and every write (chat, Home Assistant, settings, the cards'
+own buttons) answer 403. The frontend test `kiosk-session.test.tsx` renders the dashboard page and
+fails when it asks for anything else, so a new card stays off the kiosk until someone adds it there.
+
+`KIOSK_TOKEN` lives in the repo `.env`: at least 24 characters, not the same as `DASHBOARD_TOKEN`,
+read by the frontend container (recreate it after a change). No login form takes it. **Changing it
+logs out only the kiosk**, not the phone: re-run `make_logins.py`, then restart the kiosk. Until you
 do, the right screen sits on the login page, and the log says `dashboard asked for a login` every
-5 min.
+5 min. Changing `DASHBOARD_TOKEN` doesn't touch the kiosk (unless it ends up equal to `KIOSK_TOKEN`).
+
+The cookie still shows what the dashboard shows, so the file stays root:kiosk 0640. In the browser
+it is a session cookie, set again at every start, and the Chrome profiles live in the kiosk user's
+runtime dir (`/run/user/<uid>/jupiter-kiosk/profiles`, tmpfs, cleared when the kiosk stops). No
+cookie, cache or crash dump reaches the disk.
+
+**Moving a kiosk off the old master cookie** (a `secrets.json` from before the kiosk session holds
+`dashboard_session`, which the new `kiosk.py` refuses to start with, and the old `kiosk.py` can't
+read the new file):
+1. `KIOSK_TOKEN` in `.env` and the frontend recreated on a version with kiosk sessions (the Install
+   lines above; a normal deploy recreates it too, if the token is in `.env` first).
+2. `sudo python3 -I make_logins.py`: rewrites `secrets.json` with `dashboard_kiosk_session` only.
+3. Straight after: `sudo install -m 755 kiosk.py /usr/local/lib/jupiter-kiosk/ && sudo systemctl restart jupiter-kiosk`,
+   then a SIGUSR1 snapshot (Day to day) to see the dashboard on the right screen.
 
 ## Day to day
 
@@ -200,7 +225,7 @@ removing it alone leaves the running browsers logging.
 - **polkit:** denies the user every action. As the active seat session it would otherwise be allowed
   to power off or reboot Jupiter and mount disks without a password.
 - **No input devices:** X adds no keyboards or mice, and VT switching and Ctrl+Alt+Backspace are off.
-  A keyboard plugged into Jupiter can't drive a browser that holds the dashboard session (DevTools,
+  A keyboard plugged into Jupiter can't drive a browser that holds the kiosk session (DevTools,
   `file://` pages).
 - **Nothing outside the two kiosk units can reach X**, and anything that could would see the
   screens. Abstract unix sockets belong to a network namespace, not to the file system, so in the
@@ -269,10 +294,12 @@ removing it alone leaves the running browsers logging.
   can't stop it (`-isolateDevice` doesn't either). It holds no memory or context there. Putting the
   voice card on its own logind seat (`loginctl attach`) would end it, but that changes udev on the live
   voice card.
-- **The dashboard cookie is a master credential:** the same value as every other device, it reaches
-  every `/api/*` path through the dashboard proxy, and can't be revoked without changing
-  `DASHBOARD_TOKEN` (which logs the phone out too). A separate read-only kiosk session in the
-  frontend would fix that.
+- **The kiosk cookie still reads the dashboard.** It is the kiosk's own read-only session, not the
+  phone's login: no chat, Home Assistant, settings or other pages, no writes, and `KIOSK_TOKEN`
+  revokes it alone (Secrets above). But whoever can read `secrets.json` or the kiosk's Chrome (root,
+  or code running as `kiosk`) can read what the right screen shows from anywhere that reaches the
+  dashboard, until `KIOSK_TOKEN` changes: calendar titles, tasks, reminders, self-care and meds-taken status,
+  announcement text, the budget snapshot. The same data is on the monitor itself.
 - **Chrome upgrades only by hand:** Google's apt source isn't in unattended-upgrades' allowed
   origins.
 

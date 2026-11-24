@@ -1,10 +1,11 @@
 import { cookies } from 'next/headers';
-import { COOKIE_NAME, isValidDashboardSession } from './dashboard-auth';
+import { COOKIE_NAME, dashboardSessionKind, type SessionKind } from './dashboard-auth';
 
-/** Server components: does this request carry a valid dashboard cookie? */
-export async function isAuthenticated(): Promise<boolean> {
+/** Server components: which session does this request carry ('full', 'kiosk', or null)? */
+export async function currentSession(): Promise<SessionKind | null> {
   const cookieStore = await cookies();
-  return isValidDashboardSession(cookieStore.get(COOKIE_NAME)?.value);
+  return dashboardSessionKind(cookieStore.get(COOKIE_NAME)?.value);
 }
 
 export { COOKIE_NAME };
+export type { SessionKind };

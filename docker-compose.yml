@@ -596,6 +596,8 @@ services:
       # Client code hits same-origin /api/proxy/* which the Next.js server forwards here.
       - ORCHESTRATOR_URL=http://orchestrator:${SERVICE_ORCHESTRATOR_PORT:-8888}
       - DASHBOARD_TOKEN=${DASHBOARD_TOKEN:-}
+      # Optional read-only kiosk session (frontend/src/lib/kiosk-session.ts); empty = off.
+      - KIOSK_TOKEN=${KIOSK_TOKEN:-}
       - API_TOKEN=${API_TOKEN:?API_TOKEN must be set in .env}
       # Next.js standalone listens on $HOSTNAME, which Docker sets to the
       # container id. With two networks that resolves to ONE of the two IPs,

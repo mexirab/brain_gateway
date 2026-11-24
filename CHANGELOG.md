@@ -4,6 +4,36 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Read-only kiosk session for the closet dashboard (2026-11-24)
+
+Stacked on `feat/jupiter-kiosk`. The closet kiosk logged in with the phone's own session cookie (HMAC of `DASHBOARD_TOKEN`): it opened every page and every proxied write, and could only be revoked by logging the phone out too. It now gets its own read-only session.
+
+### Operator steps
+- Other installs: none. `KIOSK_TOKEN` unset = kiosk sessions off; nothing changes for the phone or `/login`.
+- Jupiter, **before this deploys**: add `KIOSK_TOKEN` (≥ 24 chars, not `DASHBOARD_TOKEN`) to `.env`, so the deploy's frontend recreate picks it up (else `docker compose up -d --force-recreate frontend` afterwards). Then, after the deploy: `sudo python3 -I scripts/jupiter-kiosk/make_logins.py`, straight away `sudo install -m 755 scripts/jupiter-kiosk/kiosk.py /usr/local/lib/jupiter-kiosk/ && sudo systemctl restart jupiter-kiosk`, and a SIGUSR1 snapshot. `scripts/jupiter-kiosk/README.md` → Secrets → Moving a kiosk off the old master cookie.
+
+### Frontend
+- `src/lib/dashboard-auth.ts`: second session kind on the same `brain_token` cookie, HMAC-SHA256(`KIOSK_TOKEN`, `brain-gateway-kiosk-session-v1`); `dashboardSessionKind()` → `'full' | 'kiosk' | null`; `isValidDashboardSession()` now means full only. Kiosk sessions off unless `KIOSK_TOKEN` ≥ 24 chars, ≠ `DASHBOARD_TOKEN`, and `DASHBOARD_TOKEN` valid. `KIOSK_TOKEN` is not a login password.
+- New `src/lib/kiosk-session.ts`: allow-list. Pages: `/dashboard` only (middleware answers other protected paths with a plain-text 403). Proxy: the 14 exact GETs (path + query) the dashboard page makes; anything else, and every write, is `403 {"error":"Not allowed for this screen"}` before any fetch, logged `[PROXY] Kiosk session refused` (route + method).
+- `(private)/layout.tsx` hides the sidebar + tab bar for a kiosk session (`lib/auth.ts` `currentSession()` replaces `isAuthenticated()`). Compose passes `KIOSK_TOKEN=${KIOSK_TOKEN:-}` to the frontend; `.env.example` documents it.
+
+### Kiosk (`scripts/jupiter-kiosk/`)
+- `make_logins.py` derives the kiosk cookie from `KIOSK_TOKEN` (same rules as the frontend) and writes only `dashboard_kiosk_session`; before writing, the live frontend must answer 200 on `/dashboard` and 403 on `/chat` and `/api/proxy/api/inbox`.
+- `kiosk.py` sets `dashboard_kiosk_session` as the cookie and refuses to start while `secrets.json` still holds the old `dashboard_session`.
+
+### Verified
+- A frontend image built from this branch, with throwaway `DASHBOARD_TOKEN`/`KIOSK_TOKEN` and the live orchestrator: kiosk cookie → `/dashboard` 200, 11 other pages 403, the 14 dashboard GETs 200, 7 other GETs 403, 7 writes 403; full cookie unchanged. `make_logins.py`'s check (as root) passes the kiosk cookie and refuses the full one.
+- The live kiosk, temporarily pointed at that image through `tailscale serve :3444` with the new `kiosk.py` + a kiosk-session `secrets.json`: SIGUSR1 snapshot showed all ten dashboard cards with data and no menus, and the frontend logged no refused calls. Then restored (original files, kiosk restarted, `:3444` off, container stopped). The live kiosk stays on the master cookie until the steps above run after the deploy.
+
+### Tests
+- Frontend: `src/lib/kiosk-session.test.tsx` (new: allow-list + renders the dashboard page and compares its calls with `KIOSK_PROXY_GETS`), `dashboard-auth.test.ts`, `middleware.test.ts`, `app/api/proxy/[...path]/route.test.ts`, `(private)/layout.test.tsx` cover both kinds.
+- `orchestrator/tests/test_jupiter_kiosk_logins.py` + `test_jupiter_kiosk.py`: kiosk cookie derivation and refusals, the 200/403/403 check, the new secrets key and the refusal of the old one.
+
+### Docs
+- `scripts/jupiter-kiosk/README.md` (Secrets, Install, Security → known limits), `docs/FRONTEND.md` → Auth, `docs/ENV_VARS.md` (`KIOSK_TOKEN`).
+
+---
+
 ## [Unreleased] — Closet kiosk: X in its own network namespace (2026-11-24)
 
 Branch `claude/compassionate-curran-979c3d`. The NVIDIA X driver always binds an abstract sideband socket (`@tmp/nvidia-xdriver-*`), and abstract sockets belong to a network namespace, so every process in the host's (the host-networked Home Assistant and Pi-hole containers included) could send to it: the first known limit of the entry below, now closed. Live on Jupiter since 2026-11-24 (verified: `ss -xl | grep nvidia-xdriver` prints nothing on the host or inside the HA container; Chrome GL still on the display card; both screens render). Authoritative doc: `scripts/jupiter-kiosk/README.md`.

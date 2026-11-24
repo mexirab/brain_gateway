@@ -4,7 +4,7 @@ import Sidebar from '@/components/layout/Sidebar';
 import SessionExpiredWatcher from '@/components/providers/SessionExpiredWatcher';
 import ServiceWorkerRegistrar from '@/components/providers/ServiceWorkerRegistrar';
 import { SWRProvider } from '@/components/providers/SWRProvider';
-import { isAuthenticated } from '@/lib/auth';
+import { currentSession } from '@/lib/auth';
 import { getAssistantName } from '@/lib/branding.server';
 import { isKioskDisplayRequest } from '@/lib/display-mode.server';
 import { getFeatureFlags } from '@/lib/features.server';
@@ -17,11 +17,15 @@ export default async function PrivateLayout({
   // Defense in depth: middleware.ts is the real gate, but a page added under
   // (private)/ without a PROTECTED_PATHS/matcher entry still fails closed here
   // (minus the ?redirect= middleware would add — the layout can't see the path).
-  if (!(await isAuthenticated())) redirect('/login');
+  // A kiosk session may only reach /dashboard; middleware.ts enforces that per path.
+  const session = await currentSession();
+  if (session === null) redirect('/login');
 
   const [flags, appName] = await Promise.all([getFeatureFlags(), getAssistantName()]);
   // Display-only screens (the closet kiosk) get the page without either menu. See lib/display-mode.ts.
-  const kiosk = isKioskDisplayRequest();
+  // A kiosk session always does: its menus would only link to pages it can't open, and the Chat
+  // badge would poll a proxy path it isn't allowed.
+  const kiosk = session === 'kiosk' || isKioskDisplayRequest();
 
   return (
     // SWRProvider wraps the nav too, so the Chat badge gets the app's
