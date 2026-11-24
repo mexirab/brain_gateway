@@ -6,12 +6,14 @@ INPUT allow-list for traffic from Docker bridges to the host itself
 No root, iptables or docker: the module's single `run()` seam is replaced by an
 in-memory Host that models what the script uses of the real CLIs:
 
-- docker `network ls -q --no-trunc --filter driver=bridge` and
+- docker `network ls -q --no-trunc --filter driver=bridge`,
   `network inspect <ids>` (exit 1 plus the networks it did find when one
-  vanished in between, like the real CLI),
-- iptables / ip6tables `-w` with -S / -C / -I / -D / -F / -X / -L, per family.
-  Like the kernel: -I to a chain that doesn't exist fails, -X of a chain that is
-  still referenced or not empty fails,
+  vanished in between, like the real CLI; IPAM subnets included) and
+  `network ls --format '{{.Driver}} {{.Name}}'`,
+- iptables / ip6tables `-w` with -S / -C / -I / -D / -F / -X / -L, per family,
+  on INPUT and FORWARD (FORWARD starts as Docker + tailscaled leave it). Like the
+  kernel: -I to a chain that doesn't exist fails, -X of a chain that is still
+  referenced or not empty fails,
 - `*-restore -w --noflush`: parsed strictly (*filter, `:CHAIN - [0:0]`, -A lines
   with balanced quotes, COMMIT + newline), applied atomically, counters reset.
   A restore WITHOUT --noflush would wipe Docker's own rules on the real host:
@@ -64,6 +66,10 @@ NO_CHAIN = "iptables: No chain/target/match by that name."
 LOCKED = "Another app is currently holding the xtables lock."
 BUILTIN_TARGETS = {"ACCEPT", "DROP", "RETURN", "REJECT", "LOG"}
 TS_JUMP = ("-j", "ts-input")  # tailscaled's INPUT jump
+TS_FWD = ("-j", "ts-forward")  # tailscaled's FORWARD jump
+DOCKER_FWD = [("-j", "DOCKER-USER"), ("-j", "DOCKER-FORWARD"), TS_FWD]  # FORWARD as Docker 29 + tailscaled leave it
+FOREIGN_CHAINS = ("ts-input", "ts-forward", "DOCKER-USER", "DOCKER-FORWARD")
+FWD4, FWD6 = jdi.FWD4, jdi.FWD6
 
 
 def _cfg(mode="observe", extra=""):
@@ -76,13 +82,18 @@ def _net_id(name):
     return hashlib.sha256(name.encode()).hexdigest()
 
 
-def _jump(fam, iface):
-    """One of our INPUT jumps as `iptables -S INPUT` lists it (without `-A INPUT`)."""
-    return ("-i", iface, "-m", "comment", "--comment", "jess-docker-input", "-j", FAM[fam].chain)
+def _jump(fam, iface, hook=None):
+    """One of our jumps as `iptables -S INPUT|FORWARD` lists it (without `-A INPUT`)."""
+    return ("-i", iface, "-m", "comment", "--comment", "jess-docker-input", "-j", (hook or FAM[fam]).chain)
 
 
-def _ours(fam):
-    return {_jump(fam, "br-+"), _jump(fam, "docker0")}
+def _ours(fam, hook=None):
+    return {_jump(fam, "br-+", hook), _jump(fam, "docker0", hook)}
+
+
+def _subnet(name):
+    h = hashlib.sha256(name.encode()).digest()
+    return f"10.{h[0]}.{h[1]}.0/24"
 
 
 def _target(rule):
@@ -95,6 +106,11 @@ def _q(tok):
 
 def _rules(rs):
     return [line for line in rs.text.split("\n") if line.startswith("-A ")]
+
+
+def _main(rs):
+    """Only the hook's main chain (the one the jumps point at)."""
+    return [r for r in _rules(rs) if r.startswith(f"-A {rs.family.chain} ")]
 
 
 def _rule(rs, comment):
@@ -110,7 +126,8 @@ def _rule(rs, comment):
 class Host:
     def __init__(self):
         self.input = {f: [TS_JUMP] for f in FAM}  # INPUT rules as token tuples, in order
-        self.chains = {f: {"ts-input": []} for f in FAM}  # user chain -> ["-A CHAIN ..."]
+        self.forward = {f: list(DOCKER_FWD) for f in FAM}  # FORWARD rules, likewise
+        self.chains = {f: {c: [] for c in FOREIGN_CHAINS} for f in FAM}  # user chain -> ["-A CHAIN ..."]
         self.counters = {f: {} for f in FAM}  # rule comment -> packet count
         self.networks: dict[str, dict] = {}  # id -> docker inspect dict
         self.journal = ""
@@ -121,12 +138,16 @@ class Host:
         self.unexpected: list[tuple[str, ...]] = []
 
     # -- docker ----------------------------------------------------------
-    def add_network(self, name, bridge_name=None, *, ipv6=False, driver="bridge", net_id=None):
+    def add_network(self, name, bridge_name=None, *, ipv6=False, driver="bridge", net_id=None, subnets=None):
         nid = net_id or _net_id(name)
         opts = {"com.docker.network.bridge.enable_icc": "true"}
         if bridge_name is not None:
             opts["com.docker.network.bridge.name"] = bridge_name
-        self.networks[nid] = {"Name": name, "Id": nid, "Driver": driver, "EnableIPv6": ipv6, "Options": opts}
+        subnets = [_subnet(name)] if subnets is None else subnets
+        ipam = {"Driver": "default", "Config": [{"Subnet": s} for s in subnets]}
+        self.networks[nid] = {
+            "Name": name, "Id": nid, "Driver": driver, "EnableIPv6": ipv6, "Options": opts, "IPAM": ipam,
+        }  # fmt: skip
         return nid
 
     def drop_network(self, name):
@@ -134,17 +155,28 @@ class Host:
             del self.networks[nid]
 
     # -- views -----------------------------------------------------------
-    def input_lines(self, fam):
-        return ["-A INPUT " + " ".join(_q(t) for t in rule) for rule in self.input[fam]]
+    def builtin(self, fam, name):
+        return {"INPUT": self.input, "FORWARD": self.forward}[name][fam]
 
-    def top2(self, fam):
-        return set(self.input[fam][:2])
+    def builtin_lines(self, fam, name):
+        return [f"-A {name} " + " ".join(_q(t) for t in rule) for rule in self.builtin(fam, name)]
+
+    def input_lines(self, fam):
+        return self.builtin_lines(fam, "INPUT")
+
+    def top2(self, fam, name="INPUT"):
+        return set(self.builtin(fam, name)[:2])
+
+    def refs(self, fam, name):
+        rules = [*self.input[fam], *self.forward[fam]]
+        rules += [tuple(shlex.split(r)) for body in self.chains[fam].values() for r in body]
+        return sum(1 for r in rules if _target(r) == name)
 
     def chain_text(self, fam):
         return "\n".join(self.chains[fam].get(FAM[fam].chain, []))
 
     def state(self):
-        return copy.deepcopy((self.input, self.chains))
+        return copy.deepcopy((self.input, self.forward, self.chains))
 
     def restored(self):
         return [fam for fam, _ in self.restores]
@@ -193,6 +225,9 @@ class Host:
         if args == ("network", "ls", "-q", "--no-trunc", "--filter", "driver=bridge"):
             ids = "".join(f"{nid}\n" for nid, n in self.networks.items() if n["Driver"] == "bridge")
             return self._injected("docker", "docker ls") or (0, ids, "")
+        if args == ("network", "ls", "--format", "{{.Driver}} {{.Name}}"):
+            lines = "".join(f"{n['Driver']} {n['Name']}\n" for n in self.networks.values())
+            return self._injected("docker", "docker ls", "docker drivers") or (0, lines, "")
         if args[:2] == ("network", "inspect") and len(args) > 2:
             hit = self._injected("docker", "docker inspect")
             if hit:
@@ -212,24 +247,25 @@ class Host:
         chains = self.chains[fam]
         if op == "-S" and len(rest) == 1:
             name = rest[0]
-            if name == "INPUT":
-                return 0, "\n".join(["-P INPUT ACCEPT", *self.input_lines(fam)]) + "\n", ""
+            if name in ("INPUT", "FORWARD"):
+                policy = "ACCEPT" if name == "INPUT" else "DROP"
+                return 0, "\n".join([f"-P {name} {policy}", *self.builtin_lines(fam, name)]) + "\n", ""
             if name in chains:
                 return 0, "\n".join([f"-N {name}", *chains[name]]) + "\n", ""
             return 1, "", NO_CHAIN
-        if op in ("-C", "-D") and rest[0] == "INPUT":
-            rule = tuple(rest[1:])
-            if rule not in self.input[fam]:
+        if op in ("-C", "-D") and rest[0] in ("INPUT", "FORWARD"):
+            rule, rules = tuple(rest[1:]), self.builtin(fam, rest[0])
+            if rule not in rules:
                 return 1, "", "iptables: Bad rule (does a matching rule exist in that chain?)."
             if op == "-D":
-                self.input[fam].remove(rule)  # first match, like iptables
+                rules.remove(rule)  # first match, like iptables
             return 0, "", ""
-        if op == "-I" and rest[:2] == ("INPUT", "1"):
+        if op == "-I" and rest[0] in ("INPUT", "FORWARD") and rest[1:2] == ("1",):
             rule = tuple(rest[2:])
             target = _target(rule)
             if target not in chains and target not in BUILTIN_TARGETS:
                 return 2, "", f"iptables v1.8.10 (nf_tables): Chain '{target}' does not exist"
-            self.input[fam].insert(0, rule)
+            self.builtin(fam, rest[0]).insert(0, rule)
             return 0, "", ""
         if op == "-F" and len(rest) == 1:
             if rest[0] not in chains:
@@ -242,7 +278,7 @@ class Host:
                 return 1, "", NO_CHAIN
             if chains[name]:
                 return 1, "", "iptables: Directory not empty."
-            if any(_target(r) == name for r in self.input[fam]):
+            if self.refs(fam, name):
                 return 1, "", "iptables: Too many links."
             del chains[name]
             return 0, "", ""
@@ -253,7 +289,7 @@ class Host:
         return self._unexpected(FAM[fam].iptables, args)
 
     def _listing(self, fam, name):
-        refs = sum(1 for r in self.input[fam] if _target(r) == name)
+        refs = self.refs(fam, name)
         lines = [
             f"Chain {name} ({refs} references)",
             "    pkts      bytes target     prot opt in     out     source               destination",
@@ -294,7 +330,7 @@ class Host:
 @pytest.fixture
 def host(monkeypatch):
     h = Host()
-    h.add_network("bridge", "docker0")
+    h.add_network("bridge", "docker0", subnets=["172.17.0.0/16"])
     h.add_network(HOSTACC, "br-jess-hostacc")
     h.add_network(SCRAPE, "br-jess-scrape")
     h.add_network(GWNET)
@@ -303,12 +339,26 @@ def host(monkeypatch):
     h.add_network("host", driver="host")
     h.add_network("none", driver="null")
     monkeypatch.setattr(jdi, "run", h.run)
+    monkeypatch.setattr(jdi, "default_gateway", lambda: "10.0.0.1")
     yield h
     assert not h.unexpected, f"script ran commands the fake does not model (or a flushing restore): {h.unexpected}"
 
 
+def _input_only(text):
+    """The repo config with the FORWARD chains off: the INPUT-path tests below predate them."""
+    return re.sub(r"(?m)^forward-mode \S+", "forward-mode off", text)
+
+
 @pytest.fixture
 def conf(tmp_path):
+    path = tmp_path / "jess-docker-input.conf"
+    path.write_text(_input_only(_REPO_CONF.read_text()))
+    return path
+
+
+@pytest.fixture
+def fconf(tmp_path):
+    """The repo config as shipped (forward-mode observe)."""
     path = tmp_path / "jess-docker-input.conf"
     path.write_text(_REPO_CONF.read_text())
     return path
@@ -330,6 +380,12 @@ def _metrics(mdir):
     return out
 
 
+def _render_live(path):
+    """What the watcher renders: the config at `path` against the fake host's networks."""
+    nets = jdi.docker_networks()
+    return jdi.render(jdi.load_config(path), nets.bridges, nets.subnets)
+
+
 def _apply_all(cfg=None, bridges=None):
     for rs in jdi.render(cfg or _cfg(), BRIDGES if bridges is None else bridges).rulesets:
         jdi.apply_ruleset(rs)
@@ -346,6 +402,18 @@ def test_parse_repo_config():
     by_net = {a.network: a for a in cfg.allows}
     assert by_net[HOSTACC] == jdi.Allow(HOSTACC, "tcp", (8004, 8053, 8123, 8888))
     assert by_net[SCRAPE] == jdi.Allow(SCRAPE, "tcp", (5050, 8004, 9100, 9400, 19999))
+    assert cfg.forward_mode == "observe"
+    fwd = set(cfg.forwards)
+    # default-bridge DNS (docker run, image builds) is the only router line
+    assert jdi.Forward("bridge", "10.0.0.1", "udp", (53,)) in fwd
+    assert jdi.Forward("bridge", "10.0.0.1", "tcp", (53,)) in fwd
+    assert {f.network for f in fwd if f.dest == "10.0.0.1"} == {"bridge"}
+    assert jdi.Forward(HOSTACC, "10.0.0.195", "tcp", (8003, 8004, 8080)) in fwd
+    assert jdi.Forward(SCRAPE, "10.0.0.195", "tcp", (8003, 8004, 8080, 9100, 9199, 9400, 19999)) in fwd
+    assert not [f for f in fwd if f.dest.startswith("100.")], "nothing may allow the tailnet"
+    # the public repo copy carries no satellite addresses (6053 lines are commented out)
+    assert not [f for f in fwd if 6053 in f.ports]
+    assert jdi.parse_config(_REPO_CONF.read_text(), "10.0.0.1") == cfg  # the router check passes
 
 
 def test_parse_accepts_and_normalizes():
@@ -492,16 +560,26 @@ def test_only_validated_tokens_reach_rendered_text():
 
 
 @pytest.mark.parametrize("mode", jdi.MODES)
-def test_render_frame(mode):
-    for rs in jdi.render(_cfg(mode), BRIDGES).rulesets:
-        chain = rs.family.chain
+@pytest.mark.parametrize("fmode", jdi.FORWARD_MODES)
+def test_render_frame(mode, fmode):
+    cfg = _cfg(mode, f"forward-mode {fmode}\nforward {SCRAPE} 10.0.0.195 tcp 8080\n")
+    rendered = jdi.render(cfg, BRIDGES, {HOSTACC: "10.9.1.0/24"})
+    assert [rs.family for rs in rendered.rulesets] == list(jdi.HOOKS if fmode != "off" else jdi.FAMILIES)
+    assert rendered.absent == (() if fmode != "off" else jdi.FORWARD_HOOKS)
+    for rs in rendered.rulesets:
+        chains = rs.family.chains
         lines = rs.text.split("\n")
-        assert lines[:2] == ["*filter", f":{chain} - [0:0]"]
+        n = len(chains)
+        assert lines[: n + 1] == ["*filter", *(f":{c} - [0:0]" for c in chains)]
         assert lines[-2:] == ["COMMIT", ""]
-        body = lines[2:-2]
-        assert all(line.startswith(f"-A {chain} ") for line in body)
+        body = lines[n + 1 : -2]
+        owners = [line.split()[1] for line in body]
+        assert all(line.startswith("-A ") for line in body) and set(owners) <= set(chains)
+        assert owners == sorted(owners, key=chains.index), "each chain's rules are contiguous, main chain first"
+        assert rs.counts == tuple((c, owners.count(c)) for c in chains)
         assert rs.rule_count == len(body) == len(_rules(rs))
         assert re.fullmatch(r"[0-9a-f]{12}", rs.digest)
+        assert sum(f"jess-docker-input {rs.digest}" in line for line in body) == 1
         first = body[0]
         assert "-m conntrack --ctstate RELATED,ESTABLISHED --ctdir REPLY" in first
         assert f'-m comment --comment "jess-docker-input {rs.digest}"' in first
@@ -520,7 +598,7 @@ def test_render_observe_blocks_nothing():
 
 def test_render_enforce_rejects_the_rest():
     v4, v6 = jdi.render(_cfg("enforce"), BRIDGES).rulesets
-    r4 = _rules(v4)
+    r4 = _main(v4)
     assert r4[-2:] == [f"-A {V4_CHAIN} -p tcp -j REJECT --reject-with tcp-reset", f"-A {V4_CHAIN} -j DROP"]
     assert _rules(v6)[-1] == f"-A {V6_CHAIN} -j DROP"
     assert "REJECT" not in v6.text
@@ -755,9 +833,9 @@ def test_sync_applies_then_leaves_healthy_chains(host, conf, mdir):
     w = jdi.Watcher(conf, mdir)
     w.sync()
     assert host.restored() == ["ipv4", "ipv6"]
-    for fam, rs in zip(FAM, jdi.render(jdi.load_config(conf), jdi.docker_networks().bridges).rulesets, strict=True):
+    for fam, rs in zip(FAM, _render_live(conf).rulesets, strict=True):
         assert host.top2(fam) == _ours(fam)
-        assert host.chain_text(fam) == "\n".join(_rules(rs))
+        assert host.chain_text(fam) == "\n".join(_main(rs))
     m = _metrics(mdir)
     assert m["jess_docker_input_check_ok"] == "1"
     assert m["jess_docker_input_enforcing"] == "0"
@@ -792,7 +870,7 @@ def test_sync_detects_rule_replaced_in_place(host, conf, mdir):
     rules = host.chains["ipv4"][V4_CHAIN]
     allow = next(i for i, r in enumerate(rules) if "jess allow" in r)
     rules[allow] = rules[allow].replace("--dports 8004,8053,8123,8888", "--dports 1-65535")
-    assert jdi.chain_in_sync(jdi.render(jdi.load_config(conf), jdi.docker_networks().bridges).rulesets[0])
+    assert jdi.chain_in_sync(_render_live(conf).rulesets[0])
     w.sync()
     assert host.restored() == ["ipv4", "ipv6", "ipv4"]
     assert "--dports 1-65535" not in host.chain_text("ipv4")
@@ -849,7 +927,7 @@ def test_sync_reports_uncovered_once(host, conf, mdir, capsys):
     w.sync()
     w.sync()
     assert _metrics(mdir)["jess_docker_input_networks_uncovered"] == "1"
-    assert capsys.readouterr().err.count("bridge networks the jumps do not cover: v6net") == 1
+    assert capsys.readouterr().err.count("networks the chains do not cover: v6net") == 1
 
 
 def _break_config(host, conf):
@@ -909,7 +987,7 @@ def test_sync_logs_each_problem_once(host, conf, mdir, capsys):
     w.sync()
     w.sync()
     del host.fail["docker"]
-    conf.write_text(_REPO_CONF.read_text())
+    conf.write_text(_input_only(_REPO_CONF.read_text()))
     w.sync()
     w.sync()
     assert _metrics(mdir)["jess_docker_input_check_ok"] == "1"
@@ -979,7 +1057,13 @@ def test_watcher_metrics_counters(host, conf, mdir):
     assert m['jess_docker_input_unmatched_packets_total{family="ipv6"}'] == "3"
     assert m['jess_docker_input_logged_packets_total{family="ipv6"}'] == "0"
     assert m[f'jess_docker_input_info{{sha256="{hashlib.sha256(_SCRIPT.read_bytes()).hexdigest()[:12]}"}}'] == "1"
-    assert set(jdi.METRICS) == {k.split("{")[0] for k in m}
+    forward_only = {
+        "jess_docker_input_forward_unmatched_packets_total",
+        "jess_docker_input_forward_logged_packets_total",
+    }
+    assert set(jdi.METRICS) - forward_only == {k.split("{")[0] for k in m}  # forward-mode off
+    assert m['jess_docker_input_spoofed_packets_total{path="input"}'] == "0"
+    assert m["jess_docker_input_forward_active"] == "0"
 
 
 class _OsSpy:
@@ -1172,13 +1256,13 @@ def test_summary_groups_by_network(host):
     hostacc_tcp = tcp.replace("IN=br-1f56b9570309", "IN=br-jess-hostacc")
     host.journal = "\n".join([tcp, tcp, hostacc_tcp, icmp, udp, v6, "unrelated kernel line"]) + "\n"
     out = jdi.summary(6).splitlines()
-    assert out[0].split() == ["count", "family", "kind", "from", "network", "to", "proto", "port"]
+    assert out[0].split() == ["count", "path", "kind", "from", "network", "to", "proto", "port"]
     rows = [row.split() for row in out[1:]]
-    assert rows[0] == ["2", "ipv4", "observe", "br-1f56b9570309", "172.25.0.1", "TCP", "22"]  # most common first
-    assert ["1", "ipv4", "observe", HOSTACC, "172.25.0.1", "TCP", "22"] in rows  # bridge mapped back to its network
-    assert ["1", "ipv4", "reject", HOSTACC, "172.30.0.1", "ICMP", "-"] in rows
-    assert ["1", "ipv4", "observe", "bridge", "172.17.0.1", "UDP", "53"] in rows
-    assert ["1", "ipv6", "observe", "br-1f56b9570309", "fe80:0000:0000:0000:0042:acff:fe19:0001", "TCP", "445"] in rows
+    assert rows[0] == ["2", "in", "observe", "br-1f56b9570309", "172.25.0.1", "TCP", "22"]  # most common first
+    assert ["1", "in", "observe", HOSTACC, "172.25.0.1", "TCP", "22"] in rows  # bridge mapped back to its network
+    assert ["1", "in", "reject", HOSTACC, "172.30.0.1", "ICMP", "-"] in rows
+    assert ["1", "in", "observe", "bridge", "172.17.0.1", "UDP", "53"] in rows
+    assert ["1", "in6", "observe", "br-1f56b9570309", "fe80:0000:0000:0000:0042:acff:fe19:0001", "TCP", "445"] in rows
     assert len(rows) == 5
     (journal_call,) = [c for c in host.calls if c[0] == jdi.JOURNALCTL]
     assert "--since=-6h" in journal_call and "-k" in journal_call
@@ -1189,4 +1273,451 @@ def test_summary_without_docker_or_lines(host):
     host.journal = _KLOG_LINES[1].values[0] + "\n"
     assert "br-jess-hostacc" in jdi.summary(24)  # raw interface when docker can't map it
     host.journal = ""
-    assert jdi.summary(24) == "no jess-docker-in log lines in the last 24 h"
+    assert jdi.summary(24) == "no jess-docker log lines in the last 24 h"
+
+
+# --------------------------------------------------------------------------
+# 9. FORWARD chains (forward-mode, forward lines) and the source check
+#    (docs/internal/CONTAINER_LAN_REACHABILITY.md)
+# --------------------------------------------------------------------------
+
+_FWD_M = "mode observe\nforward-mode observe\n"
+
+
+def _fcfg(fmode="observe", mode="observe", extra=""):
+    return jdi.parse_config(
+        f"mode {mode}\nforward-mode {fmode}\n"
+        f"forward {HOSTACC} 10.0.0.195 tcp 8003,8080\n"
+        f"forward {SCRAPE} 10.0.0.248 tcp 8777\n"
+        f"forward bridge 10.0.0.1 udp 53\n{extra}",
+        "10.0.0.1",
+    )
+
+
+FBRIDGES = {**BRIDGES, "bridge": "docker0"}
+FSUBNETS = {HOSTACC: "10.9.1.0/24", SCRAPE: "10.9.2.0/24", "bridge": "172.17.0.0/16"}
+
+
+def _fwd(rendered):
+    v4, v6 = rendered.rulesets[2:]
+    assert (v4.family, v6.family) == (FWD4, FWD6)
+    return v4, v6
+
+
+def test_parse_forward_lines():
+    cfg = _fcfg(extra="forward n 10.0.1.0/24 tcp 6053\nforward n 100.100.1.0/24 udp 0053,53\n")
+    assert cfg.forward_mode == "observe"
+    assert cfg.forwards[0] == jdi.Forward(HOSTACC, "10.0.0.195", "tcp", (8003, 8080))  # /32 written as an address
+    assert cfg.forwards[-2] == jdi.Forward("n", "10.0.1.0/24", "tcp", (6053,))
+    assert cfg.forwards[-1] == jdi.Forward("n", "100.100.1.0/24", "udp", (53,))
+    assert jdi.parse_config("mode observe\n").forward_mode == "off"  # a config without the line keeps working
+    assert jdi.parse_config("mode observe\nforward n 10.0.0.195/32 tcp 1\n").forwards[0].dest == "10.0.0.195"
+
+
+_BAD_FORWARD = [
+    pytest.param(_FWD_M + "forward-mode on\n", id="fmode-unknown"),
+    pytest.param(_FWD_M + "forward-mode off\n", id="fmode-twice"),
+    pytest.param("mode observe\nforward-mode\n", id="fmode-no-value"),
+    pytest.param(_FWD_M + "forward n 10.0.0.5 tcp\n", id="four-words"),
+    pytest.param(_FWD_M + "forward n 10.0.0.5 tcp 80 x\n", id="six-words"),
+    pytest.param(_FWD_M + "forward n;x 10.0.0.5 tcp 80\n", id="bad-network"),
+    pytest.param(_FWD_M + "forward n 10.0.0.5 icmp 80\n", id="bad-proto"),
+    pytest.param(_FWD_M + "forward n 10.0.0.5 tcp 0\n", id="port-0"),
+    pytest.param(_FWD_M + "forward n 10.0.0.5 tcp 80,\n", id="port-trailing-comma"),
+    pytest.param(_FWD_M + "forward n 10.0.0.0/23 tcp 80\n", id="prefix-too-short"),
+    pytest.param(_FWD_M + "forward n 0.0.0.0/0 tcp 80\n", id="everything"),
+    pytest.param(_FWD_M + "forward n 10.0.0.5/24 tcp 80\n", id="host-bits"),
+    pytest.param(_FWD_M + "forward n 10.0.0.256 tcp 80\n", id="octet-256"),
+    pytest.param(_FWD_M + "forward n 010.0.0.5 tcp 80\n", id="leading-zero"),
+    pytest.param(_FWD_M + "forward n 10.0.0 tcp 80\n", id="three-octets"),
+    pytest.param(_FWD_M + "forward n 10.0.0.5/33 tcp 80\n", id="prefix-33"),
+    pytest.param(_FWD_M + "forward n fd00::1 tcp 80\n", id="ipv6"),
+    pytest.param(_FWD_M + "forward n example.com tcp 80\n", id="hostname"),
+    pytest.param(_FWD_M + "forward n 1.1.1.1 tcp 443\n", id="public-address"),
+    pytest.param(_FWD_M + "forward n 10.0.0.1 tcp 80\n", id="router-admin"),
+    pytest.param(_FWD_M + "forward n 10.0.0.1 udp 53,5351\n", id="router-natpmp"),
+    pytest.param(_FWD_M + "forward n 10.0.0.0/24 udp 5351\n", id="router-via-subnet"),
+]
+
+
+@pytest.mark.parametrize("text", _BAD_FORWARD)
+def test_parse_forward_rejects(text):
+    with pytest.raises(jdi.ConfigError, match=r"^line \d+: "):
+        jdi.parse_config(text, "10.0.0.1")
+
+
+def test_parse_router_check_needs_the_gateway():
+    text = "mode observe\nforward n 10.0.0.1 tcp 80\n"
+    with pytest.raises(jdi.ConfigError, match="router"):
+        jdi.parse_config(text, "10.0.0.1")
+    assert jdi.parse_config(text, None).forwards  # gateway unknown: no router check
+    assert jdi.parse_config("mode observe\nforward n 10.0.0.0/24 tcp 53\n", "10.0.0.1").forwards  # DNS is fine
+
+
+def test_load_config_reads_the_gateway(tmp_path, monkeypatch):
+    monkeypatch.setattr(jdi, "default_gateway", lambda: "10.0.0.1")
+    path = tmp_path / "c.conf"
+    path.write_text("mode observe\nforward n 10.0.0.1 tcp 443\n")
+    with pytest.raises(jdi.ConfigError, match="router"):
+        jdi.load_config(path)
+
+
+def test_default_gateway(tmp_path, monkeypatch):
+    route = tmp_path / "route"
+    route.write_text(
+        "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
+        "br-x\t00001AAC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n"
+        "enp7s0\t00000000\t0100000A\t0003\t0\t0\t100\t00000000\t0\t0\t0\n"
+    )
+    monkeypatch.setattr(jdi, "ROUTE_FILE", route)
+    assert jdi.default_gateway() == "10.0.0.1"
+    route.write_text("Iface\tDestination\tGateway\nbr-x\t00001AAC\t00000000\n")
+    assert jdi.default_gateway() is None
+    monkeypatch.setattr(jdi, "ROUTE_FILE", tmp_path / "absent")
+    assert jdi.default_gateway() is None
+
+
+_FWD_ALLOW_RE = re.compile(
+    rf"-A {jdi.FWD_LAN} -i br-0123456789ab -p (tcp|udp) -m conntrack "
+    r"--ctorigdst (10|172|192|100|169)(\.[0-9]{1,3}){3}(/(2[4-9]|3[0-2]))? --ctorigdstport [1-9][0-9]{0,4} "
+    r'-m comment --comment "jess forward [A-Za-z0-9][A-Za-z0-9_.-]{0,127}" -j RETURN'
+)
+_FWD_POSITIONS = [
+    ("net{p}", "10.0.0.5", "tcp", "80"),
+    ("net", "10.0.0.5{p}", "tcp", "80"),
+    ("net", "{p}10.0.0.5", "tcp", "80"),
+    ("net", "10.0.0.0/24{p}", "udp", "80"),
+    ("net", "10.0.0.5", "tcp{p}", "80"),
+    ("net", "10.0.0.5", "udp", "80{p}"),
+]
+
+
+def test_only_validated_tokens_reach_forward_rules():
+    def shape(rs):
+        return {
+            re.sub(r'jess-docker-input [0-9a-f]{12}"', 'jess-docker-input D"', line) for line in rs.text.split("\n")
+        }
+
+    base4, base6 = (shape(rs) for rs in _fwd(jdi.render(jdi.parse_config("mode enforce\nforward-mode enforce\n"), {})))
+    accepted = 0
+    for p in _PAYLOADS:
+        for template in _FWD_POSITIONS:
+            net, dest, proto, ports = (t.replace("{p}", p) for t in template)
+            try:
+                cfg = jdi.parse_config(f"mode enforce\nforward-mode enforce\nforward {net} {dest} {proto} {ports}\n")
+            except jdi.ConfigError:
+                continue
+            accepted += 1
+            v4, v6 = _fwd(jdi.render(cfg, {f.network: "br-0123456789ab" for f in cfg.forwards}))
+            stray = [line for line in shape(v4) - base4 if not _FWD_ALLOW_RE.fullmatch(line)]
+            assert not stray, f"payload {p!r} put unvalidated text into the FORWARD rules: {stray!r}"
+            assert shape(v6) == base6
+    assert accepted >= 3
+
+
+@pytest.mark.parametrize("fmode", ["observe", "enforce"])
+def test_render_forward_order(fmode):
+    v4, v6 = _fwd(jdi.render(_fcfg(fmode), FBRIDGES, FSUBNETS))
+    main = _main(v4)
+    assert "--ctdir REPLY" in main[0]  # answers to LAN clients of published ports, first
+    src = [i for i, r in enumerate(main) if "jess: source" in r]
+    dnat = next(i for i, r in enumerate(main) if "--ctstate DNAT" in r)
+    bridge_return = main.index(f"-A {FWD4.chain} -o br-+ -j RETURN")
+    private = [i for i, r in enumerate(main) if " -d " in r]
+    assert src and max(src) < dnat < bridge_return < min(private), "source check, then published ports, then LAN"
+    assert main[dnat].endswith(f"-j {jdi.FWD_LAN}")
+    assert [r.split(" -d ")[1].split()[0] for r in (main[i] for i in private)] == [str(n) for n in jdi.PRIVATE_V4]
+    assert all(r.endswith(f"-j {jdi.FWD_LAN}") for r in (main[i] for i in private))
+    assert main[-1] == f"-A {FWD4.chain} -d 192.0.0.0/24 -j {jdi.FWD_LAN}"  # nothing after: the internet passes
+    assert f"-A {FWD4.chain} -i docker0 ! -s 172.17.0.0/16 " in main[src[0]]  # sorted by network name: bridge first
+
+
+def test_render_forward_allow_lines_one_per_port():
+    v4, _ = _fwd(jdi.render(_fcfg(), FBRIDGES, FSUBNETS))
+    allows = [r for r in _rules(v4) if "jess forward" in r]
+    assert allows == [
+        f"-A {jdi.FWD_LAN} -i br-jess-hostacc -p tcp -m conntrack --ctorigdst 10.0.0.195 --ctorigdstport 8003 "
+        f'-m comment --comment "jess forward {HOSTACC}" -j RETURN',
+        f"-A {jdi.FWD_LAN} -i br-jess-hostacc -p tcp -m conntrack --ctorigdst 10.0.0.195 --ctorigdstport 8080 "
+        f'-m comment --comment "jess forward {HOSTACC}" -j RETURN',
+        f"-A {jdi.FWD_LAN} -i br-jess-scrape -p tcp -m conntrack --ctorigdst 10.0.0.248 --ctorigdstport 8777 "
+        f'-m comment --comment "jess forward {SCRAPE}" -j RETURN',
+        f"-A {jdi.FWD_LAN} -i docker0 -p udp -m conntrack --ctorigdst 10.0.0.1 --ctorigdstport 53 "
+        f'-m comment --comment "jess forward bridge" -j RETURN',
+    ]
+
+
+def test_render_forward_observe_blocks_nothing():
+    for rs in _fwd(jdi.render(_fcfg("observe", "enforce"), FBRIDGES, FSUBNETS)):
+        targets = {r.rsplit(" -j ", 1)[1].split()[0] for r in _rules(rs) if " -j " in r}
+        assert targets <= {"RETURN", "LOG", jdi.FWD_LAN, jdi.FWD_SPOOF}, targets
+        assert "observe: " in rs.text and "reject: " not in rs.text  # forward-mode, not mode, decides
+
+
+def test_render_forward_enforce():
+    v4, v6 = _fwd(jdi.render(_fcfg("enforce", "observe"), FBRIDGES, FSUBNETS))
+    lan = [r for r in _rules(v4) if r.startswith(f"-A {jdi.FWD_LAN} ")]
+    spoof = [r for r in _rules(v4) if r.startswith(f"-A {jdi.FWD_SPOOF} ")]
+    assert lan[0].endswith("-j DROP") and "--ctstate INVALID" in lan[0]
+    assert lan[-1] == f"-A {jdi.FWD_LAN} -j REJECT --reject-with icmp-admin-prohibited"
+    assert lan[-3].endswith('--comment "jess: fwd unmatched"') and '"jess: fwd logged"' in lan[-2]
+    assert spoof[-1] == f"-A {jdi.FWD_SPOOF} -j DROP"
+    assert _main(v6)[-1] == f"-A {FWD6.chain} -j DROP" and "REJECT" not in v6.text
+    assert '--log-prefix "jess-docker-fwd reject: "' in v4.text
+    assert '--log-prefix "jess-docker-spoof reject: "' in v4.text
+    assert '--log-prefix "jess-docker-fwd6 reject: "' in v6.text
+    in4 = jdi.render(_fcfg("enforce", "observe"), FBRIDGES, FSUBNETS).rulesets[0]
+    assert "-j DROP" not in in4.text and "reject: " not in in4.text  # INPUT still observes
+
+
+def test_render_forward_hashlimit_names_fit():
+    rendered = jdi.render(_fcfg(), FBRIDGES, FSUBNETS)
+    names = set(re.findall(r"--hashlimit-name (\S+)", "".join(rs.text for rs in rendered.rulesets)))
+    assert len(names) == 6 and all(len(n) <= 15 for n in names), names  # xt_hashlimit: 15 chars max
+    prefixes = re.findall(r'--log-prefix "([^"]+)"', "".join(rs.text for rs in rendered.rulesets))
+    assert prefixes and all(len(p) <= 29 for p in prefixes), prefixes  # LOG: 29 chars max
+
+
+def test_render_forward_missing_network():
+    r = jdi.render(_fcfg(), {SCRAPE: "br-jess-scrape"}, {})
+    assert r.missing == (HOSTACC, "bridge")
+    assert "br-jess-hostacc" not in _fwd(r)[0].text
+
+
+def test_render_forward_off():
+    r = jdi.render(_fcfg("off"), FBRIDGES, FSUBNETS)
+    assert [rs.family for rs in r.rulesets] == [IPV4, IPV6]
+    assert r.absent == (FWD4, FWD6)
+    assert r.missing == ()  # forward lines are not looked up while off
+
+
+def test_render_input_source_check():
+    in4 = jdi.render(_cfg(), BRIDGES, {HOSTACC: "10.9.1.0/24", SCRAPE: "10.9.2.0/24"}).rulesets[0]
+    main = _main(in4)
+    src = [i for i, r in enumerate(main) if "jess: source" in r]
+    assert [main[i] for i in src] == [
+        f'-A {V4_CHAIN} -i br-jess-hostacc ! -s 10.9.1.0/24 -m comment --comment "jess: source" -j {jdi.IN_SPOOF}',
+        f'-A {V4_CHAIN} -i br-jess-scrape ! -s 10.9.2.0/24 -m comment --comment "jess: source" -j {jdi.IN_SPOOF}',
+    ]
+    assert src == [1, 2], "right after the reply rule, before INVALID and the allow lines"
+    spoof = [r for r in _rules(in4) if r.startswith(f"-A {jdi.IN_SPOOF} ")]
+    assert spoof[0] == f'-A {jdi.IN_SPOOF} -m comment --comment "jess: spoofed"' and "-j DROP" not in spoof[-1]
+    e4 = jdi.render(_cfg("enforce"), BRIDGES, {HOSTACC: "10.9.1.0/24"}).rulesets[0]
+    assert [r for r in _rules(e4) if r.startswith(f"-A {jdi.IN_SPOOF} ")][-1] == f"-A {jdi.IN_SPOOF} -j DROP"
+    assert (
+        jdi.render(_cfg(), BRIDGES, {HOSTACC: "10.9.1.0/24"}).rulesets[1].text
+        == jdi.render(_cfg(), BRIDGES).rulesets[1].text
+    )  # IPv6 has no source check (and no allow lines)
+
+
+def test_digest_covers_subchains():
+    a = jdi.render(_cfg(), BRIDGES, {HOSTACC: "10.9.1.0/24"}).rulesets[0].digest
+    b = jdi.render(_cfg(), BRIDGES, {HOSTACC: "10.9.3.0/24"}).rulesets[0].digest
+    c = jdi.render(_cfg("enforce"), BRIDGES, {HOSTACC: "10.9.1.0/24"}).rulesets[0].digest
+    assert len({a, b, c}) == 3
+
+
+def test_docker_networks_subnets(host):
+    host.add_network("two", subnets=["10.8.1.0/24", "10.8.2.0/24"])
+    host.add_network("dual", subnets=["10.8.3.0/24", "fd00:1::/64"], ipv6=False)
+    host.add_network("none-v4", subnets=[])
+    host.add_network("bad", subnets=["10.8.4.1/24"])  # host bits: not what Docker prints
+    host.add_network("lan", driver="macvlan")
+    nets = jdi.docker_networks()
+    assert nets.subnets["bridge"] == "172.17.0.0/16"
+    assert nets.subnets[HOSTACC] == _subnet(HOSTACC)
+    assert nets.subnets["dual"] == "10.8.3.0/24"  # the IPv6 subnet is ignored
+    assert sorted(nets.uncovered) == ["bad", "lan", "none-v4", "two"]
+    assert "two" not in nets.subnets and "two" in nets.bridges
+
+
+def test_docker_networks_driver_listing_fails(host):
+    host.fail["docker drivers"] = (1, "", "Cannot connect to the Docker daemon")
+    with pytest.raises(jdi.DockerUnavailable):
+        jdi.docker_networks()
+
+
+def test_ensure_forward_jumps_on_top(host):
+    for rs in _fwd(jdi.render(_fcfg(), FBRIDGES, FSUBNETS)):
+        jdi.load_chain(rs)
+    for fam, hook in (("ipv4", FWD4), ("ipv6", FWD6)):
+        assert jdi.ensure_jumps(hook) is True
+        assert host.top2(fam, "FORWARD") == _ours(fam, hook)
+        assert host.forward[fam][2:] == DOCKER_FWD
+        assert jdi.ensure_jumps(hook) is False
+        # tailscaled restart: ts-forward (-o tailscale0 -j ACCEPT) back at FORWARD 1
+        host.forward[fam].remove(TS_FWD)
+        host.forward[fam].insert(0, TS_FWD)
+        assert jdi.ensure_jumps(hook) is True and host.top2(fam, "FORWARD") == _ours(fam, hook)
+        # dockerd restart: it puts DOCKER-USER back on top
+        host.forward[fam].insert(0, ("-j", "DOCKER-USER"))
+        assert jdi.ensure_jumps(hook) is True and host.top2(fam, "FORWARD") == _ours(fam, hook)
+        assert host.input[fam] == [TS_JUMP], "FORWARD jumps never touch INPUT"
+
+
+def test_sync_forward_observe(host, fconf, mdir, capsys):
+    w = jdi.Watcher(fconf, mdir)
+    w.sync()
+    assert host.restored() == ["ipv4", "ipv6", "ipv4", "ipv6"]
+    for fam, hook in (("ipv4", FWD4), ("ipv6", FWD6)):
+        assert host.top2(fam, "FORWARD") == _ours(fam, hook)
+        assert host.forward[fam][2:] == DOCKER_FWD, "Docker's and tailscaled's FORWARD rules stay, in order"
+    for chain in (FWD4.chain, jdi.FWD_LAN, jdi.FWD_SPOOF):
+        assert host.chains["ipv4"][chain]
+    assert "--ctorigdst 10.0.0.1 --ctorigdstport 53" in "\n".join(host.chains["ipv4"][jdi.FWD_LAN])
+    err = capsys.readouterr().err
+    assert "applied ipv4+ipv6+ipv4-fwd+ipv6-fwd mode=observe allow_rules=" in err
+    assert "forward-mode=observe forward_rules=" in err
+    m = _metrics(mdir)
+    assert m["jess_docker_input_forward_active"] == "1" and m["jess_docker_input_forward_enforcing"] == "0"
+    assert m['jess_docker_input_forward_unmatched_packets_total{family="ipv4"}'] == "0"
+    assert m['jess_docker_input_spoofed_packets_total{path="forward"}'] == "0"
+    assert set(jdi.METRICS) == {k.split("{")[0] for k in m}
+    n = len(host.writes())
+    w.sync()
+    assert len(host.writes()) == n, "healthy FORWARD chains must not be reloaded"
+
+
+def test_sync_forward_repairs_without_reload(host, fconf, mdir, capsys):
+    w = jdi.Watcher(fconf, mdir)
+    w.sync()
+    host.counters["ipv4"][jdi.FWD_UNMATCHED_COMMENT] = 7
+    host.forward["ipv4"].remove(TS_FWD)
+    host.forward["ipv4"].insert(0, TS_FWD)  # tailscaled restarted
+    capsys.readouterr()
+    w.sync()
+    assert host.restored() == ["ipv4", "ipv6", "ipv4", "ipv6"], "a jump repair must not reload a chain"
+    assert host.top2("ipv4", "FORWARD") == _ours("ipv4", FWD4)
+    assert "ipv4-fwd: jumps placed at the top of FORWARD" in capsys.readouterr().err
+    w.metrics()
+    assert _metrics(mdir)['jess_docker_input_forward_unmatched_packets_total{family="ipv4"}'] == "7"
+
+
+def test_sync_forward_subchain_drift_reloads(host, fconf, mdir):
+    w = jdi.Watcher(fconf, mdir)
+    w.sync()
+    lan = host.chains["ipv4"][jdi.FWD_LAN]
+    lan[1] = lan[1].replace("--ctorigdstport 53", "--ctorigdstport 1:65535")  # replaced in place, same count
+    w.sync()
+    assert host.restored()[4:] == ["ipv4"]
+    assert "1:65535" not in "\n".join(host.chains["ipv4"][jdi.FWD_LAN])
+    del host.chains["ipv4"][jdi.FWD_SPOOF][-1]
+    w.sync()
+    assert host.restored()[5:] == ["ipv4"]
+
+
+def test_sync_forward_mode_changes(host, fconf, mdir, capsys):
+    w = jdi.Watcher(fconf, mdir)
+    w.sync()
+    fconf.write_text(fconf.read_text().replace("forward-mode observe", "forward-mode enforce"))
+    w.sync()
+    assert host.chains["ipv4"][jdi.FWD_LAN][-1].endswith("-j REJECT --reject-with icmp-admin-prohibited")
+    assert host.chains["ipv4"][V4_CHAIN][-1] != f"-A {V4_CHAIN} -j DROP", "INPUT stays in observe"
+    assert _metrics(mdir)["jess_docker_input_forward_enforcing"] == "1"
+    input_before = copy.deepcopy((host.input, host.chains["ipv4"][V4_CHAIN], host.chains["ipv6"][V6_CHAIN]))
+    fconf.write_text(fconf.read_text().replace("forward-mode enforce", "forward-mode off"))
+    capsys.readouterr()
+    w.sync()
+    for fam, hook in (("ipv4", FWD4), ("ipv6", FWD6)):
+        assert host.forward[fam] == DOCKER_FWD
+        assert not set(hook.chains) & set(host.chains[fam])
+    assert set(FOREIGN_CHAINS) <= set(host.chains["ipv4"])
+    assert (host.input, host.chains["ipv4"][V4_CHAIN], host.chains["ipv6"][V6_CHAIN]) == input_before
+    err = capsys.readouterr().err
+    assert "ipv4-fwd: chains and jumps removed (forward-mode off)" in err
+    m = _metrics(mdir)
+    assert m["jess_docker_input_forward_active"] == "0"
+    assert "jess_docker_input_forward_unmatched_packets_total" not in "".join(m)
+    n = len(host.writes())
+    w.sync()
+    assert len(host.writes()) == n, "nothing to remove the second time"
+    fconf.write_text(fconf.read_text().replace("forward-mode off", "forward-mode observe"))
+    w.sync()
+    assert host.top2("ipv4", "FORWARD") == _ours("ipv4", FWD4)
+
+
+def test_sync_forward_bad_line_keeps_everything(host, fconf, mdir, capsys):
+    w = jdi.Watcher(fconf, mdir)
+    w.sync()
+    before = host.state()
+    fconf.write_text(fconf.read_text() + "forward n 10.0.0.1 tcp 80\n")
+    capsys.readouterr()
+    w.sync()
+    assert host.state() == before
+    assert "the router (10.0.0.1) may only be allowed on port 53" in capsys.readouterr().err
+    assert _metrics(mdir)["jess_docker_input_check_ok"] == "0"
+
+
+def test_main_remove_removes_forward(host, fconf, monkeypatch):
+    assert jdi.main(["apply", "--config", str(fconf)]) == 0
+    assert host.top2("ipv4", "FORWARD") == _ours("ipv4", FWD4)
+    monkeypatch.setenv("SERVICE_RESULT", "success")
+    assert jdi.main(["remove", "--only-if-clean-stop"]) == 0
+    for fam in FAM:
+        assert host.input[fam] == [TS_JUMP] and host.forward[fam] == DOCKER_FWD
+        assert set(host.chains[fam]) == set(FOREIGN_CHAINS)
+
+
+def test_main_apply_with_forward_off_removes_forward(host, fconf, conf):
+    assert jdi.main(["apply", "--config", str(fconf)]) == 0
+    assert jdi.main(["apply", "--config", str(conf)]) == 0  # the same, forward-mode off
+    assert host.forward["ipv4"] == DOCKER_FWD and FWD4.chain not in host.chains["ipv4"]
+    assert host.top2("ipv4") == _ours("ipv4")
+
+
+def test_main_check_with_forward(host, fconf, capsys):
+    assert jdi.main(["check", "--config", str(fconf)]) == 0
+    (line,) = [x for x in capsys.readouterr().err.splitlines() if "config ok" in x]
+    assert re.fullmatch(
+        r"jess-docker-input: config ok: mode=observe allow_rules=4 forward-mode=observe forward_rules=\d+ "
+        r"ipv4=[0-9a-f]{12} ipv6=[0-9a-f]{12} ipv4-fwd=[0-9a-f]{12} ipv6-fwd=[0-9a-f]{12}",
+        line,
+    )
+    assert host.writes() == []
+
+
+def test_main_status_lists_forward_chains(host, fconf, capsys):
+    assert jdi.main(["apply", "--config", str(fconf)]) == 0
+    capsys.readouterr()
+    assert jdi.main(["status"]) == 0
+    out = capsys.readouterr().out
+    for chain in (*IPV4.chains, *IPV6.chains, *FWD4.chains, *FWD6.chains):
+        assert f"Chain {chain} (" in out
+
+
+_FWD_KLOG = [
+    pytest.param(
+        "jess-docker-fwd observe: IN=br-1f56b9570309 OUT=enp7s0 MAC=aa:bb SRC=172.25.0.3 DST=10.0.0.195 LEN=60 "
+        "TOS=0x00 PREC=0x00 TTL=63 ID=1 DF PROTO=TCP SPT=40000 DPT=22 WINDOW=64240 RES=0x00 SYN URGP=0",
+        ("jess-docker-fwd", "observe", "br-1f56b9570309", "10.0.0.195", "TCP", "22"),
+        id="fwd-tcp",
+    ),
+    pytest.param(
+        "jess-docker-spoof reject: IN=br-jess-hostacc OUT=enp7s0 MAC=aa:bb SRC=10.0.0.77 DST=10.0.0.1 LEN=30 "
+        "TOS=0x00 PREC=0x00 TTL=63 ID=1 PROTO=UDP SPT=5351 DPT=5351 LEN=10",
+        ("jess-docker-spoof", "reject", "br-jess-hostacc", "10.0.0.1", "UDP", "5351"),
+        id="spoof-udp",
+    ),
+    pytest.param(
+        "jess-docker-fwd6 observe: IN=docker0 OUT=enp7s0 MAC=aa:bb SRC=fd00::2 DST=fd56::1 LEN=80 TC=0 "
+        "HOPLIMIT=63 FLOWLBL=0 PROTO=TCP SPT=40000 DPT=80 WINDOW=64800 RES=0x00 SYN URGP=0",
+        ("jess-docker-fwd6", "observe", "docker0", "fd56::1", "TCP", "80"),
+        id="fwd6-tcp",
+    ),
+]
+
+
+@pytest.mark.parametrize("line,groups", _FWD_KLOG)
+def test_klog_regex_forward(line, groups):
+    m = jdi._KLOG_RE.search(line)
+    assert m is not None and m.groups() == groups
+
+
+def test_summary_forward_paths(host):
+    host.journal = "\n".join(p.values[0] for p in _FWD_KLOG) + "\n"
+    rows = [row.split() for row in jdi.summary(1).splitlines()[1:]]
+    assert ["1", "fwd", "observe", "br-1f56b9570309", "10.0.0.195", "TCP", "22"] in rows
+    assert ["1", "spoof", "reject", HOSTACC, "10.0.0.1", "UDP", "5351"] in rows
+    assert ["1", "fwd6", "observe", "bridge", "fd56::1", "TCP", "80"] in rows
+    (journal_call,) = [c for c in host.calls if c[0] == jdi.JOURNALCTL]
+    assert journal_call[-2:] == ("-g", "jess-docker-")
