@@ -73,12 +73,12 @@ docker compose --profile models config
 
 | Job (`name:`) | Timeout (min) | What |
 |---------------|---------------|------|
-| Python Lint & Format | 10 | ruff check + format check on `orchestrator/` (ruff version pinned) |
+| Python Lint & Format | 10 | ruff check + format check on `orchestrator/`, `coder/` and `scripts/jess-coder` (ruff version pinned) |
 | Grafana Dashboards In Sync | 10 | regenerates `monitoring/grafana/dashgen/`, fails on drift |
 | Suite Theme In Sync | 10 | theme generator tests + `theme/build.py` drift check |
 | Python Tests | 15 | `pytest orchestrator/tests/ -v` (usually ~4 min) |
 | Frontend Lint & Type Check | 15 | ESLint, `tsc --noEmit`, `npm test` |
-| Docker Build (orchestrator) | 25 | builds the orchestrator image |
+| Docker Build (orchestrator) | 25 | builds the orchestrator image; also the coder box image (`coder/`, `docs/CODER.md`) + offline smoke checks when its inputs changed (`coder/`, `orchestrator/{Dockerfile,requirements.txt,embedding_pin.py}`) |
 | Deploy to Jupiter | 45 | push to `main` only; self-hosted runner on Jupiter (`actions.runner.mexirab-brain_gateway.jupiter.service`), operates on the live checkout `/home/labadmin/gateway_nerves`; concurrency group `deploy-jupiter`, a running deploy is never cancelled |
 
 **Deploy job steps:**
@@ -86,6 +86,7 @@ docker compose --profile models config
 1. **Fast-forward the deploy checkout.** Refuses unless the checkout is on `main` with no modified tracked files, no untracked files under `orchestrator/` or `frontend/`, and no untracked compose(.override) file at the root (local changes are reported as a count only). `git fetch --no-write-fetch-head origin main` (3 tries), then `git merge --ff-only <github.sha>`: it ships the commit whose CI passed, not main's tip, and only while that commit is still on `origin/main` (force-push guard). Refuses if HEAD has commits not on `origin/main`. If the checkout was already past that commit and the last deploy (a manual pull, or a deploy that stopped partway), it refuses when that commit's CI is not known to have passed or its `ci.yml` differs. **Catch-up:** GitHub keeps one pending run per concurrency group and cancels it when another arrives (in any commit order), so the step also fast-forwards to the newest first-parent commit on `origin/main` (≤20 back) whose push run passed every job except "Deploy to Jupiter" and whose `.github/workflows/ci.yml` is identical to the running one. Reads runs via `gh api` with the job's read-only token (`contents: read`, `actions: read`); an API failure → warning, only `github.sha` ships.
 2. **Rebuild changed services.** Diffs `.last-deployed-sha` (what's running) → HEAD with `git diff --no-renames` and rebuilds/recreates only what changed (orchestrator, frontend, SearXNG, Grist, monitoring — per-service rules in the step). A change confined to `orchestrator/tests/` does not rebuild the orchestrator (not in the image; a recreate drops RAM-only state). Writes the marker on success.
 3. **Health check.** Orchestrator `:8888/health` and frontend `:3001`, ~40 s each.
+4. **Coder box image + isolation self-test (when enabled).** Only while `.env` has `CODER_ENABLED=true` (`jess-coder enabled`): `jess-coder build --if-stale` (rebuilds when the image's input-hash label is stale), then the isolation self-test from a real box on coder-net. A failure fails the run; the log shows only the names of failed checks (Jupiter's addresses stay out of the public log). Runs after the marker is written, so it never holds Jess's deploy back. `docs/CODER.md` → Self-test.
 
 **Operator rules:**
 

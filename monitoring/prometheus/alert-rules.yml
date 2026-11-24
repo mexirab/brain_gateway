@@ -816,6 +816,42 @@ groups:
           summary: "Research helper source {{ $labels.tool }} is failing"
           description: "Every {{ $labels.tool }} call from look_it_up failed in the last 24h. library_docs = Context7 (context7.com: an 'unavailable' answer means its API changed; a key is set with RESEARCH_CONTEXT7_API_KEY), web_search = local SearXNG (`docker logs searxng`), read_page = outbound HTTPS from Jupiter. `docker logs brain-orchestrator 2>&1 | grep '\\[RESEARCH\\]'`."
 
+      - alert: CoderSelfTestFailing
+        # The coder box isolation self-test (coder/selftest.py) failed in the
+        # last run: from inside a box on coder-net something answered that must
+        # not (host, LAN, Helios, internet, DNS), or the gate misbehaved.
+        # jess-coder refuses to open boxes meanwhile. Written by
+        # scripts/jess-coder (sessions + the CI deploy) as a textfile metric.
+        # Only a recent result counts: a failure from a week ago (gate since
+        # turned off, nothing re-ran it) must not repeat forever.
+        expr: max(jess_coder_selftest_ok) == 0 and on() (time() - max(jess_coder_selftest_last_run_timestamp_seconds)) < 7 * 86400
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The coder box isolation self-test failed"
+          description: "The last coder box self-test failed, so jess-coder will not open boxes. Run `jess-coder selftest` on Jupiter to see which check fails (docs/CODER.md -> Self-test). Typical causes: coder-net recreated without gateway_mode isolated, a new container attached to coder-net, or the gate off (CODER_ENABLED)."
+      - alert: CoderGuardBlocked
+        # Requests from coder-net to anything but the two gate paths. Qwen Code
+        # never does that; each self-test run does it 3 times on purpose, so
+        # the threshold sits above five self-tests in 10 minutes.
+        expr: sum(increase(bgw_coder_guard_blocked_total[10m])) > 15
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A coder box is probing the orchestrator API"
+          description: "{{ $value | printf \"%.0f\" }} requests from coder-net hit paths other than the coder gate in 10 minutes (all refused with 403). A box is trying other endpoints. `docker ps --filter label=jess-coder=1` shows open boxes; close the session (or `docker kill <name>`) and check its workspace with `jess-coder patch <name> --show`. docs/CODER.md -> Threat model."
+      - alert: CoderUpstreamErrors
+        # Coder gate requests fail at the brain (502) or inside the gate.
+        expr: sum(increase(bgw_coder_requests_total{result=~"upstream_error|internal"}[1h])) >= 3
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Coder gate requests are failing"
+          description: "{{ $value | printf \"%.0f\" }} coder gate requests failed in the last hour (upstream_error = the brain returned an error; internal = a gate bug). See `sum by (result) (increase(bgw_coder_requests_total[1h]))` and `docker logs brain-orchestrator 2>&1 | grep '\\[CODER\\]'`. upstream_error usually means the brain itself is failing, so check Jess's chat too."
+
   # ===========================================================================
   # UPS / Power Chain
   # ===========================================================================

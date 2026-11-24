@@ -16,6 +16,11 @@ inhibit_rules:
       - alertname="EmbeddingErrors"
     target_matchers:
       - alertname="AutoLearnFailing"
+  # A broken brain explains coder gate errors (the gate only relays them).
+  - source_matchers:
+      - alertname=~"BrainFailedToStart|BrainCudaInitFailed|BrainOnCPU|HeliosPoweredButUnreachable"
+    target_matchers:
+      - alertname="CoderUpstreamErrors"
   # Saturn down pages as NodeDown; the dead-man's switch on it being
   # unreachable is the same outage, not a second notice.
   - source_matchers:
@@ -118,7 +123,7 @@ route:
     # redundancy is down) is informational, so it surfaces here rather than
     # paging.
     - matchers:
-        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|BudgetHistoryRefreshFailing|RadicaleDown|ActualDown|GristDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainFailedToStart|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|SearXNGDown|UPSExporterDown|UPSReplaceBattery|UPSOverload|HAUnrequestedCallsBlocked|VoiceReplyCutShort|ResearchHelperFailing|ResearchSourceFailing|PaperlessDown|StaleMountContainers|StaleMountRestartFailed|StaleMountCheckNotRunning|StaleMountContainersRestarted|NvidiaModuleCheckStale|DeadmanSwitchBroken|DeployDrift|DeployDriftCheckFailing"
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|BudgetHistoryRefreshFailing|RadicaleDown|ActualDown|GristDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainFailedToStart|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|SearXNGDown|UPSExporterDown|UPSReplaceBattery|UPSOverload|HAUnrequestedCallsBlocked|VoiceReplyCutShort|ResearchHelperFailing|ResearchSourceFailing|CoderSelfTestFailing|CoderGuardBlocked|CoderUpstreamErrors|PaperlessDown|StaleMountContainers|StaleMountRestartFailed|StaleMountCheckNotRunning|StaleMountContainersRestarted|NvidiaModuleCheckStale|DeadmanSwitchBroken|DeployDrift|DeployDriftCheckFailing"
       receiver: "pushover-quiet"
     # Also non-paging. All of these fell through to "null" until the
     # 2026-10-27 routing audit; kept in their own lists so each reason sits

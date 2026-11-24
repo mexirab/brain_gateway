@@ -624,7 +624,7 @@ Alerts (quiet `pushover-quiet`): `ResearchHelperFailing` (≥3 failed lookups in
 
 ## Coder Gate
 
-`orchestrator/coder_gate.py` (module docstring = the guarantees), `routes_coder.py`, `brain_slot.py`. The only way a sandboxed Qwen Code box on `coder-net` reaches the brain. Default off (`CODER_ENABLED`; env: `docs/ENV_VARS.md` → Coder box gate). Plan + measurements: `docs/internal/CODER_PLAN.md`, `docs/internal/CODER_SPIKE.md` (PR #174). PR 1 is dormant: no box image and no `scripts/jess-coder` yet (PR 2).
+`orchestrator/coder_gate.py` (module docstring = the guarantees), `routes_coder.py`, `brain_slot.py`. The only way a sandboxed Qwen Code box on `coder-net` reaches the brain. Default off (`CODER_ENABLED`; env: `docs/ENV_VARS.md` → Coder box gate). Plan + measurements: `docs/internal/CODER_PLAN.md`, `docs/internal/CODER_SPIKE.md` (PR #174). The client is the interactive box (`coder/` image + host launcher `scripts/jess-coder`): setup, threat model, patch flow, self-test — `docs/CODER.md`.
 
 **Network.** `coder-net` (`gateway_nerves_coder-net`, bridge `br-jesscoder`, main compose): `internal: true`, IPv6 off, `gateway_mode_ipv4: isolated` (Docker ≥ 28) — no host address on the bridge, so a box reaches only the orchestrator at `CODER_GATE_ADDRESS`: not Jupiter's host ports, the LAN, Helios or the internet (a plain internal network still reaches host services through its bridge address; CODER_SPIKE §1). Boxes get addresses from `CODER_BOX_RANGE` and join with `docker run --network gateway_nerves_coder-net`; the orchestrator is the only compose member (`tests/test_coder_hardening.py`).
 
@@ -647,7 +647,7 @@ Compose/`.env` drift fails closed. `API_TOKEN` opens nothing from coder-net; a c
 | GET | `/api/coder/sessions` | `API_TOKEN` | `{ok:true, sessions:[{id, kind, label, created_at, expires_at, revoked_at, last_used_at, requests, prompt_tokens, completion_tokens, max_requests, max_tokens}]}` — live sessions, newest first, no hashes |
 | DELETE | `/api/coder/sessions/{id}` | `API_TOKEN` | Revoke. 200 `{ok:true, revoked:id}`; 400 id not 32 hex; 404 no live session with that id |
 
-Session routes are for the host-side `scripts/jess-coder` (PR 2) and are refused from coder-net by the guard. Token kind `job` (`jcj_…`, PR 3 coder jobs) exists in the table; nothing mints it yet.
+Session routes are for the host-side `scripts/jess-coder` (mint at session start, revoke at its end) and are refused from coder-net by the guard. Token kind `job` (`jcj_…`, PR 3 coder jobs) exists in the table; nothing mints it yet.
 
 **Gate errors.** OpenAI shape `{"error": {"message", "type"}}` (Qwen Code reads it), fixed messages only — upstream error text never reaches the box:
 
@@ -699,7 +699,7 @@ Rows expired, or revoked, more than 30 days ago are pruned on each mint.
 
 **Logs:** `[CODER] …` — token ids, counts, reasons, exception types; never request or response content. **Metrics** (`bgw_coder_*`): `monitoring/README.md` → Coder Gate.
 
-**Known limits:** total latency still says a little about prompt-cache hits (timing channel, accepted); a websocket route would bypass the guard (test-enforced: none may exist); no Grafana row or alerts until PR 2, which comes before `CODER_ENABLED=true`. Tests: `tests/test_coder_gate.py`, `tests/test_coder_gate_extra.py`, `tests/test_brain_slot.py`, `tests/test_coder_hardening.py` (static compose checks; needs a full checkout). An integration lab (throwaway networks, stub brain, branch orchestrator, a box) passed 39/39 attack probes.
+**Known limits:** total latency still says a little about prompt-cache hits (timing channel, accepted); a websocket route would bypass the guard (test-enforced: none may exist). Grafana row + alerts: `monitoring/README.md` → Coder Gate. Tests: `tests/test_coder_gate.py`, `tests/test_coder_gate_extra.py`, `tests/test_brain_slot.py`, `tests/test_coder_hardening.py` (static compose checks; needs a full checkout). An integration lab (throwaway networks, stub brain, branch orchestrator, a box) passed 39/39 attack probes.
 
 ## Tool Schemas
 

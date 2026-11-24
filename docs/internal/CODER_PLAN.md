@@ -1,6 +1,6 @@
 # Coder box plan (approved Nov 2026)
 
-> Status: approved. PR 0 (spike) done; results and the plan changes they caused are in [`CODER_SPIKE.md`](CODER_SPIKE.md) — read that first. Nothing below is built yet.
+> Status: approved. PR 0 (spike) done; results and the plan changes they caused are in [`CODER_SPIKE.md`](CODER_SPIKE.md) — read that first. PR 1 (gate, #177) and PR 2 (interactive box, `jess-coder`) are built; the box as it is now is documented in [`../CODER.md`](../CODER.md), and where PR 2 departs from this plan is listed in **PR 2 as built** below. PRs 3–4 (Jess's jobs) are not built.
 
 
 ## Context
@@ -174,11 +174,21 @@ Why it's built this way:
 - `COMPOSE_PROFILES` stays empty
 - the GitHub-hosted `docker-build` job also builds the image when `coder/` changes
 
+## PR 2 as built (deviations from the plan above)
+- **Box uid 61001**, not 1001: 1001 is a login on Jupiter, and the box's files must belong to no host account (host git then refuses them as "dubious ownership").
+- **The image is not `FROM` the orchestrator image.** `coder/Dockerfile` repeats `orchestrator/Dockerfile`'s dependency lines (shared build cache) and takes only `requirements.txt` + `embedding_pin.py` through the compose build context `orchestrator`, so it never carries Jess's code and needs no `BASE_IMAGE` arg. The pinned embedding model is baked in, because Jess's tests load it and the box is offline.
+- **Context window:** `CODER_CONTEXT_WINDOW` (`.env`, build-time only, default 131072), below the brain's 262144 after #172: long coder prompts prefill slowly and press on Jess's prompt cache.
+- **Interactive Qwen Code sends more tools than headless.** `propose_goal` (schema over the gate's bounds, so the gate refused the whole request), `artifact` and `display_image` are excluded too (`EXCLUDE_TOOLS` in `coder/entrypoint.py`).
+- **Patch flow:** `git apply --stat` against the base wasn't enough. A second offline box exports the diff from a fresh git dir; the host applies it to a clean clone of the base and takes the file list, modes and the diff you review from what git regenerates there, never the box's bytes. The refused-path list grew (other agents' folders at any depth, JS/TS tool configs, executables, binaries, terminal/Trojan-Source characters).
+- **Self-test:** errno-based (every probed host must answer an immediate "no route"; a refusal or a timeout counts as reach), probes the bridge's IPv6 link-local, and scans every port of the gate host. It writes `jess_coder_selftest_ok` → `CoderSelfTestFailing`; `CoderGuardBlocked` and `CoderUpstreamErrors` were added alongside.
+- **CI deploy** rebuilds when the image's input-hash label is stale (not only when `coder/` changed) and runs as the deploy's last step, after the deploy marker, so the optional box never holds Jess's deploy back.
+- **No host firewall rule to add:** the container firewall (`jess-docker-input`, PR #176) covers every `br-+` bridge once it enforces.
+
 ## Steps only you can do (PR 2)
-1. Create the 20 GB loop filesystem at `/srv/jess-coder` (root, one-time; exact commands go in `docs/CODER.md`).
-2. Add the host firewall backstop rule for the coder bridge.
+1. Create the 20 GB loop filesystem at `/srv/jess-coder` (root, one-time; exact commands in `docs/CODER.md` → Setup).
+2. ~~Add the host firewall backstop rule for the coder bridge.~~ Not needed (PR 2 as built).
 3. Add `CODER_ENABLED=true` to Jupiter `.env`. PR 3 also needs `CODER_DISPATCH_TOKEN`, ≥24 chars.
-4. Install `jess-coder` (and later the dispatcher user unit).
+4. Build the image (`python3 scripts/jess-coder build`), install `jess-coder` (and later the dispatcher user unit), run `jess-coder selftest`.
 
 ## Verification
 - **The pipeline CLAUDE.md requires on every PR:**

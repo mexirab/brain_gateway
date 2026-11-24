@@ -20,6 +20,7 @@ from .datasources import LOKI, PROMETHEUS
 
 # ---------- target builders -------------------------------------------------
 
+
 def prom(expr: str, legend: str = "", ref_id: str = "A", instant: bool = False) -> dict:
     """Build a Prometheus query target."""
     return {
@@ -45,6 +46,7 @@ def logql(expr: str, ref_id: str = "A") -> dict:
 
 
 # ---------- panel builders --------------------------------------------------
+
 
 def stat(
     title: str,

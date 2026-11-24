@@ -1,0 +1,30 @@
+{
+  "$version": 4,
+  "modelProviders": {
+    "openai": [
+      {
+        "id": "jess-brain",
+        "name": "Jess brain (through the coder gate)",
+        "envKey": "JESS_BRAIN_KEY",
+        "baseUrl": "@GATE_URL@",
+        "generationConfig": {
+          "timeout": 600000,
+          "streamIdleTimeoutMs": 600000,
+          "maxRetries": 3,
+          "contextWindowSize": @CONTEXT_WINDOW@,
+          "samplingParams": {"temperature": 0.7, "max_tokens": 4096}
+        }
+      }
+    ]
+  },
+  "security": {"auth": {"selectedType": "openai"}},
+  "model": {"name": "jess-brain", "skipNextSpeakerCheck": true},
+  "privacy": {"usageStatisticsEnabled": false},
+  "telemetry": {"enabled": false, "logPrompts": false},
+  "general": {"enableAutoUpdate": false, "checkpointing": {"enabled": false}, "outputLanguage": "English"},
+  "memory": {"enableManagedAutoMemory": false, "enableManagedAutoDream": false, "enableAutoSkill": false},
+  "ui": {"enableFollowupSuggestions": false, "enableWelcomeBack": false},
+  "ide": {"enabled": false},
+  "disableAllHooks": true,
+  "mcpServers": {}
+}

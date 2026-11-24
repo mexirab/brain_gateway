@@ -1,0 +1,9 @@
+{
+  "name": "jess-coder-box",
+  "private": true,
+  "description": "Pinned Qwen Code for the sandboxed coder box (coder/Dockerfile). Bump the version and regenerate package-lock.json together; see docs/CODER.md -> Upgrading Qwen Code.",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@qwen-code/qwen-code": "0.25.3"
+  }
+}

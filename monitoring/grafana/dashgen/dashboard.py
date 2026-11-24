@@ -55,6 +55,7 @@ def dashboard(
 
 # ---------- template variable helpers ---------------------------------------
 
+
 def var_query(name: str, label: str, query: str, *, multi: bool = True, include_all: bool = True) -> dict:
     """Prometheus label-values template variable."""
     return {
