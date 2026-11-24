@@ -4,7 +4,8 @@
 Why this exists
 ---------------
 `data/` is ~1.9 GB, but almost all of that is `hf_cache/` (the HuggingFace
-model cache, which re-downloads on demand). The genuinely irreplaceable state
+model cache; refill it with `python -m orchestrator.embedding_pin fetch`). The
+genuinely irreplaceable state
 is tiny (~15 MB) and has never had a backup:
 
   - data/app/*.db        brain_state / progress / finance (reminders, focus,
@@ -98,7 +99,7 @@ REMOTE = os.environ.get("JESS_BACKUP_REMOTE", "").strip()
 METRICS_PATH = os.environ.get("JESS_BACKUP_METRICS_PATH", "").strip()
 
 # Subtrees under data/ that are large and reconstructable — never worth backing
-# up. hf_cache re-downloads from HuggingFace; app-backup-* are prior one-off
+# up. hf_cache is refilled by `embedding_pin fetch`; app-backup-* are prior one-off
 # backups (don't back up backups); backups/ is our own output if nested.
 # exercise_library (+ its fetch staging/.old siblings) is ~100 MB of public
 # photos — re-fetch with `python -m orchestrator.exercise_library fetch`.

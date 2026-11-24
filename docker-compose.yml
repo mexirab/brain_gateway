@@ -52,9 +52,11 @@ services:
       - ${GATEWAY_ROOT_PATH:-.}/credentials:/app/credentials:rw
       # Persistent storage for reminder audio files
       - brain-audio:/tmp/brain_audio:rw
-      # HuggingFace model cache — persisted across restarts so the embedding
-      # model (nomic-embed-text-v2-moe, ~1.8GB) doesn't re-download on every
-      # boot. Bind mount for backup/inspection parity with the rest of data/.
+      # HuggingFace model cache for the embedding model (nomic-embed-text-v2-moe,
+      # ~1.8GB). The image runs HF_HUB_OFFLINE=1, so the orchestrator never
+      # downloads into it; a fresh install fills it with `docker compose exec orchestrator
+      # python -m orchestrator.embedding_pin fetch` (install.sh does) + a
+      # restart. Bind mount for backup/inspection parity with the rest of data/.
       - ${GATEWAY_ROOT_PATH:-.}/data/hf_cache:/home/jess/.cache/huggingface:rw
       # Application runtime state: progress.db, brain_state.db, finance.db,
       # auto_learn.key. Was previously the `finance-data` Docker-managed

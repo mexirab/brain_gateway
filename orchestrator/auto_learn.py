@@ -30,6 +30,7 @@ from orchestrator import shared
 from orchestrator.metrics import (
     ACTIVE_REQUESTS,
     AUTO_LEARN_CATEGORY_BLOCKED,
+    AUTO_LEARN_DROPPED,
     AUTO_LEARN_DUPLICATES_SKIPPED,
     AUTO_LEARN_ERRORS,
     AUTO_LEARN_EXTRACTION_LATENCY,
@@ -723,6 +724,14 @@ async def run_auto_learn(messages: List[Dict]):
     Called by the scheduler after a conversation ends (inactivity timeout).
     Never raises — all errors are caught and logged.
     """
+    # Memory off (the embedding model failed to load at startup): every fact
+    # would be dropped at store time, after an extraction on the single brain
+    # slot. Drop the conversation up front instead.
+    if not getattr(shared.embedding_model, "available", True):
+        logger.warning("[AUTO_LEARN] Skipping — the embedding model is not loaded (memory is off)")
+        AUTO_LEARN_DROPPED.labels(reason="embedding_unavailable").inc()
+        return
+
     t0 = time.time()
     AUTO_LEARN_EXTRACTIONS_TOTAL.inc()
     token = _run_failed.set(False)

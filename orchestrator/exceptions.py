@@ -31,6 +31,13 @@ class TransientError(BrainGatewayError):
     """Transient failure — network timeout, service temporarily down, etc."""
 
 
+class EmbeddingModelUnavailableError(TransientError):
+    """The embedding model failed to load at startup (e.g. not in the HF cache,
+    which is read offline): memory is off until it is fetched and the
+    orchestrator restarted — see orchestrator/embedding_pin.py. A TransientError
+    so the API answers 503, not 400: the request was fine, the service is down."""
+
+
 class ExternalServiceError(TransientError):
     """Failure in an external service (HA, Calendar, Gmail, Actual Budget, etc.)."""
 

@@ -119,6 +119,13 @@ docker compose up -d orchestrator frontend redis searxng
 This builds + starts only the CPU services — **not** the GPU model layer (which
 stays off because `COMPOSE_PROFILES` is empty). First run builds the images.
 
+Then download the memory (embedding) model once (~1.8 GB). The orchestrator
+loads it offline from `data/hf_cache` and runs with memory off until it is there:
+
+```bash
+docker compose exec orchestrator python -m orchestrator.embedding_pin fetch && docker compose restart orchestrator
+```
+
 ### 4. Open it
 
 - Dashboard: <http://localhost:3001/> — log in with your `DASHBOARD_TOKEN`.
@@ -231,6 +238,9 @@ GPU box you'd rather not run 24/7.
 - **Web search fails; `searxng` keeps restarting:** if `docker logs searxng`
   says `server.secret_key is not changed`, `SEARXNG_SECRET` is missing or empty
   in `.env`. Add one (the `.env` step above), then `docker compose up -d searxng`.
+- **Jess doesn't remember anything; the log shows `[EMBEDDING] Model load FAILED`:**
+  the embedding model isn't in `data/hf_cache` (the orchestrator never downloads
+  it). Run `docker compose exec orchestrator python -m orchestrator.embedding_pin fetch && docker compose restart orchestrator`.
 - **Logs:** `docker compose logs -f orchestrator`.
 
 See also: `docs/internal/BYO_MODEL_SPEC.md` (design + the env-var reference).

@@ -1135,7 +1135,7 @@ AUTO_LEARN_DROPPED = Counter(
     "Pending auto-learn conversations dropped without extraction",
     ["reason"],
 )
-for _reason in ("evicted", "shutdown", "model_unavailable"):
+for _reason in ("evicted", "shutdown", "model_unavailable", "embedding_unavailable"):
     AUTO_LEARN_DROPPED.labels(reason=_reason)
 
 # Extraction postponed because the primary model was unreachable at fire time.

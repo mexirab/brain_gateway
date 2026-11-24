@@ -147,10 +147,12 @@ def test_batch_failure_is_isolated(tmp_path, stubbed_shared, monkeypatch):
 
     # Run completed without raising; nothing was written.
     assert stats["new_chunks"] == 0
-    # Error was logged with the expected prefix so the batch is identifiable.
+    # Error was logged with the expected prefix and the batch number — never
+    # a chunk id (it carries the file path and section title).
     assert mock_error.called
     msg = mock_error.call_args[0][0]
-    assert "Upsert batch failed" in msg
+    assert msg.startswith("[RAG_INGEST] Upsert batch") and "failed" in msg
+    assert not any("chunk::" in str(a) or "one.md" in str(a) for a in mock_error.call_args[0][1:])
 
 
 def test_middle_batch_failure_does_not_lose_neighbors(tmp_path, stubbed_shared, monkeypatch):
