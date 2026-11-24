@@ -5,7 +5,7 @@ All API endpoints should use these models instead of raw dicts.
 """
 
 import re
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, StrictBool, StrictInt, field_validator, model_validator
@@ -164,10 +164,17 @@ class ReminderTriggerRequest(BaseModel):
 
 
 class MemoryAddRequest(BaseModel):
-    text: str = Field(min_length=1)
-    category: str = "general"
-    source: str = "manual"
-    tags: list[str] = Field(default_factory=list)
+    """POST /api/memory/add. Bounded because `source` is printed into the
+    system prompt as a retrieved chunk's label (stored as `api:<source>`), and
+    `category` starts the doc id (a `/` there makes an id
+    /api/palace/memory/{doc_id} can't address). `text`: the embedding model
+    reads ~2,000 chars (512 tokens) and retrieval shows 800, so a longer note
+    is refused rather than stored half-searchable."""
+
+    text: str = Field(min_length=1, max_length=4_000)
+    category: str = Field(default="general", max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    source: str = Field(default="manual", max_length=64, pattern=r"^[A-Za-z0-9_.:-]+$")
+    tags: list[Annotated[str, Field(max_length=64)]] = Field(default_factory=list, max_length=20)
 
 
 # ---------------------------------------------------------------------------

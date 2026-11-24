@@ -26,7 +26,7 @@ Target every parameter that touches SQLite:
 - `POST /api/reminder/trigger` — inject SQL in reminder fields
 - `POST /api/focus/start` — inject in `task` field
 - `GET /api/memory/search?query='; DROP TABLE reminders; --`
-- `POST /api/memory/add` — inject in document content or metadata
+- `POST /api/memory/add` — on the live server send only bodies it refuses (blank `text`, `text` over 4000 chars, a `source` over 64 chars or with a newline, a `category` with `/`, bad JSON → 400/422; `source` is stored as `api:<source>`, so it can't pose as `auto_learn`). A valid body is STORED in the real memory palace (plaintext, retrievable into Jess's prompt) until someone deletes it: test injection in stored content only against a throwaway orchestrator, or `DELETE /api/palace/memory/{id}` every id you got back before you finish.
 
 What to look for:
 - Does state_store.py use parameterized queries everywhere?

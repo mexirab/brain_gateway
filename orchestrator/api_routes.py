@@ -15,6 +15,7 @@ import logging
 import math
 import os
 import re
+import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -24,6 +25,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from orchestrator import audio_stream, calendar_sources, reminder_actions, shared
 from orchestrator.bearer_auth import bearer_token_matches
+from orchestrator.exceptions import TransientError
 from orchestrator.focus_manager import tool_start_focus, tool_stop_focus
 from orchestrator.ha_guard import HA_LISTED_DOMAINS, check_ha_call, ha_entity_allowed
 from orchestrator.ha_registry import entity_view, get_registry_meta
@@ -360,23 +362,58 @@ async def execute_ha_command(body: HACommandRequest):
 
 @router.post("/api/memory/add")
 async def add_memory(body: MemoryAddRequest):
-    """Add a memory to RAG."""
-    doc_id = f"{body.category}_{datetime.now().timestamp()}"
+    """Add a plaintext document chunk to the palace collection.
+
+    Embeds with the pinned embedding model, like every other palace writer.
+    Without ``embeddings=`` Chroma would fall back to its default embedding
+    function, which downloads an ONNX MiniLM model from S3 (HF_HUB_OFFLINE
+    does not cover it) and writes 384-dim vectors into a collection of
+    768-dim nomic vectors: refused on a populated collection, and on an empty
+    one it locks the collection to 384 dims, so every later write fails.
+    """
+    text = body.text.strip()
+    if not text:
+        return error_response("text is required", status_code=400)
+    # Memory off: the embedding model failed to load at startup (`available`
+    # is False; absent on embedders without the flag, which are always loaded).
+    if not getattr(shared.embedding_model, "available", True):
+        return error_response("Memory is unavailable: the embedding model is not loaded", status_code=503)
+
+    # Suffix: Chroma silently ignores an add whose id already exists.
+    doc_id = f"{body.category}_{datetime.now().timestamp()}_{uuid.uuid4().hex[:8]}"
 
     metadata = {
         "category": body.category,
-        "source": body.source,
+        # Namespaced so no caller value equals an internal writer's source:
+        # fact sources get a looser retrieval floor, and auto_learn's and
+        # brain_dump's dedup are substring tests over their own source, so a
+        # one-letter doc filed under one would block every new entry.
+        "source": f"api:{body.source}",
         "kind": "chunk",
         "created_at": datetime.now().isoformat(),
     }
     if body.tags:
         metadata["tags"] = ",".join(str(t) for t in body.tags)
 
-    collection.add(
-        documents=[body.text.strip()],
-        metadatas=[metadata],
-        ids=[doc_id],
-    )
+    stage = "encode"
+    try:
+        embedding = await _asyncio.to_thread(
+            lambda: shared.embedding_model.encode(text, normalize_embeddings=True).tolist()
+        )
+        stage = "add"
+        await _asyncio.to_thread(
+            shared.collection.add,
+            documents=[text],
+            embeddings=[embedding],
+            metadatas=[metadata],
+            ids=[doc_id],
+        )
+    except TransientError:
+        raise  # e.g. memory off: the app's handler answers 503
+    except Exception as e:
+        # Type name only: some Chroma messages repeat the doc id (it holds the category).
+        logger.error("[MEMORY] /api/memory/add failed at %s: %s (%d chars)", stage, type(e).__name__, len(text))
+        return error_response("Memory write failed", status_code=500)
 
     return {"ok": True, "id": doc_id}
 

@@ -4,6 +4,43 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — `POST /api/memory/add` embeds with the pinned model (2026-11-24)
+
+Branch `fix/memory-add-embeddings`. The route called `collection.add(documents=...)` with no vectors. The palace collection is opened without an `embedding_function`, so Chroma 1.5.9 ran its default: an ONNX MiniLM download (79 MB) from Chroma's S3 bucket (not covered by `HF_HUB_OFFLINE`) producing 384-dim vectors. On the live 768-dim palace that was refused (`expecting embedding with dimension of 768, got 384` → uncaught 500); on an empty collection (fresh install) it succeeded and locked the collection to 384 dims, so every later memory write failed. Checked live: the route never stored a document, and the palace is still 768-dim — nothing to repair.
+
+### Upgrade action
+
+- None beyond the normal merge.
+
+### Orchestrator
+
+- `api_routes.add_memory`: encodes with `shared.embedding_model` (`normalize_embeddings=True`), encode + add in `asyncio.to_thread`, passes `embeddings=`; no network call.
+- `schemas.MemoryAddRequest` bounded: `text` 1–4000 chars, `category` ≤64 `^[A-Za-z0-9_-]+$`, `source` ≤64 `^[A-Za-z0-9_.:-]+$`, `tags` ≤20 × ≤64 chars.
+- `source` stored as `api:<source>`: a caller can't pose as `auto_learn`/`user_correction` facts (looser retrieval floor) or poison auto_learn's / brain_dump's substring dedup.
+- Id gains an 8-hex suffix (`<category>_<timestamp>_<8 hex>`; Chroma silently ignores an add with an existing id).
+- Responses: 400 blank text; 503 memory off (`shared.embedding_model.available` False — from PR #183; without it the check passes) or a `TransientError` from encode; 500 `{"ok": false, "error": "Memory write failed"}` otherwise, logged as `[MEMORY] /api/memory/add failed at <encode|add>: <TypeName> (<n> chars)` — no content.
+
+### Monitoring
+
+- `bgw_embedding_errors_total{caller="api_routes"}` pre-initialised.
+
+### Tests
+
+- New `orchestrator/tests/test_memory_add_route.py` (28): real Chroma in `tmp_path`, stub 768-dim embedder, socket guard (no network). AST guard `test_no_chroma_call_falls_back_to_the_default_embedder` over `orchestrator/`, `scripts/`, `rag/` fails CI on a Chroma `add`/`upsert`/`update` with `documents=` but no `embeddings=`, or a `query` with `query_texts=` (keyword args only). Another test requires every module calling `embedding_model.encode` to have a pre-initialised `bgw_embedding_errors_total` label.
+
+### Known limits
+
+- The collection still carries Chroma's default embedding function: Chroma refuses a different one on reopen, so swapping it needs a collection migration. The AST guard is the protection, and it doesn't see calls built through `**kwargs`.
+- `prompt_builder._rag_context_sync` prints a chunk's `source` uncut as its `(source: …)` label; for this route the 64-char cap bounds it.
+
+### Docs
+
+- `TECHNICAL_REFERENCE.md`: endpoint row + `memory/add` section rewritten (the field is `text`, not `content`; limits, `api:` prefix, responses).
+- `docs/MEMPALACE.md` → Write paths: `/api/memory/add`, `brain_dump`, budget import rows added, document vault row corrected (direct add/upsert, no metric); new "every writer passes its own vectors" rule.
+- `.claude/agents/hacker.md`: send only refused bodies to the live route, or delete what was stored.
+
+---
+
 ## [Unreleased] — Closet monitors kiosk on Jupiter (2026-11-24)
 
 Branch `feat/jupiter-kiosk`. The two portrait monitors in the server closet, on Jupiter's bus-0c RTX 5080, show Grafana **Jess Glance** (left) and the dashboard `/dashboard` (right, no menus), unattended: the kiosk logs itself in, retries while a server is down, waits while the monitors are off and restarts a dead browser. Succeeds the Callisto Pi kiosk (retired 2026-10-14). Authoritative doc: `scripts/jupiter-kiosk/README.md`.
