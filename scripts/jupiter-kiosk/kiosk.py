@@ -1,14 +1,27 @@
 #!/usr/bin/env python3
 """Closet monitors kiosk on Jupiter: one fullscreen Chrome per monitor.
 
-Runs as the X client of jupiter-kiosk.service (start-x.sh -> `xinit kiosk.py -- Xorg ...`), as the
-unprivileged `kiosk` user, on the RTX 5080 that has the two HDMI ports (PCI bus 0c). The voice
-(voxcpm-tts) runs on the other 5080. /etc/X11/jupiter-kiosk.conf pins the X server to the display
-card, the unit's InaccessiblePaths= hides the voice card's device files, and `--preflight`
-(ExecStartPre) refuses to start if the display card is the one /etc/voxcpm-tts.env pins, or if the
-masks hide the wrong card.
+Runs as jupiter-kiosk.service, the unprivileged `kiosk` user, against the X server of
+jupiter-kiosk-x.service (start-x.sh -> Xorg) on the RTX 5080 that has the two HDMI ports (PCI bus
+0c). The voice (voxcpm-tts) runs on the other 5080. /etc/X11/jupiter-kiosk.conf pins the X server to
+the display card, both units' InaccessiblePaths= hide the voice card's device files, and
+`--preflight` (ExecStartPre of both units) refuses to start if the display card is the one
+/etc/voxcpm-tts.env pins, or if the masks hide the wrong card.
+
+X and this process are in different network namespaces. The X unit has its own (PrivateNetwork=), so
+the abstract sockets the NVIDIA X driver always binds can't be reached from the host's; this unit
+stays in the host's, because Chrome loads the pages over Jupiter's Tailscale address. They share
+only the units' private /tmp (JoinsNamespaceOf=), where the X socket and the driver's filesystem
+sideband socket live. `--preflight --x-server` refuses to start X outside a private network
+namespace (systemd skips PrivateNetwork= without a word if this unit's namespace was set up first).
 
 What it does:
+  0. Holds the X display's abstract socket name (@/tmp/.X11-unix/X0) in the host network namespace,
+     bound but not listening. X clients (xrandr, Chrome) try that name before the /tmp socket, so
+     whatever else in the host namespace bound it first would get them: the screens' content and
+     the keyboard of a browser holding the dashboard session. Held, a connect is refused and the
+     client falls back to /tmp. Already taken: refuse to start. Then waits for X to answer, and
+     checks that no X socket is visible from this network namespace.
   1. Waits until a monitor is connected (no restart loop while the monitors are off). Then xrandr
      turns each configured output to its rotation (portrait = left/right), lines the screens up left
      to right, switches unconfigured outputs off, and turns screen blanking off.
@@ -46,6 +59,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
 import fcntl
 import ipaddress
 import json
@@ -54,6 +68,7 @@ import os
 import queue
 import re
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -69,6 +84,11 @@ XORG_CONF = "/etc/X11/jupiter-kiosk.conf"
 VOICE_ENV = "/etc/voxcpm-tts.env"
 NVIDIA_PROC = "/proc/driver/nvidia/gpus"
 PCI_SYSFS = "/sys/bus/pci/devices"
+NET_DEV = "/proc/self/net/dev"  # the network interfaces of this process's network namespace
+NET_UNIX = "/proc/self/net/unix"  # every AF_UNIX socket in this network namespace, abstract ones included
+XAUTHORITY_NAME = "jupiter-kiosk.Xauthority"  # in $XDG_RUNTIME_DIR, written by start-x.sh
+X_SOCKET_DIR = "/tmp/.X11-unix"
+DISPLAY_RE = re.compile(r":(\d{1,3})(?:\.\d{1,3})?")  # fullmatch: "$" would let a trailing newline through
 
 CHECK_SECONDS = 20  # how often each screen's page is looked at
 LOGIN_RETRY_SECONDS = 300  # at most one login attempt per screen per 5 min (wrong password = no hammering)
@@ -80,6 +100,7 @@ CRASH_WINDOW_SECONDS = 300
 STABLE_RUN_SECONDS = 600  # a Chrome that lived this long resets the restart backoff
 NO_MONITOR_SECONDS = 30  # no monitor connected: look again this often instead of exiting
 OUTPUT_CHECK_SECONDS = 60  # monitor plugged in or out: exit so systemd restarts with a fresh layout
+X_START_SECONDS = 60  # jupiter-kiosk-x.service has no readiness signal: wait this long for X to answer
 
 ROTATIONS = ("normal", "left", "right", "inverted")
 LOGINS = ("none", "grafana", "dashboard")
@@ -434,6 +455,107 @@ def wait_for_monitor(stop: threading.Event) -> frozenset[str] | None:
     return None
 
 
+# ------------------------------------------------------------------- X server (jupiter-kiosk-x.service)
+
+
+def display_number(display: str) -> int:
+    """The number of a local display (":0", ":0.0"). Anything else, a TCP display included, is refused:
+    the checks below only cover the local socket."""
+    m = DISPLAY_RE.fullmatch(display)
+    if not m:
+        raise ConfigError("DISPLAY must be a local display like :0 (jupiter-kiosk.service sets it)")
+    return int(m.group(1))
+
+
+def hold_x_abstract_name(number: int) -> socket.socket:
+    """Bind @/tmp/.X11-unix/X<number> in this network namespace and never listen (module docstring, step 0).
+
+    A connect to it is refused, so xcb falls back to the /tmp socket. SOCK_STREAM because abstract names
+    are per socket type and xcb connects with SOCK_STREAM. OSError (EADDRINUSE) if something holds it.
+    """
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.bind(f"\0{X_SOCKET_DIR}/X{number}")
+    except OSError:
+        sock.close()
+        raise
+    return sock
+
+
+def x_failure_kind(error: BaseException) -> str:
+    """Why an xrandr call failed, in our words (its output stays out of the log)."""
+    if isinstance(error, subprocess.TimeoutExpired):
+        return "xrandr hung"
+    if isinstance(error, subprocess.CalledProcessError):
+        text = error.stderr if isinstance(error.stderr, str) else ""
+        if "uthoriz" in text or "No protocol specified" in text:
+            return "X refused the auth cookie (XAUTHORITY isn't the file start-x.sh wrote)"
+        return "no X server on the display"
+    if isinstance(error, FileNotFoundError):
+        return "xrandr not installed"
+    return type(error).__name__
+
+
+def wait_for_x(stop: threading.Event, timeout: float = X_START_SECONDS) -> bool:
+    """True once the X server answers; False if it doesn't within timeout (logged), or if asked to stop."""
+    deadline = time.monotonic() + timeout
+    while not stop.is_set():
+        try:
+            _run(["xrandr", "--current"], timeout=10)
+            return True
+        except (OSError, subprocess.SubprocessError) as e:
+            if time.monotonic() >= deadline:
+                log.error(
+                    "the X server (jupiter-kiosk-x.service) didn't answer within %d s: %s",
+                    int(timeout),
+                    x_failure_kind(e),
+                )
+                return False
+        stop.wait(1)
+    return False
+
+
+def unix_sockets(text: str) -> list[tuple[str, str]]:
+    """(St, Path) of each named socket in /proc/net/unix. St "01" = unconnected (a listener, or a bound
+    datagram socket), "03" = connected. Abstract names start with "@"; unnamed sockets are left out."""
+    sockets = []
+    for line in text.splitlines()[1:]:
+        fields = line.split(None, 7)
+        if len(fields) == 8:
+            sockets.append((fields[5], fields[7].strip()))
+    return sockets
+
+
+def visible_x_sockets(sockets: list[tuple[str, str]], number: int) -> list[str]:
+    """X server sockets among the sockets of this (the host's) network namespace. There should be none:
+    X has a network namespace of its own.
+
+    Not counted: our held abstract name (@/tmp/.X11-unix/X<n>), and connected sockets named after the
+    X socket. The kernel makes the server end of every accepted connection in the CLIENT's network
+    namespace, so X's end of each kiosk.py / Chrome connection shows up here with the listener's path.
+    Only X's listener (unconnected) means X shares this namespace. Every nvidia-xdriver socket counts:
+    X binds them itself, and the GL clients' ends of them are unnamed.
+    """
+    listener = f"{X_SOCKET_DIR}/X{number}"
+    return sorted({p for st, p in sockets if "nvidia-xdriver" in p or (p == listener and st == "01")})
+
+
+def interface_names(text: str) -> list[str]:
+    """Interface names from /proc/net/dev (two header lines, then "name: counters...")."""
+    return [line.split(":", 1)[0].strip() for line in text.splitlines()[2:] if ":" in line]
+
+
+def private_network(path: str | None = None) -> bool:
+    """True if this process sees loopback and nothing else, i.e. a private network namespace. Every
+    network namespace has lo, so an empty or unreadable list counts as NOT private (fail closed)."""
+    try:
+        with open(path or NET_DEV, encoding="utf-8") as f:
+            names = interface_names(f.read())
+    except OSError:
+        return False
+    return names == ["lo"]
+
+
 def setup_display(cfg: Config) -> list[tuple[Screen, tuple[int, int, int, int]]]:
     outputs = parse_xrandr(_run(["xrandr", "--query"]))
     assigned, unused, warnings = assign_outputs(cfg.screens, outputs)
@@ -554,8 +676,19 @@ def is_blocked(path: str) -> bool:
     return stat.S_ISCHR(st.st_mode) and st.st_rdev == 0
 
 
-def preflight(cfg: Config) -> int:
-    """ExecStartPre: never put the display on the voice card; fail with one clear line."""
+def preflight(cfg: Config, x_server: bool = False) -> int:
+    """ExecStartPre: never put the display on the voice card; fail with one clear line.
+
+    x_server (jupiter-kiosk-x.service): also refuse unless this process is in a private network
+    namespace. systemd skips PrivateNetwork= without a word when the unit joins namespaces that
+    jupiter-kiosk.service set up first, and X would then bind its abstract sockets in the host's.
+    """
+    if x_server and not private_network():
+        log.error(
+            "not in a private network namespace: PrivateNetwork= of jupiter-kiosk-x.service didn't apply "
+            "(was jupiter-kiosk.service started on its own?); refusing to start X"
+        )
+        return 1
     try:
         with open(XORG_CONF, encoding="utf-8") as f:
             display_pci = xorg_bus_id(f.read())
@@ -595,8 +728,8 @@ def preflight(cfg: Config) -> int:
     blocked = [p for p in device_nodes(display_pci, display_minor) if is_blocked(p)]
     if blocked:
         log.error(
-            "the display card's device files are hidden (%s): InaccessiblePaths in jupiter-kiosk.service "
-            "names the wrong card",
+            "the display card's device files are hidden (%s): InaccessiblePaths in this kiosk unit "
+            "(jupiter-kiosk.service or jupiter-kiosk-x.service) names the wrong card",
             " ".join(blocked),
         )
         return 1
@@ -606,7 +739,7 @@ def preflight(cfg: Config) -> int:
             if reachable:
                 log.warning(
                     "the voice card's device files are reachable from the kiosk (%s): add them to "
-                    "InaccessiblePaths in jupiter-kiosk.service",
+                    "InaccessiblePaths in jupiter-kiosk.service and jupiter-kiosk-x.service",
                     " ".join(reachable),
                 )
     if not os.access(cfg.chrome, os.X_OK):
@@ -1163,43 +1296,26 @@ class ScreenRunner(threading.Thread):
 # ------------------------------------------------------------------------------------------- main
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Closet monitors kiosk (run by jupiter-kiosk.service)")
-    parser.add_argument("--preflight", action="store_true", help="check config, secrets and GPU pinning, then exit")
-    parser.add_argument("--config", default=CONFIG_PATH)
-    parser.add_argument("--secrets", default=SECRETS_PATH)
-    args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stderr)
-
-    # Handlers first, so an early SIGUSR1 can't kill the process; they only set Events.
-    stop = threading.Event()
-    runners: list[ScreenRunner] = []
-
-    def on_stop(_signum: int, _frame: object) -> None:
-        stop.set()
-        for r in runners:
-            r.wake.set()
-
-    def on_snapshot(_signum: int, _frame: object) -> None:
-        for r in runners:
-            r.snapshot_wanted.set()
-            r.wake.set()
-
-    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(sig, on_stop)
-    signal.signal(signal.SIGUSR1, on_snapshot)
-
+def run_kiosk(
+    cfg: Config, secrets: dict[str, str], stop: threading.Event, runners: list[ScreenRunner], number: int
+) -> int:
+    """Everything after display `number`'s abstract name is held: wait for X, check its isolation, lay
+    out, run the screens."""
+    if not wait_for_x(stop):
+        return 0 if stop.is_set() else 1
     try:
-        cfg = load_config(read_json(args.config))
-        secrets = load_secrets(read_json(args.secrets), cfg)
-    except ConfigError as e:
-        log.error("%s", e)
-        return 2
-    if args.preflight:
-        return preflight(cfg)
-    if not os.environ.get("DISPLAY"):
-        log.error("no DISPLAY: start this through xinit (jupiter-kiosk.service)")
-        return 2
+        with open(NET_UNIX, encoding="utf-8", errors="replace") as f:
+            exposed = visible_x_sockets(unix_sockets(f.read()), number)
+    except OSError:
+        log.error("can't read %s to check that X has its own network namespace", NET_UNIX)
+        return 1
+    if exposed:
+        log.error(
+            "%d X server socket(s) reachable from the host network namespace: jupiter-kiosk-x.service must "
+            "run with PrivateNetwork=yes; refusing to start",
+            len(exposed),
+        )
+        return 1
     try:
         connected = wait_for_monitor(stop)
         if connected is None:
@@ -1241,6 +1357,74 @@ def main(argv: list[str] | None = None) -> int:
     for r in runners:
         r.join(timeout=20)
     return rc
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Closet monitors kiosk (run by jupiter-kiosk.service)")
+    parser.add_argument("--preflight", action="store_true", help="check config, secrets and GPU pinning, then exit")
+    parser.add_argument(
+        "--x-server",
+        action="store_true",
+        help="with --preflight, for jupiter-kiosk-x.service: also require a private network namespace",
+    )
+    parser.add_argument("--config", default=CONFIG_PATH)
+    parser.add_argument("--secrets", default=SECRETS_PATH)
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stderr)
+
+    # Handlers first, so an early SIGUSR1 can't kill the process; they only set Events.
+    stop = threading.Event()
+    runners: list[ScreenRunner] = []
+
+    def on_stop(_signum: int, _frame: object) -> None:
+        stop.set()
+        for r in runners:
+            r.wake.set()
+
+    def on_snapshot(_signum: int, _frame: object) -> None:
+        for r in runners:
+            r.snapshot_wanted.set()
+            r.wake.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, on_stop)
+    signal.signal(signal.SIGUSR1, on_snapshot)
+
+    try:
+        cfg = load_config(read_json(args.config))
+        secrets = load_secrets(read_json(args.secrets), cfg)
+    except ConfigError as e:
+        log.error("%s", e)
+        return 2
+    if args.preflight:
+        return preflight(cfg, x_server=args.x_server)
+    if args.x_server:
+        log.error("--x-server only goes with --preflight")
+        return 2
+    try:
+        number = display_number(os.environ.get("DISPLAY", ""))
+    except ConfigError as e:
+        log.error("%s", e)
+        return 2
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or os.environ.get("HOME")
+    if not runtime:
+        log.error("neither XDG_RUNTIME_DIR nor HOME is set: can't find the X auth cookie")
+        return 2
+    # Always the file start-x.sh gave X (it sets XAUTHORITY the same way), whatever came from outside.
+    os.environ["XAUTHORITY"] = os.path.join(runtime, XAUTHORITY_NAME)
+    try:
+        held = hold_x_abstract_name(number)
+    except OSError as e:
+        if e.errno == errno.EADDRINUSE:
+            log.error(
+                "the X display's abstract socket name is taken in the host network namespace: something "
+                "may be posing as the X server; refusing to connect"
+            )
+        else:
+            log.error("can't hold the X display's abstract socket name (%s)", e.strerror or type(e).__name__)
+        return 1
+    with held:
+        return run_kiosk(cfg, secrets, stop, runners, number)
 
 
 if __name__ == "__main__":

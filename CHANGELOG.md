@@ -4,6 +4,30 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Closet kiosk: X in its own network namespace (2026-11-24)
+
+Branch `claude/compassionate-curran-979c3d`. The NVIDIA X driver always binds an abstract sideband socket (`@tmp/nvidia-xdriver-*`), and abstract sockets belong to a network namespace, so every process in the host's (the host-networked Home Assistant and Pi-hole containers included) could send to it: the first known limit of the entry below, now closed. Live on Jupiter since 2026-11-24 (verified: `ss -xl | grep nvidia-xdriver` prints nothing on the host or inside the HA container; Chrome GL still on the display card; both screens render). Authoritative doc: `scripts/jupiter-kiosk/README.md`.
+
+### Upgrade action
+
+- None for other installs: host-side only, CI never deploys the kiosk.
+- An existing one-unit install: install `kiosk.py`, `start-x.sh`, `jupiter-kiosk.xorg.conf` and **both** units, `sudo systemctl daemon-reload`, `sudo systemctl restart jupiter-kiosk` (screens dark for a few seconds). `scripts/jupiter-kiosk/README.md` → Install → Upgrading from the one-unit layout. Branch `claude/bold-liskov-95be2e` (read-only kiosk session) also changes `kiosk.py`: re-install from a tree that has both.
+
+### Kiosk (`scripts/jupiter-kiosk/`)
+
+- New `jupiter-kiosk-x.service`: Xorg alone, `PrivateNetwork=yes` (loopback only), the tty1 seat session, `Conflicts=getty@tty1`, `RestrictAddressFamilies=AF_UNIX AF_NETLINK`, `RestrictNamespaces=yes`, `SyslogIdentifier=jupiter-kiosk-x`, `PartOf=` + `Wants=` `jupiter-kiosk.service`. ExecStartPre `kiosk.py --preflight --x-server` refuses to start X outside a private network namespace (systemd 255 skips `PrivateNetwork=` silently when the other unit set up the shared namespaces first).
+- `jupiter-kiosk.service`: runs `kiosk.py` directly (no `xinit`), stays in the host network namespace (Chrome loads the pages over Tailscale), shares only X's private `/tmp` (`JoinsNamespaceOf=` + `PrivateTmp=`), `BindsTo=` + `After=` the X unit. Still the only unit to enable/start/stop/restart; restarting it restarts X.
+- `start-x.sh` execs `Xorg` directly with `-noreset` (no client holds X open any more). `jupiter-kiosk.xorg.conf`: comments only (keep `SidebandSocketPath` in `/tmp`: Chrome's GL client falls back to that socket).
+- `kiosk.py` holds the X display's abstract name `@/tmp/.X11-unix/X0` in the host network namespace (bound, never listening): libxcb 1.15 tries it before the `/tmp` socket, so a host-netns process could otherwise pose as the X server (pre-existing gap); taken → refuse to start. Also refuses if an X socket is visible in the host netns, waits ≤ 60 s for X and logs why X didn't answer.
+- Logs: `journalctl -t jupiter-kiosk -t jupiter-kiosk-x` (+ `journalctl -u jupiter-kiosk -u jupiter-kiosk-x -b` for systemd's lines). Snapshot: `sudo systemctl kill -s USR1 --kill-whom=main jupiter-kiosk`.
+- `orchestrator/tests/test_jupiter_kiosk.py`: unit layout, `--x-server` preflight, held-name lifetime, real-socket checks, run loop.
+
+### Known limits
+
+- `scripts/jupiter-kiosk/README.md` → Known limits: Chrome's GL client still tries the abstract sideband name first (a host-netns squatter would need the random-looking per-start id, and would get driver notifications, not the screens); Chrome can outlive a SIGKILLed `kiosk.py` by up to 30 s; anything in the host netns can keep the screens dark by taking a name first (fail-closed, no alert); monitor hot-plug not seen yet (udev events don't reach X's namespace; the NVIDIA driver should report it anyway; a restart re-probes).
+
+---
+
 ## [Unreleased] — Closet monitors kiosk on Jupiter (2026-11-24)
 
 Branch `feat/jupiter-kiosk`. The two portrait monitors in the server closet, on Jupiter's bus-0c RTX 5080, show Grafana **Jess Glance** (left) and the dashboard `/dashboard` (right, no menus), unattended: the kiosk logs itself in, retries while a server is down, waits while the monitors are off and restarts a dead browser. Succeeds the Callisto Pi kiosk (retired 2026-10-14). Authoritative doc: `scripts/jupiter-kiosk/README.md`.

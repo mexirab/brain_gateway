@@ -6,19 +6,28 @@ pages, and nobody has to touch them: the kiosk logs itself in, retries when a se
 still starting, waits while the monitors are off, and restarts a dead browser.
 
 ```
-jupiter-kiosk.service (User=kiosk, tty1, PAM service jupiter-kiosk → logind seat session)
- └─ start-x.sh ── xinit ──┬─ Xorg :0  (rootless, pinned to the bus-0c RTX 5080, no input devices)
-                          └─ kiosk.py ──┬─ Chrome (profile "left")  ⇄ DevTools pipe
-                                        └─ Chrome (profile "right") ⇄ DevTools pipe
+jupiter-kiosk-x.service (User=kiosk, tty1, logind seat session, OWN network namespace: loopback only)
+ └─ start-x.sh ── Xorg :0  (rootless, pinned to the bus-0c RTX 5080, no input devices)
+        ⇅  /tmp/.X11-unix/X0 + /tmp/nvidia-xdriver-*: the two units' shared private /tmp
+jupiter-kiosk.service   (User=kiosk, seatless session, host network namespace: Chrome needs Tailscale)
+ └─ kiosk.py ──┬─ Chrome (profile "left")  ⇄ DevTools pipe
+               └─ Chrome (profile "right") ⇄ DevTools pipe
 ```
+
+`jupiter-kiosk.service` is the unit to enable, start, stop and restart. It pulls in the X unit first,
+and the X unit follows its stops and restarts (`PartOf=`). When X dies, `jupiter-kiosk.service` stops
+too (`BindsTo=`), and the restarted X unit starts it again (`Wants=`). Why two units: Security below.
+That X-crash recovery relies on systemd ≥ 254 (units pass through "failed" on an auto-restart), so after
+a systemd major upgrade, kill Xorg once (`sudo pkill -u kiosk -x Xorg`) and check that both units
+come back within a minute.
 
 **Which GPU:** the monitors hang off the RTX 5080 on PCI bus **0c** (the one with two HDMI ports).
 The voice (`voxcpm-tts`) runs on the bus-**0b** card. Three things keep the kiosk off it:
 - the X config pins X to bus 0c (`BusID` + `ProbeAllGpus "false"`);
-- the unit hides the voice card's device files (`InaccessiblePaths=/dev/nvidia0 /dev/dri/card0
+- both units hide the voice card's device files (`InaccessiblePaths=/dev/nvidia0 /dev/dri/card0
   /dev/dri/renderD128`);
-- `kiosk.py --preflight` (ExecStartPre) refuses to start if the display card is the one
-  `/etc/voxcpm-tts.env` pins, or if those masks hide the display card instead.
+- `kiosk.py --preflight` (ExecStartPre of both units) refuses to start if the display card is the
+  one `/etc/voxcpm-tts.env` pins, or if those masks hide the display card instead.
 
 Measured 2026-11-24: X ~66 MiB plus Chrome ~105 MiB on bus 0c, and no memory or context on the voice
 card.
@@ -28,9 +37,10 @@ card.
 | Repo file | Installed as | What |
 |---|---|---|
 | `kiosk.py` | `/usr/local/lib/jupiter-kiosk/kiosk.py` | The driver. Its docstring is the spec. |
-| `start-x.sh` | `/usr/local/lib/jupiter-kiosk/start-x.sh` | Makes the X auth cookie, then runs `xinit` |
+| `start-x.sh` | `/usr/local/lib/jupiter-kiosk/start-x.sh` | Makes the X auth cookie, then runs `Xorg` |
 | `jupiter-kiosk.xorg.conf` | `/etc/X11/jupiter-kiosk.conf` | X on the display card only, no input devices |
-| `jupiter-kiosk.service` | `/etc/systemd/system/jupiter-kiosk.service` | The unit (exec-time hardening) |
+| `jupiter-kiosk-x.service` | `/etc/systemd/system/jupiter-kiosk-x.service` | The X server, in its own network namespace (exec-time hardening) |
+| `jupiter-kiosk.service` | `/etc/systemd/system/jupiter-kiosk.service` | kiosk.py + Chrome; the unit you enable (exec-time hardening) |
 | `jupiter-kiosk.pam` | `/etc/pam.d/jupiter-kiosk` | Minimal PAM stack for the seat session |
 | `jupiter-kiosk.polkit.rules` | `/etc/polkit-1/rules.d/10-jupiter-kiosk.rules` | Kiosk user may not power off, reboot or mount anything |
 | `kiosk-user-slice.conf` | `/etc/systemd/system/user-<kiosk uid>.slice.d/50-jupiter-kiosk.conf` | Memory/task/CPU limits + network allow-list |
@@ -62,17 +72,22 @@ sudo install -d -m 750 -o root -g kiosk /etc/jupiter-kiosk
 sudo install -m 640 -o root -g kiosk kiosk.example.json /etc/jupiter-kiosk/kiosk.json
 sudoedit /etc/jupiter-kiosk/kiosk.json      # host_map IP = `tailscale ip -4`; outputs/rotation (below)
 sudo python3 -I make_logins.py              # checks the dashboard cookie, makes Grafana user closet-kiosk
-sudo -u kiosk /usr/local/lib/jupiter-kiosk/kiosk.py --preflight   # warns about the voice card: masks apply inside the unit only
-sudo install -m 644 jupiter-kiosk.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now jupiter-kiosk
-journalctl -t jupiter-kiosk -b | grep -E 'preflight|browser up'   # inside the unit: no voice-card warning
+sudo -u kiosk /usr/local/lib/jupiter-kiosk/kiosk.py --preflight   # warns about the voice card: masks apply inside the units only
+sudo install -m 644 jupiter-kiosk-x.service jupiter-kiosk.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now jupiter-kiosk   # starts the X unit first
+journalctl -t jupiter-kiosk -t jupiter-kiosk-x -b | grep -E 'preflight|browser up|voice card'   # two "preflight ok", no voice-card warning
+ss -xl | grep nvidia-xdriver                 # must print nothing: X's sockets aren't in the host network namespace
 ```
 
-Starting it takes tty1 away from the console login (`Conflicts=getty@tty1`). X ignores keyboards, so
+**Upgrading from the one-unit layout** (before the X unit existed): install `kiosk.py`, `start-x.sh`,
+`jupiter-kiosk.xorg.conf` and both units as above, `sudo systemctl daemon-reload`, then
+`sudo systemctl restart jupiter-kiosk`. The screens are dark for a few seconds.
+
+Starting it takes tty1 away from the console login (the X unit's `Conflicts=getty@tty1`). X ignores keyboards, so
 Ctrl+Alt+F2 does nothing while it runs. Use SSH:
 `sudo systemctl stop jupiter-kiosk && sudo systemctl start getty@tty1` brings the text console back.
 
-`xinit` pulls in about 25 packages through recommends: `xserver-xorg`, the input drivers, and
+The units start Xorg themselves; `xinit` is only installed for what it pulls in: about 25 packages through recommends: `xserver-xorg`, the input drivers, and
 userspace X video drivers for AMD/Intel/nouveau that never load, since the config names `nvidia`.
 None of them is a kernel module.
 
@@ -125,17 +140,18 @@ do, the right screen sits on the login page, and the log says `dashboard asked f
 ## Day to day
 
 ```bash
-systemctl status jupiter-kiosk
-journalctl -t jupiter-kiosk -f               # kiosk.py + X + preflight (they run in the PAM session scope)
-sudo systemctl restart jupiter-kiosk
-sudo pkill -USR1 -u kiosk -x python3         # snapshot each screen (kiosk.py is the kiosk user's only python3) →
+systemctl status jupiter-kiosk jupiter-kiosk-x
+journalctl -t jupiter-kiosk -t jupiter-kiosk-x -f   # kiosk.py, X, both preflights (they run in PAM session scopes)
+journalctl -u jupiter-kiosk -u jupiter-kiosk-x -b   # systemd's own lines: exit codes, scheduled restarts, PAM failures
+sudo systemctl restart jupiter-kiosk         # restarts X too
+sudo systemctl kill -s USR1 --kill-whom=main jupiter-kiosk   # snapshot each screen (main = kiosk.py) →
 sudo ls -l /run/user/$(id -u kiosk)/jupiter-kiosk/   #   left.png / right.png: personal data, delete after looking
-nvidia-smi                                   # Xorg + chrome must show on GPU bus 0C only
+ss -xl | grep nvidia-xdriver                 # must print nothing (X has its own network namespace)
+sudo nvidia-smi                              # Xorg + chrome must show on GPU bus 0C only (without sudo: Xorg only)
 systemd-cgls -u user-$(id -u kiosk).slice    # what the kiosk runs; `systemctl status user-$(id -u kiosk).slice` = memory
 ```
 
-The X server's own log is `/var/lib/jupiter-kiosk/.local/share/xorg/Xorg.0.log`. A plain
-`systemctl stop` leaves the unit "failed", because xinit exits 1 on SIGTERM.
+The X server's own log is `/var/lib/jupiter-kiosk/.local/share/xorg/Xorg.0.log`.
 
 **What the log says:**
 - `page not loading (HTTP 502)`: the server behind Tailscale Serve is down or still starting, e.g.
@@ -145,7 +161,29 @@ The X server's own log is `/var/lib/jupiter-kiosk/.local/share/xorg/Xorg.0.log`.
 - `monitors changed … restarting`: a monitor was plugged in or out. systemd restarts it with a
   fresh layout 30 s later.
 - `browser restart (…)`: Chrome died, hung, crashed 3 times in 5 min, or was upgraded. It restarts
-  with backoff (5 s up to 2 min).
+  with backoff (5 s up to 2 min). If X died, both screens say this at once, followed by `stopping`:
+  the cause (`Fatal server error`, `(EE)`) is under `journalctl -t jupiter-kiosk-x` and in the X log.
+- `the X server (jupiter-kiosk-x.service) didn't answer within 60 s: …`. The reason is one of:
+  - `no X server on the display`: X didn't start. Its lines are under `-t jupiter-kiosk-x`.
+  - `X refused the auth cookie`: X runs, but kiosk.py read a different cookie file than start-x.sh
+    wrote.
+
+  Either way, both units restart 30 s later.
+- Harmless on every start: `_XSERVTransmkdir: ERROR: euid != 0,directory /tmp/.X11-unix will not be
+  created` (X creates it anyway), and in the X log `(EE) Failed to load module "mouse"/"kbd"` and
+  `(EE) PreInit returned 2` (no input drivers, by design).
+- `not in a private network namespace … refusing to start X` (from `jupiter-kiosk-x`): systemd
+  didn't give X its own network namespace. It skips `PrivateNetwork=` without a word when
+  `jupiter-kiosk.service` set up the shared namespaces first (started with `--job-mode=ignore-dependencies`,
+  say). `sudo systemctl stop jupiter-kiosk`, check both are inactive, then start it again.
+- `X server socket(s) reachable from the host network namespace`: same cause, seen from kiosk.py,
+  or `PrivateNetwork=yes` was removed from the X unit. Another X server on `:0` in the host's network
+  namespace, or any host socket named `*nvidia-xdriver*`, trips it too
+  (`sudo ss -xlp | grep -E 'nvidia-xdriver|X11-unix'` names the owner). It refuses to start.
+- `the X display's abstract socket name is taken in the host network namespace`: something else
+  holds `@/tmp/.X11-unix/X0` (Security below). `sudo ss -xlp | grep X11-unix` names the process
+  (while the kiosk runs, a `python3` `UNCONN` line there is its own hold). The kiosk refuses to start
+  until it's gone.
 
 **Chrome won't start** (`browser restart (Target.getTargets: connection closed)` every few seconds):
 Chrome's stderr is dropped because it can carry page URLs. To see it:
@@ -164,12 +202,33 @@ removing it alone leaves the running browsers logging.
 - **No input devices:** X adds no keyboards or mice, and VT switching and Ctrl+Alt+Backspace are off.
   A keyboard plugged into Jupiter can't drive a browser that holds the dashboard session (DevTools,
   `file://` pages).
-- **Nothing outside the unit can reach X**, and anything that could would see the screens. Three
-  layers stop it:
+- **Nothing outside the two kiosk units can reach X**, and anything that could would see the
+  screens. Abstract unix sockets belong to a network namespace, not to the file system, so in the
+  host's they are open to every process there, including the host-networked Home Assistant and
+  Pi-hole containers. The layers:
   - a fresh MIT-MAGIC-COOKIE per start, passed to xauth on stdin;
-  - `-nolisten tcp -nolisten local`: no TCP port and no abstract socket. An abstract socket would be
-    reachable from host-networked containers such as Home Assistant;
-  - the remaining socket lives in the unit's `PrivateTmp`.
+  - `-nolisten tcp -nolisten local`: no TCP port and no abstract X socket;
+  - **X runs in its own network namespace** (`jupiter-kiosk-x.service`, `PrivateNetwork=yes`, nothing
+    but loopback). The NVIDIA driver's sideband sockets, which it always binds, abstract
+    `@tmp/nvidia-xdriver-*` included (`SidebandSocketPath` only renames them), stay in there. Chrome
+    can't follow: it loads the pages over Jupiter's Tailscale address. So `jupiter-kiosk.service`
+    stays in the host's network namespace and shares only X's private `/tmp` (`JoinsNamespaceOf=` +
+    `PrivateTmp=`). That `/tmp` holds the X socket and the driver's filesystem sideband socket, which
+    NVIDIA's GL client in Chrome falls back to (verified: Chrome's GPU processes connect to
+    `/tmp/nvidia-xdriver-*`, GL on the display card as before);
+  - `--preflight --x-server` refuses to start X outside a private network namespace, and kiosk.py
+    refuses to start if any X socket shows up in its own (the host's). systemd skips
+    `PrivateNetwork=` without a word when the other unit set up the shared namespaces first;
+  - **kiosk.py holds the display's abstract name** (`@/tmp/.X11-unix/X0`) in the host's network
+    namespace, bound but not listening. X clients (xrandr, Chrome) try that name before the `/tmp`
+    socket, so whatever else bound it first would get them, and with them the screens and the
+    keyboard of a browser holding the dashboard session. Held, a connect is refused and the client
+    falls back to `/tmp`. If the name is already taken, kiosk.py refuses to start. The name is free
+    whenever kiosk.py isn't running: at boot before the unit starts, while it's stopped, in each
+    30 s auto-restart gap. So anything in the host's network namespace can keep the screens dark
+    (this, a host socket named `*nvidia-xdriver*`, or an X listener in the host's `/tmp/.X11-unix`)
+    but can't read them. Nothing alerts on that: dark screens are the signal.
+  - X's socket lives in the units' shared private `/tmp`, nowhere else.
 - **Chrome:**
   - driven over `--remote-debugging-pipe`, so no DevTools port is opened;
   - its own user-namespace sandbox, plus `NoNewPrivileges`, seccomp and the unit's other exec-time
@@ -187,7 +246,7 @@ removing it alone leaves the running browsers logging.
   reachable, as they are from the LAN.
 - **Crash reports:** Chrome still starts its crashpad handlers, but nothing can be uploaded (no
   network, consent off), and dumps land in the tmpfs profile.
-- **Hidden folders:** the unit hides `/mnt`, `/home`, `/root`, `/srv` and a few `/opt` app folders.
+- **Hidden folders:** both units hide `/mnt`, `/home`, `/root`, `/srv` and a few `/opt` app folders.
   Some files there are world-readable (other apps' data), and a browser has no business reading
   them.
 - **Logs:** screen names, states, HTTP status codes and error kinds only. SIGUSR1 snapshots show the
@@ -195,14 +254,16 @@ removing it alone leaves the running browsers logging.
   cleared on stop.
 
 **Known limits:**
-- **The NVIDIA sideband socket is reachable from the host network namespace.** Besides
-  `/tmp/nvidia-xdriver-*` in PrivateTmp, the X driver always binds an abstract
-  `@tmp/nvidia-xdriver-*` datagram socket, and `SidebandSocketPath` only renames it. Every process
-  in the host network namespace can send to it, including the host-networked Home Assistant and
-  Pi-hole containers. What it exposes is unauthenticated datagrams parsed by the closed-source
-  driver ("NV-GLX sideband client notification"). No exploit is known; the risk is a parser bug or a
-  flood. The fix is a private network namespace for X alone: split X into its own unit with
-  `PrivateNetwork=yes`, and keep Chrome in a unit that shares only `/tmp` (`JoinsNamespaceOf=`).
+- **Chrome's GL client still tries the abstract sideband name first.** In the host network
+  namespace that name is now free, so a process there that bound `@tmp/nvidia-xdriver-<id>` would
+  receive Chrome's sideband datagrams instead of X: driver notifications, not the screens, and it
+  can't send back (Chrome's end is unnamed). It would need the 8-hex-digit id, which changed on every
+  X start seen so far (3 of 3, so likely random, not proven) and isn't visible from the host's
+  network namespace (the sockets that carry it are in X's namespace and its private `/tmp`).
+- **Chrome can outlive a killed kiosk.py by up to 30 s.** Under xinit, X died with its client. Now,
+  if kiosk.py is SIGKILLed or OOM-killed, its Chromes keep running, no longer covered by the held
+  X name, until the auto-restart reaches X (`RestartSec=30`) and they lose their display. A Chrome
+  GPU process that respawned in that window would try the abstract X name first.
 - **X's startup probe still opens the voice card.** It asks logind for every DRM device, and logind
   opens `/dev/dri/card0` outside the unit's mount namespace and hands X the fd, so `InaccessiblePaths`
   can't stop it (`-isolateDevice` doesn't either). It holds no memory or context there. Putting the
@@ -220,6 +281,11 @@ removing it alone leaves the running browsers logging.
 - Jess Glance was laid out for landscape, so the bottom ~40% of the portrait Grafana screen is
   empty. A portrait dashboard (dashgen) would fill it.
 - No night schedule: the screens stay on around the clock.
+- **Monitor hot-plug not seen yet**, with X in its own network namespace or before. There, udev events
+  don't reach X. That should not matter, because the NVIDIA driver reports monitor changes through its
+  own kernel interface, and input/GPU hotplug are off anyway. Check once: unplug and replug a monitor
+  and look for `monitors changed … restarting` in `journalctl -t jupiter-kiosk`. A start always
+  re-probes, so `sudo systemctl restart jupiter-kiosk` fixes a missed change.
 - The Tailscale IP sits in `host_map` and in the slice's `IPAddressAllow`. If Jupiter's tailnet
   address ever changes, edit both.
 - **"No data" on the Grafana screen:** the request, latency, tool-call and LLM-error panels read 0
@@ -231,7 +297,8 @@ removing it alone leaves the running browsers logging.
 
 ```bash
 sudo systemctl disable --now jupiter-kiosk && sudo systemctl start getty@tty1
-sudo rm /etc/systemd/system/jupiter-kiosk.service /etc/X11/jupiter-kiosk.conf /etc/pam.d/jupiter-kiosk \
+sudo rm /etc/systemd/system/jupiter-kiosk.service /etc/systemd/system/jupiter-kiosk-x.service \
+  /etc/X11/jupiter-kiosk.conf /etc/pam.d/jupiter-kiosk \
   /etc/polkit-1/rules.d/10-jupiter-kiosk.rules
 sudo rm -r /etc/systemd/system/user-$(id -u kiosk).slice.d /etc/systemd/system/user@$(id -u kiosk).service.d \
   /usr/local/lib/jupiter-kiosk /etc/jupiter-kiosk
