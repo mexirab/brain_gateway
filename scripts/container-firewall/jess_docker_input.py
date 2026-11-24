@@ -620,7 +620,12 @@ class Watcher:
 
 
 def summary(hours: int) -> str:
-    res = run([JOURNALCTL, "-k", "--no-pager", "-o", "cat", f"--since=-{hours}h", "-g", "jess-docker-in"], check=False)
+    # _TRANSPORT=kernel, not -k: -k implies --boot, so a window spanning a reboot
+    # would silently drop the earlier boot's lines (the enforce gate reads this).
+    res = run(
+        [JOURNALCTL, "_TRANSPORT=kernel", "--no-pager", "-o", "cat", f"--since=-{hours}h", "-g", "jess-docker-in"],
+        check=False,
+    )
     try:
         by_iface = {iface: name for name, iface in docker_networks().bridges.items()}
     except DockerUnavailable:

@@ -13,9 +13,8 @@ DEFAULT-ROUTE network, so the allow lines only work, and only stay narrow, while
   default route; the script reports IPv6 networks as uncovered) whose fixed
   bridge names start with `br-` and fit Linux's 15-char limit, so the
   `-i br-+` jump covers them;
-- the repo config allow-lists nothing else, apart from the temporary lines
-  under `# TRANSITION`, and stays at `mode observe` (the owner switches the
-  /etc copy to enforce by hand).
+- the repo config allow-lists nothing else and stays at `mode observe` (the
+  owner switches the /etc copy to enforce by hand).
 
 A new member on either network would get the host ports of its allow line. A
 member whose default route moves elsewhere has its host traffic arrive on
@@ -49,7 +48,6 @@ _CONF = _FW_DIR / "jess-docker-input.conf"
 _BRIDGE_OPT = "com.docker.network.bridge.name"
 _HOST_ACCESS = "gateway_nerves_host-access"
 _HOST_SCRAPE = "monitoring_host-scrape"
-_TRANSITION_NETS = {"gateway_nerves_gateway-net", "monitoring_monitoring-net"}
 
 # (compose file, network key, fixed Docker name, bridge name, "<file>:<service>" members)
 _NETWORKS = [
@@ -184,17 +182,6 @@ def _members(defining: Path, key: str, fixed_name: str) -> tuple[set[str], list[
     return members, unparsed
 
 
-def _conf_parts():
-    """(the whole config, the part above `# TRANSITION`, the part from it on), parsed by the script."""
-    fw = _fw()
-    lines = _CONF.read_text(encoding="utf-8").splitlines()
-    cut = next((i for i, line in enumerate(lines) if line.lstrip().startswith("# TRANSITION")), len(lines))
-    whole = fw.parse_config("\n".join(lines))
-    main = fw.parse_config("\n".join(lines[:cut]))
-    transition = fw.parse_config("mode observe\n" + "\n".join(lines[cut:]))  # its own mode line would fail here
-    return whole, main, transition
-
-
 # -- the two dedicated networks ------------------------------------------------
 
 
@@ -281,23 +268,32 @@ def test_bridge_names_are_covered_by_the_jump():
 
 @_needs_conf
 def test_conf_allows_only_the_dedicated_networks():
-    whole, main, transition = _conf_parts()
-    assert [a.network for a in whole.allows] == [a.network for a in main.allows + transition.allows]
+    allows = _fw().parse_config(_CONF.read_text(encoding="utf-8")).allows
+    nets = {a.network for a in allows}
     dedicated = {_HOST_ACCESS, _HOST_SCRAPE}
-    main_nets = {a.network for a in main.allows}
-    assert main_nets <= dedicated, (
-        f"jess-docker-input.conf allow-lists {sorted(main_nets - dedicated)!r} outside the TRANSITION block. "
-        f"Only {sorted(dedicated)!r} may be allow-listed: they are the dedicated default-route networks of the "
-        "only containers that need host access (test_network_members guards who is on them)."
+    assert nets <= dedicated, (
+        f"jess-docker-input.conf allow-lists {sorted(nets - dedicated)!r}. Only {sorted(dedicated)!r} may be "
+        "allow-listed: they are the dedicated default-route networks of the only containers that need host "
+        "access (test_network_members guards who is on them)."
     )
-    assert main_nets == dedicated, (
-        f"jess-docker-input.conf has no allow line for {sorted(dedicated - main_nets)!r}; compose makes it a "
+    assert nets == dedicated, (
+        f"jess-docker-input.conf has no allow line for {sorted(dedicated - nets)!r}; compose makes it a "
         "default route for host access, so enforce mode would cut its members off"
     )
-    extra = {a.network for a in transition.allows}
-    assert extra <= _TRANSITION_NETS, (
-        f"the # TRANSITION block allow-lists {sorted(extra - _TRANSITION_NETS)!r}; it may only hold the temporary "
-        f"lines for {sorted(_TRANSITION_NETS)!r} (to be deleted before enforce mode)"
+    assert len(allows) == len(dedicated), (
+        "jess-docker-input.conf has more than one allow line for a dedicated network; keep one line per "
+        "network so every host port its members get is in one reviewed place"
+    )
+    # Pin protocol + ports too: widening a line (SSH, SMB, DNS, UDP, ...) must mean
+    # changing this reviewed table, not just the config.
+    expected = {
+        (_HOST_ACCESS, "tcp"): (8004, 8053, 8123, 8888),
+        (_HOST_SCRAPE, "tcp"): (5050, 8004, 9100, 9400, 19999),
+    }
+    got = {(a.network, a.proto): a.ports for a in allows}
+    assert got == expected, (
+        f"jess-docker-input.conf allows {got!r}, expected {expected!r}. Every host port here is reachable by "
+        "the network's containers; update this table only with a reason in docs/internal/CONTAINER_HOST_REACHABILITY.md"
     )
 
 

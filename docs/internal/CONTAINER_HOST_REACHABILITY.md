@@ -1,9 +1,9 @@
 # Container → host reachability on Jupiter (2026-11-21)
 
-**Status (2026-11-22):** option 2 is **installed on Jupiter in observe mode**: it logs and blocks nothing.
+**Status (2026-11-24):** option 2 is **installed on Jupiter in observe mode**: it logs and blocks nothing.
 - **Enforce waits for three things,** listed in `monitoring/README.md` → Container → host firewall → Observe:
   - monitoring back: done 2026-11-24, after the data disks moved into Jupiter;
-  - the compose change below deployed;
+  - the compose change below deployed and the `TRANSITION` lines removed: done 2026-11-24;
   - a day of observe logs.
 - **Files:** `scripts/container-firewall/` (script, config, unit, probe).
 - **Operations runbook:** `monitoring/README.md`. Install record: [below](#installed-2026-11-22).
@@ -60,7 +60,7 @@ IPv6: no network has IPv6 enabled, and containers have IPv6 disabled on `eth0`. 
 | Published `0.0.0.0` ports: orchestrator 8888, Immich 2283, Audiobookshelf 13378 | — | docker-proxy | open | timeout | Prometheus, blackbox and Alertmanager → orchestrator. These go through Docker's DNAT + `FORWARD` path, not `INPUT` (see below) |
 | Loopback publishes (3001, 5006, 5232, 7575, 8090, 8484, 9115), Tailscale Serve ports, Netdata statsd 8125 | — | `127.0.0.1` / `tailscale0` | refused | refused | — |
 
-**Not probed** (UDP without a protocol to test): nmbd 137/138, HA mDNS 5353 and SSDP 1900 also listen on every bridge address. The proposed rule covers them too.
+**Not probed** (UDP without a protocol to test): nmbd 137/138, HA mDNS 5353 and SSDP 1900 also listen on every bridge address. The installed rule covers them too.
 
 **Also reachable from every NAT network:** the internet and the LAN (e.g. Helios `:8080`). That is the `FORWARD` path, by design, and out of scope here.
 
@@ -93,7 +93,7 @@ Only these use the `INPUT` path, i.e. connect to a process on Jupiter itself:
 |---|---|---|
 | orchestrator | 8123 | `HA_URL` is the LAN IP. `ip route get 10.0.0.248 from 172.26.0.2 iif br-…` gives `local`, so the packet arrives on the bridge the orchestrator left through. |
 | orchestrator | 8053 | Pi-hole client (`PIHOLE_URLS`) |
-| orchestrator | 8004 | VoxCPM via `host.docker.internal` (= `172.17.0.1`), once `TTS_URL` points at Jupiter |
+| orchestrator | 8004 | VoxCPM via `host.docker.internal` (= `172.17.0.1`): `TTS_URL` since VoxCPM moved to Jupiter in PR #172 |
 | orchestrator | 8888 | A call to `10.0.0.248:8888` from the orchestrator's publishing network is not DNAT'd. It hairpins through docker-proxy on `INPUT`. |
 | Prometheus, blackbox | 5050, 8004, 9100, 9400, 19999 | scrape jobs `node-exporter`, `conjure`, `netdata` and the Jupiter GPU exporter; blackbox `conjure` probe and `tts-voxcpm` probe (`http://host.docker.internal:8004/health`, since VoxCPM moved to Jupiter in PR #172) |
 
@@ -159,10 +159,10 @@ Host-side jobs are also outside the chain: backups, CI runner, Tailscale Serve, 
 | `monitoring_host-scrape` | prometheus, blackbox-exporter (`gw_priority: 1`) | `br-jess-scrape` | 5050, 8004, 9100, 9400, 19999 |
 
 - **Why dedicated networks:**
-  - Only the containers that need host access get it. On gateway-net, radicale, actual-budget, loki and the frontend would have got HA too.
+  - Only the containers that need host access get it. On gateway-net, radicale, actual-budget, redis, loki and the frontend would have got HA too.
   - The orchestrator's plain-HTTP HA traffic no longer shares a bridge (L2) with other containers.
 - **A fixed bridge name** keeps the rule valid if the network is ever recreated.
-- **Until the compose change is deployed,** the config also carries two `TRANSITION` lines for gateway-net and monitoring-net. Delete them before enforce.
+- **Transition (done 2026-11-24):** until the compose change deployed, the config also carried two `TRANSITION` lines for gateway-net and monitoring-net. They were removed once the new networks were verified.
 
 ### How it is applied
 
@@ -182,7 +182,7 @@ Host-side jobs are also outside the chain: backups, CI runner, Tailscale Serve, 
 
 See `monitoring/README.md` → Container → host firewall. In short:
 1. **Observe** (now).
-2. **Gates:** monitoring healthy 24 h; compose change deployed and `TRANSITION` lines gone; 24 h of observe covering backups, the self-audit, a CI deploy and Paperless; `summary` clean; alerts loaded.
+2. **Gates:** monitoring healthy 24 h; compose change deployed and `TRANSITION` lines gone (both done 2026-11-24); 24 h of observe covering backups, the self-audit, a CI deploy and Paperless; `summary` clean; alerts loaded.
 3. **Enforce:** `mode enforce` + reload, then re-probe with new connections.
 
 Rollback is `sudo systemctl disable --now jess-docker-input`.
@@ -204,7 +204,7 @@ Rollback is `sudo systemctl disable --now jess-docker-input`.
   - **Bad config:** `systemctl reload` failed and the rules stayed. A good reload then succeeded.
   - **Crash:** after `kill -9`, the unit kept the chains ("keeping the chains for the restart") and re-applied them.
   - **Metrics:** the textfile metrics appear on node-exporter `:9100/metrics`.
-- **Still to check, once host-scrape exists:** Prometheus scrapes and the blackbox probes through host-scrape, and the Alertmanager webhook.
+- **Checked after the 2026-11-24 deploy** (below): Prometheus scrapes and the blackbox probes through host-scrape. The Alertmanager → orchestrator webhook goes through DNAT/FORWARD, not this chain.
 
 **2026-11-24 (after the reboot at 00:35 UTC):**
 - **Reboot survived:** the unit re-applied both chains, jumps on top, observe mode.
@@ -213,6 +213,17 @@ Rollback is `sudo systemctl disable --now jess-docker-input`.
   - blackbox-exporter's Conjure probe (`10.0.0.248:5050`) and its new TTS probe (`host.docker.internal:8004`, since VoxCPM moved to Jupiter) both left through `frontend-probe-net`. In enforce mode both would have been rejected.
   - Fix: `host-scrape` carries blackbox's default route, and its allow line gained 8004.
 - **Ignore the self-port hits** (`immich_default` → :2283, `audiobookshelf_default` → :13378, `paperless_default` → :8777, `monitoring_loki-push-net` → :3101). They came from throwaway probe containers another session started at 00:49–00:51, not from the apps.
+
+**2026-11-24, PR #176 deployed (`19c2459`):**
+- **Networks:** the orchestrator carries `host-access` with `GwPriority` 1; Prometheus and blackbox-exporter carry `host-scrape` with `GwPriority` 1. The watcher picked both networks up from the Docker events by itself (`allow_rules=4`: the two dedicated lines plus the two `TRANSITION` lines).
+- **Traffic on the new bridges:** within a minute, the `host-access` and `host-scrape` allow rules carried 59 and 60 packets. The old gateway-net and monitoring-net lines carried none, apart from 6 packets from the old Prometheus before it was recreated. Nothing went unmatched.
+- **Paths:**
+  - orchestrator → HA `/api/` (authenticated) returns 200;
+  - Jupiter scrapes are up: `node-exporter`, `netdata`, `conjure`, `gpu-exporter`;
+  - blackbox probes succeed: `conjure`, `orchestrator`, `tts-voxcpm`;
+  - the Prometheus `orchestrator` scrape of `10.0.0.248:8888` is up (host-scrape → host-access through Docker's DNAT, not this chain);
+  - Alertmanager is up.
+- **TRANSITION lines removed:** from `/etc/jess-docker-input.conf` (previous copy kept as `/etc/jess-docker-input.conf.with-transition`) and from the repo copy. After the reload: `allow_rules=2`, `networks_missing 0`, traffic still on both allow rules, nothing unmatched.
 
 ## Not covered by this change
 
