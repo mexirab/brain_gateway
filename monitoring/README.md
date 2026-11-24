@@ -611,7 +611,7 @@ Expected output:
    - `docker inspect -f '{{json .NetworkSettings.Networks}}' brain-orchestrator` shows `host-access` with `GwPriority` 1.
    - The same holds for `prometheus` and `blackbox-exporter` with `host-scrape`.
    - The two temporary `TRANSITION` allow lines (gateway-net, monitoring-net) were removed from `/etc/jess-docker-input.conf` and the repo copy after that check. On a fresh install there are none.
-3. **Observe for 24 h** with all of these inside the window: the 03:30–04:05 backups, the 07:00 self-audit plus one alert webhook, one CI deploy, and Paperless running.
+3. **Observe for 24 h**, counted from the last config change (`journalctl -u jess-docker-input | grep applied`; for the 2026-11-24 layout that was 01:47 UTC). `summary` reads across reboots. Keep all of these inside the window: the 03:30–04:05 backups, the 07:00 self-audit, one CI deploy, and Paperless running. (The Alertmanager → orchestrator webhook goes through DNAT/FORWARD, so it never enters this chain.)
 4. **Read the summary:**
    - `sudo jess-docker-input summary --hours 24`: every row is either a known probe or something to explain. A legitimate (network, port) pair goes into the allow-list.
    - `sudo jess-docker-input status`: both allow rules show packets.
@@ -620,6 +620,7 @@ Expected output:
 ### Switch to enforce
 
 ```bash
+diff /etc/jess-docker-input.conf scripts/container-firewall/jess-docker-input.conf   # expect no output: /etc = repo
 sudo sed -i 's/^mode observe$/mode enforce/' /etc/jess-docker-input.conf
 sudo systemctl reload jess-docker-input     # fails loudly on a bad config, old rules stay
 sudo jess-docker-input status | grep -E 'REJECT|DROP'
@@ -671,6 +672,8 @@ Expected results:
 - **Containers holding the Docker socket** (promtail, Homepage) are root-equivalent. No firewall rule contains them.
 - **Fail-open windows of seconds:** at boot (containers start before the first apply) and at shutdown.
 - **Kernel log lines** are not shipped to Loki (Jupiter promtail collects Docker and Conjure logs only), so read them with `summary`.
+- **`wyoming-whisper` / `wyoming-jessica-tts`** (main compose, no profile, not running on Jupiter) sit on gateway-net. If they are ever started on Jupiter they would reach VoxCPM through `host.docker.internal`, which enforce mode rejects: give them their own default-route network and allow line, never re-allow gateway-net.
+- **Leftover backup:** `/etc/jess-docker-input.conf.with-transition` holds the pre-2026-11-24 allow-list (not loaded). Delete it once enforce has settled.
 
 ## Architecture
 

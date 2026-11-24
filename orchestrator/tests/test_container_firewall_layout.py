@@ -268,7 +268,8 @@ def test_bridge_names_are_covered_by_the_jump():
 
 @_needs_conf
 def test_conf_allows_only_the_dedicated_networks():
-    nets = {a.network for a in _fw().parse_config(_CONF.read_text(encoding="utf-8")).allows}
+    allows = _fw().parse_config(_CONF.read_text(encoding="utf-8")).allows
+    nets = {a.network for a in allows}
     dedicated = {_HOST_ACCESS, _HOST_SCRAPE}
     assert nets <= dedicated, (
         f"jess-docker-input.conf allow-lists {sorted(nets - dedicated)!r}. Only {sorted(dedicated)!r} may be "
@@ -278,6 +279,21 @@ def test_conf_allows_only_the_dedicated_networks():
     assert nets == dedicated, (
         f"jess-docker-input.conf has no allow line for {sorted(dedicated - nets)!r}; compose makes it a "
         "default route for host access, so enforce mode would cut its members off"
+    )
+    assert len(allows) == len(dedicated), (
+        "jess-docker-input.conf has more than one allow line for a dedicated network; keep one line per "
+        "network so every host port its members get is in one reviewed place"
+    )
+    # Pin protocol + ports too: widening a line (SSH, SMB, DNS, UDP, ...) must mean
+    # changing this reviewed table, not just the config.
+    expected = {
+        (_HOST_ACCESS, "tcp"): (8004, 8053, 8123, 8888),
+        (_HOST_SCRAPE, "tcp"): (5050, 8004, 9100, 9400, 19999),
+    }
+    got = {(a.network, a.proto): a.ports for a in allows}
+    assert got == expected, (
+        f"jess-docker-input.conf allows {got!r}, expected {expected!r}. Every host port here is reachable by "
+        "the network's containers; update this table only with a reason in docs/internal/CONTAINER_HOST_REACHABILITY.md"
     )
 
 

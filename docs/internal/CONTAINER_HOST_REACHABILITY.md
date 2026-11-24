@@ -159,7 +159,7 @@ Host-side jobs are also outside the chain: backups, CI runner, Tailscale Serve, 
 | `monitoring_host-scrape` | prometheus, blackbox-exporter (`gw_priority: 1`) | `br-jess-scrape` | 5050, 8004, 9100, 9400, 19999 |
 
 - **Why dedicated networks:**
-  - Only the containers that need host access get it. On gateway-net, radicale, actual-budget, loki and the frontend would have got HA too.
+  - Only the containers that need host access get it. On gateway-net, radicale, actual-budget, redis, loki and the frontend would have got HA too.
   - The orchestrator's plain-HTTP HA traffic no longer shares a bridge (L2) with other containers.
 - **A fixed bridge name** keeps the rule valid if the network is ever recreated.
 - **Transition (done 2026-11-24):** until the compose change deployed, the config also carried two `TRANSITION` lines for gateway-net and monitoring-net. They were removed once the new networks were verified.
@@ -215,12 +215,13 @@ Rollback is `sudo systemctl disable --now jess-docker-input`.
 - **Ignore the self-port hits** (`immich_default` → :2283, `audiobookshelf_default` → :13378, `paperless_default` → :8777, `monitoring_loki-push-net` → :3101). They came from throwaway probe containers another session started at 00:49–00:51, not from the apps.
 
 **2026-11-24, PR #176 deployed (`19c2459`):**
-- **Networks:** the orchestrator carries `host-access` with `GwPriority` 1; Prometheus and blackbox-exporter carry `host-scrape` with `GwPriority` 1. The watcher picked both networks up from the Docker events by itself (`allow_rules=4`).
+- **Networks:** the orchestrator carries `host-access` with `GwPriority` 1; Prometheus and blackbox-exporter carry `host-scrape` with `GwPriority` 1. The watcher picked both networks up from the Docker events by itself (`allow_rules=4`: the two dedicated lines plus the two `TRANSITION` lines).
 - **Traffic on the new bridges:** within a minute, the `host-access` and `host-scrape` allow rules carried 59 and 60 packets. The old gateway-net and monitoring-net lines carried none, apart from 6 packets from the old Prometheus before it was recreated. Nothing went unmatched.
 - **Paths:**
-  - orchestrator → HA `/api/` returns 200;
+  - orchestrator → HA `/api/` (authenticated) returns 200;
   - Jupiter scrapes are up: `node-exporter`, `netdata`, `conjure`, `gpu-exporter`;
   - blackbox probes succeed: `conjure`, `orchestrator`, `tts-voxcpm`;
+  - the Prometheus `orchestrator` scrape of `10.0.0.248:8888` is up (host-scrape → host-access through Docker's DNAT, not this chain);
   - Alertmanager is up.
 - **TRANSITION lines removed:** from `/etc/jess-docker-input.conf` (previous copy kept as `/etc/jess-docker-input.conf.with-transition`) and from the repo copy. After the reload: `allow_rules=2`, `networks_missing 0`, traffic still on both allow rules, nothing unmatched.
 

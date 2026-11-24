@@ -18,6 +18,7 @@ Branch `docs/container-host-reachability` (PR #176). Measured 2026-11-21: every 
 
 - New `scripts/container-firewall/`: `jess_docker_input.py` (stdlib, root; installed copy `/usr/local/sbin/jess-docker-input`; docstring = spec; `render`/`check`/`apply`/`watch`/`remove`/`status`/`summary`), `jess-docker-input.conf` (repo copy of `/etc/jess-docker-input.conf`, stays `mode observe`), `jess-docker-input.service`, `probe_host_ports.py` (read-only probe for a throwaway one-network container).
 - Chains `JESS-DOCKER-IN` (iptables) and `JESS-DOCKER-IN6` (ip6tables), jumped from INPUT for `-i br-+` / `-i docker0` only; LAN, tailnet and loopback never enter them. IPv6 is covered by `JESS-DOCKER-IN6` (no allow lines). Chains refilled with `*-restore --noflush`; drift checked every 60 s and on Docker network events.
+- 2026-11-24 follow-up (PR #182): `TRANSITION` allow lines removed after the deploy; `summary` reads the kernel log across reboots (`journalctl _TRANSPORT=kernel`; `-k` meant the current boot only); the layout test pins each allowed network's exact protocol + ports.
 
 ### Compose
 

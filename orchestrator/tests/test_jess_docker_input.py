@@ -16,7 +16,7 @@ in-memory Host that models what the script uses of the real CLIs:
   with balanced quotes, COMMIT + newline), applied atomically, counters reset.
   A restore WITHOUT --noflush would wipe Docker's own rules on the real host:
   the fake refuses it and the fixture fails the test,
-- journalctl -k (for `summary`).
+- journalctl _TRANSPORT=kernel (for `summary`).
 
 Any other command is recorded as unexpected and fails the test at teardown.
 """
@@ -178,7 +178,7 @@ class Host:
     def _dispatch(self, prog, args, input_text):
         if prog == jdi.DOCKER:
             return self._docker(args)
-        if prog == jdi.JOURNALCTL and args[:1] == ("-k",):
+        if prog == jdi.JOURNALCTL and args[:1] == ("_TRANSPORT=kernel",):
             return 0, self.journal, ""
         for fam, f in FAM.items():
             if prog == f.iptables:
@@ -820,6 +820,17 @@ def test_sync_reloads_only_drifted_family(host, conf, mdir):
     assert f"-i br-{_net_id(GWNET)[:12]} " not in host.chain_text("ipv4")
 
 
+def test_sync_fixed_bridge_survives_recreate(host, conf, mdir):
+    # host-access and host-scrape pin com.docker.network.bridge.name, so a
+    # recreated network (new id) keeps its interface and needs no reload.
+    w = jdi.Watcher(conf, mdir)
+    w.sync()
+    host.drop_network(HOSTACC)
+    host.add_network(HOSTACC, "br-jess-hostacc", net_id=_net_id("recreated"))
+    w.sync()
+    assert host.restored() == ["ipv4", "ipv6"]
+
+
 def test_sync_force_and_mode_change(host, conf, mdir):
     w = jdi.Watcher(conf, mdir)
     w.sync()
@@ -1184,7 +1195,8 @@ def test_summary_groups_by_network(host):
     assert ["1", "ipv6", "observe", "br-1f56b9570309", "fe80:0000:0000:0000:0042:acff:fe19:0001", "TCP", "445"] in rows
     assert len(rows) == 5
     (journal_call,) = [c for c in host.calls if c[0] == jdi.JOURNALCTL]
-    assert "--since=-6h" in journal_call and "-k" in journal_call
+    assert "--since=-6h" in journal_call and "_TRANSPORT=kernel" in journal_call
+    assert "-k" not in journal_call and "-b" not in journal_call  # -k implies --boot: a reboot would hide lines
 
 
 def test_summary_without_docker_or_lines(host):
