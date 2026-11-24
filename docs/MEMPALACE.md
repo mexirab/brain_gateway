@@ -17,12 +17,17 @@ These code paths write into the mempalace collection. Not all go through `MemPal
 | Writer | Path | Metric fires? |
 |---|---|---|
 | `routes_palace.py::store` (manual REST POST) | `palace.store()` | ✅ |
+| `api_routes.py::add_memory` (`POST /api/memory/add`) | `shared.collection.add` (plaintext chunk, `source="api:<caller source>"`, no wing/room) | ❌ |
 | `session_miner.py::mine_sessions` | `palace.store()` | ✅ |
 | `rag_ingest.py::check_and_ingest` (every 2 min) | `shared.collection.add` (HNSW-safe direct write), `PALACE_STORES_TOTAL` incremented manually with `wing="library"` | ✅ (as of commit `e5e1d07`) |
 | `auto_learn.py::store_fact` | `shared.collection.add`, `PALACE_STORES_TOTAL` incremented manually with the routed wing/room | ✅ (as of commit `e5e1d07`) |
 | `memory_manager.py::update_memory` (`update_memory` tool) | `shared.collection.upsert` (plaintext, `source="user_correction"`) | ❌ (replacements: `bgw_memory_facts_replaced_total`) |
-| Document vault (`document_vault` tool) | `palace.store()` | ✅ |
+| `brain_dump_manager.py::_route_to_rag` (`brain_dump` tool) | `shared.collection.upsert` (`source="brain_dump"`) | ❌ |
+| Document vault (`document_vault` tool notes; `routes_documents.py` upload) | `shared.collection.upsert` / `shared.collection.add` (`source="document_vault"`) | ❌ |
+| `budget_manager.py` (budget import summary, `personal/finance`) | `palace.store()` | ✅ |
 | `jobs_self_audit.py` (daily facts line, wing `system`, room `audit`) | `palace.store()` | ✅ |
+
+**Every writer passes its own vectors** (`shared.embedding_model.encode(..., normalize_embeddings=True)` → `embeddings=`; queries use `query_embeddings=`). The collection is opened without an `embedding_function`, so a `documents=`-only write or a `query_texts=` query runs Chroma's default embedder: an ONNX MiniLM download from Chroma's S3 bucket (not covered by `HF_HUB_OFFLINE`) and 384-dim vectors, refused by the 768-dim palace — and on an empty collection (fresh install) accepted, locking it to 384 dims so every later write fails. `/api/memory/add` did exactly that until 2026-11-24 (it never stored anything live). Guard: `orchestrator/tests/test_memory_add_route.py::test_no_chroma_call_falls_back_to_the_default_embedder` (AST scan of `orchestrator/`, `scripts/`, `rag/`; keyword args only — a call built through `**kwargs`, as `mempalace.search` and `prompt_builder` do, isn't checked). Known limit: the default function stays attached to the collection — Chroma refuses a different one on reopen, so swapping it needs a collection migration; until then the guard is the protection.
 
 ## Embedding model
 

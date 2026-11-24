@@ -64,7 +64,7 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 |--------|------|---------|
 | GET | `/api/memory/search` | Flat semantic search (`?query=`; `n` is accepted but unused — `TOP_K` applies). Fact docs use the `MEMORY_SEARCH_MIN_COS` floor (0.30), document chunks `MIN_COS`. Returns `{query, results}` (one text block). See `docs/MEMPALACE.md` → Retrieval |
 | GET | `/api/memory/stats` | Collection stats |
-| POST | `/api/memory/add` | Add document (optional `tags` array) |
+| POST | `/api/memory/add` | Store a plaintext document chunk: `{text, category?, source?, tags?}`, embedded with the pinned model; returns `{ok, id}`. Limits + responses: [memory/add](#memoryadd) |
 | GET | `/api/memory/learned` | List auto-learned facts (optional `?category=`, `?limit=`) |
 | DELETE | `/api/memory/learned/{doc_id}` | Delete a single learned fact |
 | DELETE | `/api/memory/learned?confirm=true` | Wipe all learned facts |
@@ -992,18 +992,31 @@ Exact math for the brain (3-bit MoE, `reasoning_effort` low — it got arithmeti
 - `query` (string, required): `morning_briefing`, `calendar_poll`, `email_poll`, `reminders`, `focus_timer`, `temperature`, `system_health`, or `recent_errors`
 
 ### memory/add
+`POST /api/memory/add` (bearer; `schemas.MemoryAddRequest`):
 ```json
 {
-  "content": "Document text to store",
-  "category": "personal",
-  "source": "api",
+  "text": "Document text to store",
+  "category": "general",
+  "source": "manual",
   "tags": ["adhd", "pattern"]
 }
 ```
-- `content` (string, required): Text to embed and store
-- `category` (string, optional): Category label
-- `source` (string, optional): Source identifier
-- `tags` (array of strings, optional): Stored as comma-separated string in ChromaDB metadata
+- `text` (string, required): 1–4000 chars, stripped. The embedding model reads ~2,000 chars (512 tokens) and retrieval shows 800, so longer notes are refused, not stored half-searchable.
+- `category` (string, optional, default `general`): ≤64 chars, `^[A-Za-z0-9_-]+$`. Starts the doc id.
+- `source` (string, optional, default `manual`): ≤64 chars, `^[A-Za-z0-9_.:-]+$`. Stored as `api:<source>`, so a caller can't pose as `auto_learn`/`user_correction` (looser fact retrieval floor) or block auto_learn's / brain_dump's substring dedup. `prompt_builder._rag_context_sync` prints the source uncut as the chunk's `(source: …)` label in the system prompt; the 64-char cap is what bounds it here (known follow-up: cap it there too).
+- `tags` (array, optional): ≤20 strings of ≤64 chars, stored comma-joined in `tags`.
+
+Stored as one plaintext chunk: metadata `category`, `source`, `kind: chunk`, `created_at` (+ `tags`), no wing/room, so retrieval applies the document floor `MIN_COS`. Embedded with `shared.embedding_model` (`normalize_embeddings=True`, off the event loop); no network call. Id `<category>_<timestamp>_<8 hex>`; delete with `DELETE /api/palace/memory/{id}`.
+
+| Status | When |
+|---|---|
+| 200 `{ok: true, id}` | Stored |
+| 422 | Schema violation (length, pattern, type, bad JSON) |
+| 400 `{ok: false, error}` | `text` blank after stripping |
+| 503 `{ok: false, error}` | Memory off (embedding model not loaded at startup), or a `TransientError` from encode ("Service temporarily unavailable") |
+| 500 `{ok: false, error: "Memory write failed"}` | Any other encode or Chroma failure. Logged as `[MEMORY] /api/memory/add failed at <encode\|add>: <TypeName> (<n> chars)` — no content; encode failures count in `bgw_embedding_errors_total{caller="api_routes"}` |
+
+Before 2026-11-24 the route passed `documents=` without vectors, so Chroma's default embedder ran (ONNX MiniLM download from S3, 384-dim): refused by the 768-dim palace (uncaught 500), and on an empty collection it locked the collection to 384 dims. It never stored anything on the live deployment. See `docs/MEMPALACE.md` → Write paths.
 
 ### generate_workout
 ```json

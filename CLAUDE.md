@@ -95,7 +95,7 @@ User -> Dashboard / HA Assist / Telegram -> Orchestrator -> Unified Loop -> Mode
 
 **Flow:** Single model handles conversation and tool execution in one agentic loop. No delegation between models. Helios (the GPU model layer) is power-tiered — asleep most of the time, woken on demand via an HA smart plug — while the orchestrator and its proactive jobs run 24/7 on Jupiter.
 
-**Infrastructure:** `config.py` centralizes all env vars via Pydantic Settings. `tool_registry.py` provides decorator-based tool registration (replaces legacy if-elif dispatch). `service_registry.py` auto-detects healthy services and disables tools when dependencies are down. `exceptions.py` defines a typed exception hierarchy for consistent error handling. All memory (RAG chunks, auto-learned facts, user corrections) lives in a single `mempalace` ChromaDB collection with wing/room metadata for structured organization.
+**Infrastructure:** `config.py` centralizes all env vars via Pydantic Settings. `tool_registry.py` provides decorator-based tool registration (replaces legacy if-elif dispatch). `service_registry.py` auto-detects healthy services and disables tools when dependencies are down. `exceptions.py` defines a typed exception hierarchy for consistent error handling. All memory (RAG chunks, auto-learned facts, user corrections) lives in a single `mempalace` ChromaDB collection with wing/room metadata for structured organization. Every Chroma write/query passes its own vectors from `shared.embedding_model` (`embeddings=` / `query_embeddings=`) — Chroma's default embedder must never run (`docs/MEMPALACE.md` → Write paths).
 
 ## Tools
 

@@ -852,6 +852,7 @@ EMBEDDING_ERRORS = Counter(
 )
 # Pre-initialised so increase() sees the first failure after a restart.
 for _caller in (
+    "api_routes",
     "auto_learn",
     "brain_dump_manager",
     "memory_manager",
