@@ -1,6 +1,6 @@
 # Container → LAN reachability on Jupiter (2026-11-24)
 
-**Status (2026-11-24):** measured, and a fix is proposed. **Nothing is installed.** The owner decides (see [Decisions for the owner](#decisions-for-the-owner)).
+**Status (2026-11-24):** measured; the fix is built and tested (commit on this branch, `selftest_netns.py` 37/37) but **not installed**. Resume notes: PR #181. The owner decides (see [Decisions for the owner](#decisions-for-the-owner)).
 
 Follow-up to [`CONTAINER_HOST_REACHABILITY.md`](CONTAINER_HOST_REACHABILITY.md) (PR #176). That note covers traffic from containers to Jupiter **itself** (the `INPUT` path). This one covers traffic from containers to **everything off Jupiter**: the LAN, the router, the tailnet and the internet (the `FORWARD` path).
 
@@ -9,7 +9,7 @@ Follow-up to [`CONTAINER_HOST_REACHABILITY.md`](CONTAINER_HOST_REACHABILITY.md) 
 - **Every container on a NAT network reaches the whole LAN and the tailnet.** That is 17 of the 19 Docker networks, i.e. every running container except Home Assistant and Pi-hole (host-networked). All 17 gave the same result. Reachable:
   - **the router:** its DNS, its admin page and its other LAN-side services. For its port-mapping settings, see [Decisions for the owner](#decisions-for-the-owner).
   - **the router's own services through its public address** too (NAT loopback). So blocking `10.0.0.1` alone would not hide them.
-  - **Helios:** SSH, llama-server `:8080` (needs the API key), STT `:8003` (no key), node-exporter, GPU exporter, NUT exporter, Netdata.
+  - **Helios:** SSH, llama-server `:8080`, STT `:8003`, node-exporter, GPU exporter, NUT exporter, Netdata.
   - **other LAN devices:** about two dozen answered a short port sweep. Among them: Cast speakers (local HTTP API on 8008/8009), the voice satellites (ESPHome API on 6053, noise-encrypted), several web admin pages and SSH servers.
   - **tailnet peers, as Jupiter:** Docker masquerades the traffic, so the peer sees Jupiter's tailnet address. Saturn's SSH answered; two personal devices answered with a reset (the path works, the port is closed); MagicDNS `100.100.100.100` answered.
   - **Jupiter's own published ports through its LAN IP:** orchestrator 8888, Immich 2283, Audiobookshelf 13378, Paperless 8777, loki-push-gw 3101.
@@ -67,7 +67,6 @@ Same result from all 17 NAT networks. "Reset" means the TCP connection was refus
 
 ## Findings: the router
 
-- **UPnP IGD:** the router doesn't answer SSDP. One other LAN device advertises an IGD, but it doesn't route, so a mapping made there would do nothing.
 - **Port mapping (NAT-PMP, PCP, UPnP):** see [Decisions for the owner](#decisions-for-the-owner). The details went to the owner directly, not into this public file.
 - **Admin page:** answers on the LAN address and, from inside, on the public address (same certificate).
 - **Hairpin back to Jupiter:** the probed ports on the public address showed no forward to Jupiter. 8123 and 80 time out; if they were forwarded to Jupiter, HA would have answered. A forward or mapping that does exist would bring a container back to its target over `enp7s0`, where neither chain looks.
