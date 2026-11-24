@@ -1,9 +1,9 @@
 # Container → host reachability on Jupiter (2026-11-21)
 
-**Status (2026-11-22):** option 2 is **installed on Jupiter in observe mode**: it logs and blocks nothing.
+**Status (2026-11-24):** option 2 is **installed on Jupiter in observe mode**: it logs and blocks nothing.
 - **Enforce waits for three things,** listed in `monitoring/README.md` → Container → host firewall → Observe:
   - monitoring back: done 2026-11-24, after the data disks moved into Jupiter;
-  - the compose change below deployed;
+  - the compose change below deployed and the `TRANSITION` lines removed: done 2026-11-24;
   - a day of observe logs.
 - **Files:** `scripts/container-firewall/` (script, config, unit, probe).
 - **Operations runbook:** `monitoring/README.md`. Install record: [below](#installed-2026-11-22).
@@ -60,7 +60,7 @@ IPv6: no network has IPv6 enabled, and containers have IPv6 disabled on `eth0`. 
 | Published `0.0.0.0` ports: orchestrator 8888, Immich 2283, Audiobookshelf 13378 | — | docker-proxy | open | timeout | Prometheus, blackbox and Alertmanager → orchestrator. These go through Docker's DNAT + `FORWARD` path, not `INPUT` (see below) |
 | Loopback publishes (3001, 5006, 5232, 7575, 8090, 8484, 9115), Tailscale Serve ports, Netdata statsd 8125 | — | `127.0.0.1` / `tailscale0` | refused | refused | — |
 
-**Not probed** (UDP without a protocol to test): nmbd 137/138, HA mDNS 5353 and SSDP 1900 also listen on every bridge address. The proposed rule covers them too.
+**Not probed** (UDP without a protocol to test): nmbd 137/138, HA mDNS 5353 and SSDP 1900 also listen on every bridge address. The installed rule covers them too.
 
 **Also reachable from every NAT network:** the internet and the LAN (e.g. Helios `:8080`). That is the `FORWARD` path, by design, and out of scope here.
 
@@ -93,7 +93,7 @@ Only these use the `INPUT` path, i.e. connect to a process on Jupiter itself:
 |---|---|---|
 | orchestrator | 8123 | `HA_URL` is the LAN IP. `ip route get 10.0.0.248 from 172.26.0.2 iif br-…` gives `local`, so the packet arrives on the bridge the orchestrator left through. |
 | orchestrator | 8053 | Pi-hole client (`PIHOLE_URLS`) |
-| orchestrator | 8004 | VoxCPM via `host.docker.internal` (= `172.17.0.1`), once `TTS_URL` points at Jupiter |
+| orchestrator | 8004 | VoxCPM via `host.docker.internal` (= `172.17.0.1`): `TTS_URL` since VoxCPM moved to Jupiter in PR #172 |
 | orchestrator | 8888 | A call to `10.0.0.248:8888` from the orchestrator's publishing network is not DNAT'd. It hairpins through docker-proxy on `INPUT`. |
 | Prometheus, blackbox | 5050, 8004, 9100, 9400, 19999 | scrape jobs `node-exporter`, `conjure`, `netdata` and the Jupiter GPU exporter; blackbox `conjure` probe and `tts-voxcpm` probe (`http://host.docker.internal:8004/health`, since VoxCPM moved to Jupiter in PR #172) |
 

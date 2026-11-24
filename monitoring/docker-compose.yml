@@ -296,7 +296,8 @@ networks:
     driver: bridge
   # Only Prometheus + blackbox-exporter, as their default route. The host firewall
   # (jess-docker-input, scripts/container-firewall/) lets this bridge alone reach
-  # Jupiter's node-exporter 9100, Netdata 19999, Conjure 5050 and GPU exporter 9400.
+  # Jupiter's node-exporter 9100, Netdata 19999, Conjure 5050, GPU exporter 9400 and
+  # VoxCPM 8004 (blackbox tts-voxcpm probe via host.docker.internal).
   # Fixed bridge name = stable rule.
   host-scrape:
     name: monitoring_host-scrape
