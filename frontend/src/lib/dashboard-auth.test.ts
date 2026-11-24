@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  _resetKioskTokenWarning,
   dashboardSessionKind,
   expectedDashboardToken,
   expectedKioskSessionValue,
@@ -40,6 +41,7 @@ describe('dashboard token + session', () => {
     expect(await isCorrectPassword('S3cret-token')).toBe(false);
     expect(await isCorrectPassword(42)).toBe(false);
     expect(await isCorrectPassword(undefined)).toBe(false);
+    expect(await isCorrectPassword('')).toBe(false); // resolves (no throw on a zero-length HMAC key)
   });
 
   it.each(['', '   ', 'changeme', ' changeme '])('fails closed when DASHBOARD_TOKEN is %j', async (value) => {
@@ -133,5 +135,35 @@ describe('kiosk session', () => {
     configure(KIOSK, dash);
     expect(expectedKioskToken()).toBeNull();
     expect(await expectedKioskSessionValue()).toBeNull();
+  });
+});
+
+describe('an ignored KIOSK_TOKEN', () => {
+  it.each([
+    ['too_short', 'x'.repeat(23), 'dashboard-token'],
+    ['same_as_dashboard', 'same-token-0123456789abcdef', 'same-token-0123456789abcdef'],
+    ['no_dashboard_token', 'kiosk-token-0123456789abcdef', ''],
+  ])('warns once (%s), with the reason and never the value', (reason, kiosk, dash) => {
+    _resetKioskTokenWarning();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubEnv('KIOSK_TOKEN', kiosk);
+    vi.stubEnv('DASHBOARD_TOKEN', dash);
+    expect(expectedKioskToken()).toBeNull();
+    expect(expectedKioskToken()).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = JSON.parse(String(warn.mock.calls[0][0]));
+    expect(line).toMatchObject({ level: 'warning', logger: 'frontend', reason });
+    expect(String(warn.mock.calls[0][0])).not.toContain(kiosk);
+    warn.mockRestore();
+  });
+
+  it('says nothing when KIOSK_TOKEN is simply not set', () => {
+    _resetKioskTokenWarning();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubEnv('KIOSK_TOKEN', '');
+    vi.stubEnv('DASHBOARD_TOKEN', 'dashboard-token');
+    expect(expectedKioskToken()).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

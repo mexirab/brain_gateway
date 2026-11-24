@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { COOKIE_NAME, dashboardSessionKind } from '@/lib/dashboard-auth';
-import { kioskMayProxy } from '@/lib/kiosk-session';
+import { kioskMayProxy, logKioskRefusal } from '@/lib/kiosk-session';
 import { asAttachment } from '@/lib/content-disposition';
 import { buildUpstreamUrl } from '@/lib/proxy-url';
 import { upstreamTimeoutMs } from '@/lib/proxy-timeout';
@@ -94,7 +94,7 @@ async function forward(request: NextRequest, { params }: Ctx, method: Method): P
   const route = routeLabel(path);
   // Kiosk (read-only display) sessions: only the dashboard page's own GETs (lib/kiosk-session.ts).
   if (session === 'kiosk' && !kioskMayProxy(method, path, request.nextUrl.search)) {
-    logEvent('warning', '[PROXY] Kiosk session refused', { route, method });
+    logKioskRefusal(method, path);
     return jsonError('Not allowed for this screen', 403);
   }
   if (method !== 'GET' && isCrossSiteRequest(request.headers)) {

@@ -8,6 +8,8 @@
 //     closet kiosk, scripts/jupiter-kiosk). Never set by /login; the kiosk sets it itself. It may
 //     open /dashboard and the GET calls that page makes, nothing else (lib/kiosk-session.ts).
 
+import { logEvent } from './server-log';
+
 export const COOKIE_NAME = 'brain_token';
 
 // Values that must never unlock the dashboard. `changeme` was the old code and
@@ -41,10 +43,29 @@ export function expectedDashboardToken(): string | null {
  * would log the phone out too), or the dashboard has no login at all.
  */
 export function expectedKioskToken(): string | null {
-  const dashboard = expectedDashboardToken();
   const token = (process.env.KIOSK_TOKEN ?? '').trim();
-  if (dashboard === null || PLACEHOLDER_TOKENS.has(token) || token.length < MIN_KIOSK_TOKEN_LENGTH) return null;
-  return token === dashboard ? null : token;
+  if (PLACEHOLDER_TOKENS.has(token)) return null; // not configured: kiosk sessions are simply off
+  const dashboard = expectedDashboardToken();
+  if (dashboard === null) return kioskTokenIgnored('no_dashboard_token');
+  if (token.length < MIN_KIOSK_TOKEN_LENGTH) return kioskTokenIgnored('too_short');
+  if (token === dashboard) return kioskTokenIgnored('same_as_dashboard');
+  return token;
+}
+
+// A KIOSK_TOKEN that is set but ignored logs the kiosk out with nothing else to show for it (its own
+// journal isn't shipped to Loki), so say so once per process. Reason only, never the value.
+let kioskTokenWarned = false;
+function kioskTokenIgnored(reason: 'no_dashboard_token' | 'too_short' | 'same_as_dashboard'): null {
+  if (!kioskTokenWarned) {
+    kioskTokenWarned = true;
+    logEvent('warning', '[AUTH] KIOSK_TOKEN is set but ignored: kiosk sessions are off', { reason });
+  }
+  return null;
+}
+
+/** Tests only. */
+export function _resetKioskTokenWarning(): void {
+  kioskTokenWarned = false;
 }
 
 async function hmacHex(key: string, message: string): Promise<string> {
@@ -99,6 +120,7 @@ export async function isValidDashboardSession(cookie: string | null | undefined)
  * Only DASHBOARD_TOKEN logs in; KIOSK_TOKEN is not a password. */
 export async function isCorrectPassword(candidate: unknown): Promise<boolean> {
   const expected = await expectedSessionValue();
-  if (expected === null || typeof candidate !== 'string') return false;
+  // '' too: Web Crypto refuses a zero-length HMAC key, which was a 500 instead of a 401.
+  if (expected === null || typeof candidate !== 'string' || candidate === '') return false;
   return timingSafeEqual(await hmacHex(candidate, SESSION_LABEL), expected);
 }

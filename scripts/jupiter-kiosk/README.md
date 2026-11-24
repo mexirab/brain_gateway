@@ -72,7 +72,7 @@ sudo install -d -m 750 -o root -g kiosk /etc/jupiter-kiosk
 sudo install -m 640 -o root -g kiosk kiosk.example.json /etc/jupiter-kiosk/kiosk.json
 sudoedit /etc/jupiter-kiosk/kiosk.json      # host_map IP = `tailscale ip -4`; outputs/rotation (below)
 # KIOSK_TOKEN: the kiosk's own read-only dashboard login (Secrets below). Once; prints nothing.
-grep -q '^KIOSK_TOKEN=.' ../../.env || python3 -c 'import secrets; print("KIOSK_TOKEN=" + secrets.token_urlsafe(32))' >> ../../.env
+grep -q '^KIOSK_TOKEN=.' ../../.env || { sed -i -e '$a\' ../../.env; python3 -c 'import secrets; print("KIOSK_TOKEN=" + secrets.token_urlsafe(32))' >> ../../.env; }
 (cd ../.. && docker compose up -d --force-recreate frontend)
 sudo python3 -I make_logins.py              # checks the kiosk cookie is read-only, makes Grafana user closet-kiosk
 sudo -u kiosk /usr/local/lib/jupiter-kiosk/kiosk.py --preflight   # warns about the voice card: masks apply inside the units only
@@ -113,8 +113,9 @@ Unknown keys are refused, so a typo stops the kiosk with a clear log line instea
   - `rotate`: `left` / `right` for a portrait monitor, `normal`, or `inverted`.
   - `url`, which must be https for any login.
   - `login`: `grafana` | `dashboard` | `none`.
-  - `reload_minutes`: 0 = never. The dashboard cards don't poll, so the dashboard reloads every
-    5 min; Grafana refreshes itself with `&refresh=30s`.
+  - `reload_minutes`: 0 = never. Most dashboard cards poll (15–60 s), but the calendar and
+    reminders cards load once, so the dashboard reloads every 5 min (which also picks up a new
+    frontend deploy); Grafana refreshes itself with `&refresh=30s`.
   - `hide_nav`: sets the `__Host-jess_display=kiosk` cookie. The dashboard then shows no sidebar and no
     bottom tab bar (`frontend/src/lib/display-mode.ts`).
 
@@ -154,13 +155,27 @@ runtime dir (`/run/user/<uid>/jupiter-kiosk/profiles`, tmpfs, cleared when the k
 cookie, cache or crash dump reaches the disk.
 
 **Moving a kiosk off the old master cookie** (a `secrets.json` from before the kiosk session holds
-`dashboard_session`, which the new `kiosk.py` refuses to start with, and the old `kiosk.py` can't
-read the new file):
+`dashboard_session`. The new `kiosk.py` refuses to start with it, so both screens stay dark until
+`make_logins.py` has run; the old `kiosk.py` can't read the new file):
 1. `KIOSK_TOKEN` in `.env` and the frontend recreated on a version with kiosk sessions (the Install
    lines above; a normal deploy recreates it too, if the token is in `.env` first).
 2. `sudo python3 -I make_logins.py`: rewrites `secrets.json` with `dashboard_kiosk_session` only.
-3. Straight after: `sudo install -m 755 kiosk.py /usr/local/lib/jupiter-kiosk/ && sudo systemctl restart jupiter-kiosk`,
-   then a SIGUSR1 snapshot (Day to day) to see the dashboard on the right screen.
+3. Straight after: `sudo install -m 755 kiosk.py /usr/local/lib/jupiter-kiosk/ && sudo systemctl restart jupiter-kiosk`.
+   If the old `kiosk.py` restarts between 2 and 3 it fails with `missing dashboard_kiosk_session`:
+   step 3 fixes that, re-running `make_logins.py` doesn't.
+4. Check: a SIGUSR1 snapshot (Day to day) shows the dashboard on the right screen;
+   `docker logs brain-frontend --since 10m 2>&1 | grep -c 'Kiosk session refused'` is 0; no
+   `dashboard asked for a login` in `journalctl -t jupiter-kiosk`.
+5. Optional: change `DASHBOARD_TOKEN` (logs the phone out once). The old master cookie sat in a
+   file the kiosk user could read, and stays valid until then.
+
+**Rolling the frontend back** to a version without kiosk sessions logs the right screen out, and
+the new `make_logins.py` refuses to write a cookie the old frontend would treat as a full login.
+Either wait for the re-deploy, or go back to the master cookie with the old scripts:
+`git show c249eae^:scripts/jupiter-kiosk/make_logins.py > /tmp/ml.py && sudo python3 -I /tmp/ml.py`,
+then the same for `kiosk.py` into `/usr/local/lib/jupiter-kiosk/` and restart.
+`[AUTH] KIOSK_TOKEN is set but ignored` in `docker logs brain-frontend` means the token is there but
+too short, equal to `DASHBOARD_TOKEN`, or `DASHBOARD_TOKEN` is unset.
 
 ## Day to day
 
@@ -297,9 +312,12 @@ removing it alone leaves the running browsers logging.
 - **The kiosk cookie still reads the dashboard.** It is the kiosk's own read-only session, not the
   phone's login: no chat, Home Assistant, settings or other pages, no writes, and `KIOSK_TOKEN`
   revokes it alone (Secrets above). But whoever can read `secrets.json` or the kiosk's Chrome (root,
-  or code running as `kiosk`) can read what the right screen shows from anywhere that reaches the
-  dashboard, until `KIOSK_TOKEN` changes: calendar titles, tasks, reminders, self-care and meds-taken status,
-  announcement text, the budget snapshot. The same data is on the monitor itself.
+  or code running as `kiosk`) can read what the dashboard's API calls return, from anywhere that
+  reaches the dashboard, until `KIOSK_TOKEN` changes. That is a bit more than the screen shows: all
+  open tasks with notes, the full text of the last 15 announcements, self-care entry labels (which
+  can name a medication), 24 h reminder outcomes, the budget snapshot, and `/health` internals
+  (model URLs and names, the tool list, the focus task). They could also make those calls often
+  (calendar and temperatures query CalDAV / Home Assistant each time; the proxy has no rate limit).
 - **Chrome upgrades only by hand:** Google's apt source isn't in unattended-upgrades' allowed
   origins.
 

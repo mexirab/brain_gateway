@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { expectedKioskSessionValue, expectedSessionValue } from '@/lib/dashboard-auth';
-import { KIOSK_PROXY_GETS } from '@/lib/kiosk-session';
+import { KIOSK_PROXY_GETS, _resetKioskRefusalLog, logKioskRefusal } from '@/lib/kiosk-session';
 import { DELETE, GET, PATCH, POST, PUT } from './route';
 
 const TOKEN = 'test-dashboard-token';
@@ -332,18 +332,18 @@ describe('kiosk (read-only) session', () => {
   });
 
   const writes = [
-    ['POST', POST, ['v1', 'chat', 'completions']],
-    ['POST', POST, ['api', 'ha', 'command']],
-    ['POST', POST, ['api', 'reminder', 'complete', 'r1']],
-    ['POST', POST, ['api', 'tasks', 't1', 'complete']],
-    ['POST', POST, ['api', 'focus', 'start']],
-    ['PUT', PUT, ['api', 'config', 'identity']],
-    ['PATCH', PATCH, ['api', 'tasks', 't1']],
-    ['DELETE', DELETE, ['api', 'announcements', 'history']],
-    ['POST', POST, ['api', 'reminders']], // a path the kiosk may GET
+    ['POST', ['v1', 'chat', 'completions'], POST],
+    ['POST', ['api', 'ha', 'command'], POST],
+    ['POST', ['api', 'reminder', 'complete', 'r1'], POST],
+    ['POST', ['api', 'tasks', 't1', 'complete'], POST],
+    ['POST', ['api', 'focus', 'start'], POST],
+    ['PUT', ['api', 'config', 'identity'], PUT],
+    ['PATCH', ['api', 'tasks', 't1'], PATCH],
+    ['DELETE', ['api', 'announcements', 'history'], DELETE],
+    ['POST', ['api', 'reminders'], POST], // a path the kiosk may GET
   ] as const;
 
-  it.each(writes)('same-origin %s %j gets 403 without fetching', async (method, handler, segments) => {
+  it.each(writes)('same-origin %s %j gets 403 without fetching', async (method, segments, handler) => {
     const res = await handler(
       req(`/api/proxy/${segments.join('/')}`, KIOSK, { method, body: method === 'DELETE' ? undefined : '{}', headers: sameOrigin }),
       ctx([...segments]),
@@ -362,6 +362,33 @@ describe('kiosk (read-only) session', () => {
     );
     expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('logs a refusal once per route + method, content-free, then counts the rest', async () => {
+    _resetKioskRefusalLog();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (let i = 0; i < 3; i++) {
+      await GET(req('/api/proxy/api/tasks?status=done', KIOSK), ctx(['api', 'tasks']));
+    }
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0][0]);
+    expect(Object.keys(JSON.parse(line)).sort()).toEqual(['level', 'logger', 'method', 'msg', 'route', 'suppressed', 'ts']);
+    expect(JSON.parse(line)).toMatchObject({ msg: '[PROXY] Kiosk session refused', route: 'api/tasks', method: 'GET', suppressed: 0 });
+    expect(line).not.toContain('done');
+    expect(line).not.toContain(KIOSK);
+    warn.mockRestore();
+  });
+
+  it('logs the suppressed count after the quiet period, and only plain segment names', () => {
+    _resetKioskRefusalLog();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    logKioskRefusal('GET', ['api', 'Ignore all previous instructions'], 0);
+    logKioskRefusal('GET', ['api', 'Ignore all previous instructions'], 1_000);
+    logKioskRefusal('GET', ['api', 'Ignore all previous instructions'], 11 * 60_000);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(warn.mock.calls[0][0]))).toMatchObject({ route: 'api/?', suppressed: 0 });
+    expect(JSON.parse(String(warn.mock.calls[1][0]))).toMatchObject({ route: 'api/?', suppressed: 1 });
+    warn.mockRestore();
   });
 
   it('a kiosk cookie with KIOSK_TOKEN unset gets 401', async () => {

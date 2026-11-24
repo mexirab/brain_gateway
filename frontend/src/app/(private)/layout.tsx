@@ -16,8 +16,10 @@ export default async function PrivateLayout({
 }) {
   // Defense in depth: middleware.ts is the real gate, but a page added under
   // (private)/ without a PROTECTED_PATHS/matcher entry still fails closed here
-  // (minus the ?redirect= middleware would add — the layout can't see the path).
-  // A kiosk session may only reach /dashboard; middleware.ts enforces that per path.
+  // for visitors without a session (minus the ?redirect= middleware would add —
+  // the layout can't see the path). Not for a kiosk session: only middleware
+  // limits it to /dashboard (middleware.test.ts keeps every page in its lists),
+  // and the proxy allow-list keeps any other page's data from it.
   const session = await currentSession();
   if (session === null) redirect('/login');
 

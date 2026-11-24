@@ -7,6 +7,8 @@
 // app/(private)/dashboard/page.tsx and fails when the page asks for anything else, so a new card
 // has to be added here on purpose (and only if a read-only screen in the closet may show it).
 
+import { logEvent } from './server-log';
+
 export const KIOSK_PAGES: readonly string[] = ['/dashboard'];
 
 // Path + exact query, as lib/api.ts and lib/finance-api.ts build them for the dashboard cards.
@@ -34,14 +36,50 @@ export function kioskMayOpenPage(pathname: string): boolean {
   return KIOSK_PAGES.includes(pathname);
 }
 
+// In a decoded segment these mean an encoded separator or query (`%2F`, `%3F`, …): the joined string
+// would then differ from the URL the orchestrator gets, so they never match.
+const UNSAFE_SEGMENT = /[/\\?#%]/;
+
 /**
  * May a kiosk session make this proxy call? `segments` are the catch-all's (already decoded)
- * path segments and `search` the raw query, both exactly as route.ts forwards them. Empty
- * segments and segments holding a `/` or `\` (a decoded %2F) are refused, so the joined string is
- * the path the orchestrator would really get.
+ * path segments and `search` the raw query, both exactly as route.ts forwards them. Empty segments
+ * and segments holding UNSAFE_SEGMENT characters are refused, so the joined string is the path the
+ * orchestrator would really get.
  */
 export function kioskMayProxy(method: string, segments: readonly string[], search: string): boolean {
   if (method !== 'GET') return false;
-  if (segments.length === 0 || segments.some((s) => s === '' || s.includes('/') || s.includes('\\'))) return false;
+  if (segments.length === 0 || segments.some((s) => s === '' || UNSAFE_SEGMENT.test(s))) return false;
   return ALLOWED.has('/' + segments.join('/') + search);
+}
+
+// Refusal log: one warning per (method, route), then at most one per REFUSAL_LOG_MS carrying how many
+// were left out, so a card that drifted from the allow-list (polling every 15 s) can't flood the logs
+// the self-audit reads. The kiosk picks the path, so only plain segment names are logged.
+const REFUSAL_LOG_MS = 10 * 60_000;
+const MAX_REFUSAL_KEYS = 200;
+const refusals = new Map<string, { at: number; suppressed: number }>();
+
+function refusalLabel(segments: readonly string[]): string {
+  return segments
+    .slice(0, 2)
+    .map((s) => (/^[a-z0-9_.-]{1,32}$/i.test(s) ? s : '?'))
+    .join('/');
+}
+
+export function logKioskRefusal(method: string, segments: readonly string[], now = Date.now()): void {
+  const route = refusalLabel(segments);
+  const key = `${method} ${route}`;
+  const seen = refusals.get(key);
+  if (seen && now - seen.at < REFUSAL_LOG_MS) {
+    seen.suppressed += 1;
+    return;
+  }
+  if (refusals.size >= MAX_REFUSAL_KEYS) refusals.clear(); // bounded: the kiosk chooses the keys
+  refusals.set(key, { at: now, suppressed: 0 });
+  logEvent('warning', '[PROXY] Kiosk session refused', { route, method, suppressed: seen?.suppressed ?? 0 });
+}
+
+/** Tests only. */
+export function _resetKioskRefusalLog(): void {
+  refusals.clear();
 }

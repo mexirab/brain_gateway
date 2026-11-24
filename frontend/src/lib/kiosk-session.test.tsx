@@ -13,6 +13,9 @@ beforeEach(() => {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       seen.push({ url: String(input), method: (init?.method ?? 'GET').toUpperCase() });
       // Every card goes to its error state; the hooks still issue all their requests (Promise.all).
+      // Polls re-run the same SWR fetchers (and SWR doesn't poll a key in error), and no card has a
+      // timer or fetch of its own, so the load is the whole list. Blind spot: a request a card would
+      // only make once real data has arrived isn't triggered here.
       return new Response(JSON.stringify({ error: 'test' }), { status: 503 });
     }),
   );
@@ -26,14 +29,16 @@ afterEach(() => {
 // app/(private)/dashboard/page.tsx (or a card's URL changes), this fails: decide whether a
 // read-only screen may show it, then update KIOSK_PROXY_GETS — or the kiosk's card shows a 403.
 describe('KIOSK_PROXY_GETS matches the dashboard page', () => {
-  it('is exactly the GETs the page makes on load', async () => {
+  const expected = [...KIOSK_PROXY_GETS].map((p) => `/api/proxy${p}`).sort();
+  const urls = () => [...new Set(seen.map((s) => s.url))].sort();
+
+  it('is exactly the GETs the page makes', async () => {
     render(
       <SWRConfig value={{ provider: () => new Map(), shouldRetryOnError: false, dedupingInterval: 0 }}>
         <DashboardPage />
       </SWRConfig>,
     );
-    const expected = [...KIOSK_PROXY_GETS].map((p) => `/api/proxy${p}`).sort();
-    await waitFor(() => expect([...new Set(seen.map((s) => s.url))].sort()).toEqual(expected));
+    await waitFor(() => expect(urls()).toEqual(expected));
     expect(seen.every((s) => s.method === 'GET')).toBe(true);
   });
 });
@@ -54,7 +59,8 @@ describe('kioskMayProxy', () => {
     expect(kioskMayProxy('GET', path.slice(1).split('/'), query ? `?${query}` : '')).toBe(true);
   });
 
-  it.each(['POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'get'])('%s is refused even on an allowed path', (m) => {
+  // At the route, Next hands HEAD to the GET export, so a HEAD arrives here as 'GET' (the same read).
+  it.each(['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'get'])('%s is refused even on an allowed path', (m) => {
     expect(kioskMayProxy(m, ['api', 'reminders'], '')).toBe(false);
   });
 
@@ -72,6 +78,9 @@ describe('kioskMayProxy', () => {
     [['api', 'reminders'], '?x=1'],
     [['api', 'reminders', ''], ''],
     [['api/reminders'], ''],
+    [['api', 'tasks?status=open'], ''], // a decoded %3F: joined it would match, upstream it's a different path
+    [['api', 'reminders#x'], ''],
+    [['api', 'reminders%2F'], ''],
     [['api', 'progress\\today'], ''],
     [['health', 'x'], ''],
     [[], ''],
