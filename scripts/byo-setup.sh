@@ -150,11 +150,32 @@ for _ in $(seq 1 18); do
 done
 
 echo
+fetch_cmd="docker compose exec orchestrator python -m orchestrator.embedding_pin fetch && docker compose restart orchestrator"
 if [ "${healthy}" = "yes" ]; then
     ok "${BOLD}Orchestrator is healthy.${NC}"
+    # Memory's embedding model: the orchestrator reads the HF cache offline
+    # (HF_HUB_OFFLINE=1 in its image) and runs with memory off until it's there.
+    if docker compose exec -T orchestrator python -m orchestrator.embedding_pin check >/dev/null 2>&1; then
+        ok "Memory model already in the local cache"
+    else
+        say "Downloading the memory (embedding) model, ~1.8 GB, once..."
+        if docker compose exec -T orchestrator python -m orchestrator.embedding_pin fetch \
+            && docker compose restart orchestrator >/dev/null; then
+            waited=0
+            until curl -s --max-time 2 http://localhost:8888/health >/dev/null 2>&1 || [ "${waited}" -ge 120 ]; do
+                sleep 2
+                waited=$((waited + 2))
+            done
+            ok "Memory model cached; orchestrator restarted to load it"
+        else
+            warn "Memory model download failed — chat works, but memory is off until you run:"
+            warn "  ${fetch_cmd}"
+        fi
+    fi
 else
     warn "Orchestrator didn't report healthy yet — it may still be starting."
     warn "Check: docker compose logs -f orchestrator"
+    warn "Then fetch the memory model once: ${fetch_cmd}"
 fi
 echo
 say "Dashboard:   ${BOLD}http://localhost:3001/${NC}"

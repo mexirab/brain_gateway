@@ -32,8 +32,14 @@ RUN mkdir -p /app/config /app/data /app/credentials /tmp/brain_audio \
         /home/jess/.cache/huggingface /home/jess/.ssh /home/jess/.claude/projects \
     && chown -R "${APP_UID}:${APP_GID}" /app/data /app/credentials /tmp/brain_audio /home/jess
 
+# HF_HUB_OFFLINE: the embedding model loads from the HF cache (the
+# data/hf_cache bind mount) and never calls the Hub — online, a start with DNS
+# down spent ~2.5 min in retries before listening. A model missing from the
+# cache fails in seconds (memory off, EmbeddingModelBroken pages). Populate it
+# with `python -m orchestrator.embedding_pin fetch` (see that module).
 ENV HOME=/home/jess \
-    HF_HOME=/home/jess/.cache/huggingface
+    HF_HOME=/home/jess/.cache/huggingface \
+    HF_HUB_OFFLINE=1
 USER jess
 
 EXPOSE 8888

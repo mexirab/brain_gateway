@@ -212,6 +212,8 @@ _FACTS_JSON = '[{"fact": "User loves cooking on weekends", "category": "preferen
 async def _run(conv=_CONV, content=_FACTS_JSON, llm_exc=None, duplicate=False, store_result="doc1"):
     llm = AsyncMock(side_effect=llm_exc) if llm_exc else AsyncMock(return_value=_reply(content))
     with (
+        # A loaded model: with memory off run_auto_learn drops the run up front.
+        patch.object(shared, "embedding_model", _CountingEmbedder(_FakeModel(result=[0.0] * 4))),
         patch("orchestrator.orchestrator.call_model", llm),
         patch.object(auto_learn, "is_duplicate", AsyncMock(return_value=duplicate)),
         patch.object(auto_learn, "store_fact", AsyncMock(return_value=store_result)),
@@ -263,6 +265,7 @@ async def test_run_outcome_error_when_every_store_fails():
     outcomes = ("stored", "duplicates_only", "error")
     before = {o: _al_run(o) for o in outcomes}
     with (
+        patch.object(shared, "embedding_model", _CountingEmbedder(_FakeModel(result=[0.0] * 4))),
         patch("orchestrator.orchestrator.call_model", AsyncMock(return_value=_reply(_FACTS_JSON))),
         patch.object(auto_learn, "is_duplicate", AsyncMock(return_value=False)),
         patch.object(auto_learn, "store_fact", failing_store),

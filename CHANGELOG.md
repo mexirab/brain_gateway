@@ -4,6 +4,24 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Orchestrator starts offline: no Hugging Face calls at startup; embedding code pin actually holds (2026-11-24)
+
+A deploy on 2026-11-23 failed its health check: loading the embedding model at import sent HEAD requests to huggingface.co, DNS was failing, and the retries kept uvicorn from listening for ~2.5 min (the check waited 40 s). Now the image sets `HF_HUB_OFFLINE=1` and the model loads from `data/hf_cache` only: a full start to `/health` takes ~11 s with no network. Detail: `docs/MEMPALACE.md` → Embedding model.
+
+- **Memory off instead of a crash loop.** A model missing from the cache fails the load in seconds; the orchestrator starts anyway (`[EMBEDDING] Model load FAILED …`), encodes raise `EmbeddingModelUnavailableError` (503 from the API), auto_learn drops conversations up front (`bgw_auto_learn_dropped_total{reason="embedding_unavailable"}`), and `EmbeddingModelBroken` pages as before.
+- **`python -m orchestrator.embedding_pin fetch|check`** — the only online path: `fetch` downloads the pinned commits and proves an offline load in a fresh process; `check` is the offline load + encode + commit test. `install.sh` runs it after bring-up.
+- **The remote-code pin now reaches every load.** sentence-transformers 5.7 dropped `model_kwargs["code_revision"]` and `AutoProcessor` re-loaded the config without it, so the nomic remote code came from `main` of `nomic-ai/nomic-bert-2048` (the same commit as the pin, so vectors are identical). `load_kwargs` now pins all three loads, and `shared.py` + `check` refuse the model unless its remote code came from the pinned commit.
+- **CI deploy:** a pre-flight `embedding_pin check` from the new image against the live cache runs before the orchestrator is recreated (a failure leaves the old one running); the health check waits up to 3 min (was 40 s), warns past 60 s, and fails the deploy when `bgw_embedding_healthy` is 0. The test job runs with `HF_HUB_OFFLINE=1` (no 1.8 GB download per run).
+- **Log fix:** `[RAG_INGEST] Upsert batch failed` no longer logs a chunk id (it carried the RAG file path and section title).
+
+### Upgrade action
+
+- None for Jupiter: the live cache already holds the pinned commits (`check` passes against it). The first deploy of this change runs the pre-flight against it.
+- Fresh installs: `install.sh` and `scripts/byo-setup.sh` fetch the model. Manual installs: `docker exec brain-orchestrator python -m orchestrator.embedding_pin fetch && docker restart brain-orchestrator`.
+- A restore onto an empty disk now needs the same `fetch` (the cache is not in the backup).
+
+---
+
 ## [Unreleased] — Closet monitors kiosk on Jupiter (2026-11-24)
 
 Branch `feat/jupiter-kiosk`. The two portrait monitors in the server closet, on Jupiter's bus-0c RTX 5080, show Grafana **Jess Glance** (left) and the dashboard `/dashboard` (right, no menus), unattended: the kiosk logs itself in, retries while a server is down, waits while the monitors are off and restarts a dead browser. Succeeds the Callisto Pi kiosk (retired 2026-10-14). Authoritative doc: `scripts/jupiter-kiosk/README.md`.

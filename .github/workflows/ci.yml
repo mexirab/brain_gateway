@@ -108,6 +108,11 @@ jobs:
           pip install -r orchestrator/requirements.txt
           pip install pytest pytest-asyncio respx
       - name: Run tests
+        # Like the image: no Hub calls. Tests stub the embedding model, so
+        # shared.py's real load just fails fast (memory-off path) instead of
+        # downloading ~1.8 GB per run.
+        env:
+          HF_HUB_OFFLINE: "1"
         run: python -m pytest orchestrator/tests/ -v
 
   lint-frontend:
@@ -206,8 +211,10 @@ jobs:
       contents: read
       actions: read
     # Usually under 3 min; a requirements.txt change rebuilds the orchestrator's
-    # pip layer and a frontend change runs a full Next.js build, plus up to
-    # ~4 min of SearXNG/Grist/Loki health waits. A hung step otherwise holds
+    # pip layer and a frontend change runs a full Next.js build, plus ~10 s for
+    # the orchestrator's embedding pre-flight, up to ~4 min of SearXNG/Grist/
+    # Loki health waits and up to 3 min per service in the final health check
+    # (normally seconds). A hung step otherwise holds
     # the deploy-jupiter group, and every deploy pending behind it, for
     # GitHub's 360-min default. A timed-out deploy writes no marker, so a
     # re-run (or the next push's deploy) rebuilds the same changes; until then
@@ -410,7 +417,25 @@ jobs:
           ORCH_CHANGED="$(grep -vE '^orchestrator/tests/' <<<"$CHANGED" || true)"
           if grep -qE "^orchestrator/|^docker-compose\.yml$|^data/palace\.yaml$" <<<"$ORCH_CHANGED"; then
             echo "::group::Rebuilding orchestrator"
-            docker compose up -d --build --force-recreate orchestrator
+            docker compose build orchestrator
+            # Pre-flight: the NEW image must load the embedding model offline
+            # from the live HF cache (HF_HUB_OFFLINE=1 in the image), from the
+            # pinned remote-code commit. A pin or (sentence-)transformers bump
+            # whose files were never fetched would otherwise start with memory
+            # off; failing here keeps the running orchestrator untouched. Only
+            # the two fields are read from `compose config` (it holds secrets).
+            # ~10 s, no network, cache read-only.
+            ORCH_IMAGE="$(docker compose config --images orchestrator 2>/dev/null)"
+            HF_CACHE="$(docker compose config --format json 2>/dev/null \
+              | jq -r '.services.orchestrator.volumes[] | select(.target == "/home/jess/.cache/huggingface") | .source')"
+            EMB_MODEL="$(docker compose config --format json 2>/dev/null | jq -r '.services.orchestrator.environment.EMBEDDING_MODEL // empty')"
+            if ! docker run --rm --network none -e EMBEDDING_MODEL="$EMB_MODEL" \
+                -v "$HF_CACHE:/home/jess/.cache/huggingface:ro" "$ORCH_IMAGE" \
+                python -m orchestrator.embedding_pin check; then
+              echo "::error::The new orchestrator image can't load the embedding model offline from $HF_CACHE — not recreated (the old one keeps running with memory). Fetch it with the NEW code: docker run --rm -v \"$HF_CACHE:/home/jess/.cache/huggingface\" $ORCH_IMAGE python -m orchestrator.embedding_pin fetch — then re-run this job. See orchestrator/embedding_pin.py."
+              exit 1
+            fi
+            docker compose up -d --force-recreate orchestrator
             echo "::endgroup::"
           fi
 
@@ -556,21 +581,50 @@ jobs:
       - name: Health check
         run: |
           set -eu
-          # Retry each service briefly (a just-recreated container can take a
-          # few seconds to listen) and fail the deploy if either stays down.
-          # 127.0.0.1, not localhost: ports may be published on IPv4 loopback
-          # only, and localhost can resolve to ::1.
+          # Retry each service (a just-recreated container takes a while to
+          # listen) and fail the deploy if either stays down. The orchestrator
+          # usually listens ~15 s after a recreate (the embedding model loads
+          # from the offline HF cache; before HF_HUB_OFFLINE a start with DNS
+          # down took ~2.5 min and failed the old 40 s wait), but a cold start
+          # can be slow for other reasons (cold page cache, Chroma, a busy
+          # disk), so allow 3 min. 127.0.0.1, not localhost: ports may be
+          # published on IPv4 loopback only, and localhost can resolve to ::1.
           wait_for() {
-            for _ in 1 2 3 4 5 6 7 8; do
-              if curl -sSf -m 5 -o /dev/null "$2"; then echo "$1 reachable"; return 0; fi
+            start=$SECONDS
+            for _ in $(seq 36); do
+              if curl -sSf -m 5 -o /dev/null "$2"; then
+                echo "$1 reachable after $((SECONDS - start)) s"
+                # OrchestratorDown pages after 2 min down; say when a start
+                # this job still accepts came close.
+                if [ $((SECONDS - start)) -gt 60 ]; then echo "::warning::$1 took $((SECONDS - start)) s to answer"; fi
+                return 0
+              fi
               sleep 5
             done
-            echo "::error::$1 not reachable at $2 after 40 s"
+            echo "::error::$1 not reachable at $2 after 3 min"
             return 1
           }
           failed=0
           wait_for orchestrator http://127.0.0.1:8888/health || failed=1
           wait_for frontend http://127.0.0.1:3001 || failed=1
+
+          # The orchestrator starts with memory off when the embedding model
+          # failed to load (the pre-flight above only runs when it was
+          # rebuilt). The startup self-test has run by the time /health
+          # answers. -m 30: /metrics probes the model servers and takes ~6 s
+          # while Helios sleeps. The token is expanded inside the container and
+          # fed on stdin (printf is a shell builtin), so it is in no argv or log.
+          if [ "$failed" = 0 ]; then
+            emb="$(docker exec brain-orchestrator sh -c 'printf "Authorization: Bearer %s\n" "$API_TOKEN" | curl -sf -m 30 -H @- http://127.0.0.1:8888/metrics' 2>/dev/null \
+                   | awk '$1 == "bgw_embedding_healthy" {print $2}' || true)"
+            case "$emb" in
+              1|1.0) echo "embedding model healthy" ;;
+              0|0.0)
+                echo "::error::The embedding model did not load: memory (search, RAG, palace writes, auto_learn) is off and EmbeddingModelBroken will page. Run: docker exec brain-orchestrator python -m orchestrator.embedding_pin fetch && docker restart brain-orchestrator (see orchestrator/embedding_pin.py; docker logs brain-orchestrator | grep EMBEDDING)"
+                failed=1 ;;
+              *) echo "::warning::Could not read bgw_embedding_healthy from the orchestrator's /metrics" ;;
+            esac
+          fi
           exit "$failed"
 
       # Coder box (docs/CODER.md), only while CODER_ENABLED is on (the launcher

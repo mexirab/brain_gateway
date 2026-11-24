@@ -1,7 +1,10 @@
 # Backup & Restore
 
 Jess's `data/` directory is ~1.9 GB, but almost all of that is `hf_cache/` (the
-HuggingFace model cache, which re-downloads on demand). The genuinely
+HuggingFace model cache for the embedding model — the orchestrator reads it
+offline, so after a restore onto an empty disk memory is off until
+`docker exec brain-orchestrator python -m orchestrator.embedding_pin fetch` +
+a restart; see `docs/MEMPALACE.md` → Embedding model). The genuinely
 **irreplaceable** state is only ~15 MB:
 
 | Path | What | Reconstructable? |
@@ -117,6 +120,10 @@ tar xzf backups/jess-state-20260704-033000.tar.gz -C .
 
 chmod 600 data/app/auto_learn.key data/app/webpush_vapid.pem credentials/*.json   # tar preserves mode, but confirm
 docker compose start orchestrator
+
+# new disk / no data/hf_cache: the embedding model isn't in the archive and
+# loads offline only — fetch it, then restart (memory is off until then)
+docker exec brain-orchestrator python -m orchestrator.embedding_pin fetch && docker restart brain-orchestrator
 ```
 
 To restore a single database without touching the rest, extract just that path:

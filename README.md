@@ -82,7 +82,7 @@ The installer is fully interactive — everything happens in your SSH session, n
 **What it does, in order:**
 1. Installs Docker + the NVIDIA driver + the NVIDIA container toolkit.
 2. Reboots once (so the new NVIDIA kernel module loads). **You don't have to re-run anything** — a bash-profile hook auto-resumes on your next SSH login.
-3. Brings up the full local-AI base: orchestrator + LLM (vLLM, model auto-picked to fit your hardware) + TTS (Qwen3-TTS with a generic voice) + STT (Parakeet) + dashboard. Waits for everything to report healthy.
+3. Brings up the full local-AI base: orchestrator + LLM (vLLM, model auto-picked to fit your hardware) + TTS (Qwen3-TTS with a generic voice) + STT (Parakeet) + dashboard. Waits for everything to report healthy, then downloads the memory (embedding) model once — the orchestrator itself never calls Hugging Face.
 4. Hands off to a 30-second CLI wizard (`scripts/setup.sh`) that asks two questions: **your name** and **your timezone**. Everything else (assistant name, ADHD mode, model, voice) takes sensible defaults you can change later.
 5. Prints the dashboard URL **and an auto-generated `DASHBOARD_TOKEN` login password** when you're done. Save the password — it's the only time it's shown automatically (it lives in `.env` afterward).
 

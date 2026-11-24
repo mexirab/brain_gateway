@@ -29,6 +29,13 @@ curl http://localhost:8888/health
 docker logs brain-orchestrator --tail 50 -f
 ```
 
+### Embedding model cache (memory)
+The orchestrator loads the embedding model offline (`HF_HUB_OFFLINE=1`); these are the only commands that go online. Memory off / `EmbeddingModelBroken` with `[EMBEDDING] Model load FAILED` in the log = not in the cache. Detail: `docs/MEMPALACE.md` → Embedding model.
+```bash
+docker exec brain-orchestrator python -m orchestrator.embedding_pin check   # offline load + encode + commit test; exit 1 = broken
+docker exec brain-orchestrator python -m orchestrator.embedding_pin fetch && docker restart brain-orchestrator
+```
+
 ### Model-layer compose profile (fresh single-box installs)
 The `models` compose profile runs vLLM + Qwen3-TTS + Parakeet STT as containers.
 Not used on Helios — that box runs the model layer as host systemd units (see the

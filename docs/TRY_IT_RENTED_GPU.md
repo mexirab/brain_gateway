@@ -101,6 +101,10 @@ docker compose up -d
 # 4. Watch it come up; the LLM container takes a few minutes to load weights
 docker compose logs -f orchestrator
 curl -s http://localhost:8888/health
+
+# 5. Download the memory (embedding) model once — the orchestrator loads it
+#    offline and runs with memory off until it is in data/hf_cache
+docker compose exec orchestrator python -m orchestrator.embedding_pin fetch && docker compose restart orchestrator
 ```
 
 > **Caveat:** this assumes the pod has the **NVIDIA container toolkit** wired

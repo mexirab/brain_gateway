@@ -540,6 +540,37 @@ stage_2() {
         warn "The install will continue — the setup wizard may still work once the stragglers finish loading."
     fi
 
+    # Memory's embedding model. The orchestrator reads the HF cache offline
+    # (HF_HUB_OFFLINE=1 in its image) and starts with memory off when the
+    # model isn't there, so a fresh install downloads it once here.
+    local fetch_cmd="docker compose exec orchestrator python -m orchestrator.embedding_pin fetch && docker compose restart orchestrator"
+    if ! curl -s --max-time 2 http://localhost:8888/health >/dev/null 2>&1; then
+        warn "Orchestrator not up — skipping the memory model download. Once it is, run:"
+        info "    cd ${REPO_ROOT} && ${fetch_cmd}"
+    elif docker compose exec -T orchestrator python -m orchestrator.embedding_pin check >/dev/null 2>&1; then
+        ok "Memory model already in the local cache"
+    else
+        say "Downloading the memory (embedding) model, ~1.8 GB, once..."
+        if docker compose exec -T orchestrator python -m orchestrator.embedding_pin fetch \
+            && docker compose restart orchestrator >/dev/null; then
+            # `restart` returns before uvicorn listens; setup.sh's first step
+            # is a single /health call.
+            local waited=0
+            until curl -s --max-time 2 http://localhost:8888/health >/dev/null 2>&1 || [ "${waited}" -ge 120 ]; do
+                sleep 2
+                waited=$((waited + 2))
+            done
+            if [ "${waited}" -ge 120 ]; then
+                warn "Memory model cached, but the orchestrator isn't answering after the restart — check 'docker compose logs orchestrator'"
+            else
+                ok "Memory model cached; orchestrator restarted to load it"
+            fi
+        else
+            warn "Memory model download failed — Jess runs, but memory is off until you run:"
+            info "    cd ${REPO_ROOT} && ${fetch_cmd}"
+        fi
+    fi
+
     set_marker "complete"
     remove_resume_hook
 

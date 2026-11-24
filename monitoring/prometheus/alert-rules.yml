@@ -505,12 +505,13 @@ groups:
           severity: critical
         annotations:
           summary: "Embedding model can't encode — Jess's memory is offline"
-          description: "The startup self-test failed: memory search, RAG context, memory-palace writes and auto_learn all fail. Check `docker logs brain-orchestrator | grep EMBEDDING` and the transformers pin in orchestrator/requirements.txt (nomic remote code needs transformers<5.12)."
+          description: "The startup self-test failed: memory search, RAG context, memory-palace writes and auto_learn all fail. Check `docker logs brain-orchestrator | grep EMBEDDING`. `Model load FAILED` = not in the offline HF cache: `docker exec brain-orchestrator python -m orchestrator.embedding_pin fetch` + `docker restart brain-orchestrator`. `Model REFUSED` = remote code not from the pinned commit. `Self-test FAILED` alone = check the transformers pin in orchestrator/requirements.txt (nomic remote code needs transformers<5.12). See docs/MEMPALACE.md → Embedding model."
 
       - alert: EmbeddingErrors
         # Runtime twin of EmbeddingModelBroken (which only runs at boot): the
         # 2026-10-02 -> 10-15 outage failed every encode() for 12 days with no
-        # alert. Counted in shared._CountingEmbedder for every caller. Quiet
+        # alert. Counted in shared._CountingEmbedder for every caller (failures
+        # of a loaded model; memory-off encodes are not counted). Quiet
         # tier: chat still works, and a broken model pages via
         # EmbeddingModelBroken on the next restart. keep_firing_for stops it
         # resolving overnight just because nobody is using memory.

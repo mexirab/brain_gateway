@@ -277,8 +277,8 @@ def _run_ingest_sync() -> Dict[str, int]:
         stats["changed_files"] += 1
 
     # 4. Batch upsert — isolate failures so one bad batch does not take out
-    # the entire run. Any failure is logged with the first ID in the batch
-    # so a future repeat can be traced back to the offending file quickly.
+    # the entire run. A failure is logged with its batch number (ids carry
+    # file paths and section titles, so they are never logged).
     # written/written_chunk_count are accumulated INSIDE the successful
     # branch so a failing middle batch can't drift the Prometheus counter.
     written = 0
@@ -299,9 +299,11 @@ def _run_ingest_sync() -> Dict[str, int]:
                 written += len(b_ids)
                 written_chunk_count += sum(1 for x in b_ids if x.startswith("chunk::"))
             except Exception as e:
+                # Batch number, not an id: chunk ids carry the file path and
+                # section title (never logged).
                 logger.error(
-                    "[RAG_INGEST] Upsert batch failed (first id=%s, batch size=%d): %s",
-                    b_ids[0] if b_ids else "<empty>",
+                    "[RAG_INGEST] Upsert batch %d failed (batch size=%d): %s",
+                    i // _UPSERT_BATCH,
                     len(b_ids),
                     e,
                 )

@@ -19,10 +19,17 @@ import httpx
 from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from chromadb.config import Settings as ChromaSettings
+from huggingface_hub import constants as hf_constants
 from sentence_transformers import SentenceTransformer
 
 from orchestrator.config import settings
+from orchestrator.embedding_pin import (
+    DEFAULT_EMBEDDING_MODEL,
+    EMBEDDING_CODE_REVISION,
+    remote_code_revisions,
+)
 from orchestrator.embedding_pin import load_kwargs as embedding_load_kwargs
+from orchestrator.exceptions import EmbeddingModelUnavailableError
 from orchestrator.focus_state import FocusSession
 from orchestrator.ha_integration import HomeAssistantClient
 from orchestrator.llm_backend import LLMBackend, LLMConfig, create_backend
@@ -192,12 +199,24 @@ class _CountingEmbedder:
     call sites, some inside executor lambdas), so the count lives here instead
     of at each caller. The exception is always re-raised unchanged; only the
     calling module's name is recorded — never the text being encoded.
+
+    With no model (the startup load failed: memory is off) encode() raises
+    EmbeddingModelUnavailableError without counting it: the boot gauge
+    bgw_embedding_healthy already reports that state, and counting every chat
+    turn would keep EmbeddingErrors firing for hours after the fix.
     """
 
-    def __init__(self, model: SentenceTransformer) -> None:
-        self._model = model
+    def __init__(self, model: Optional[SentenceTransformer]) -> None:
+        self._model = model  # None: the load failed at startup (_load_embedding_model)
+
+    @property
+    def available(self) -> bool:
+        """False while memory is off (the model failed to load at startup)."""
+        return self._model is not None
 
     def encode(self, *args: Any, **kwargs: Any) -> Any:
+        if self._model is None:
+            raise EmbeddingModelUnavailableError("the embedding model failed to load at startup")
         try:
             return self._model.encode(*args, **kwargs)
         except Exception:
@@ -208,12 +227,53 @@ class _CountingEmbedder:
     def __getattr__(self, name: str) -> Any:
         if name == "_model":  # not set yet (copy/unpickle): don't recurse forever
             raise AttributeError(name)
+        if self._model is None:
+            raise AttributeError(f"{name}: the embedding model is not loaded (memory is off)")
         return getattr(self._model, name)
 
 
-embedding_model = _CountingEmbedder(
-    SentenceTransformer(EMBEDDING_MODEL_NAME, **embedding_load_kwargs(EMBEDDING_MODEL_NAME))
-)
+def _load_embedding_model(model_id: str) -> Optional[SentenceTransformer]:
+    """Load the embedding model from the local HF cache, or None if that fails.
+
+    Never calls the Hub: the image sets HF_HUB_OFFLINE=1 (online, a start with
+    DNS down retried for ~2.5 min). local_files_only alone is not enough —
+    transformers still sends one unpinned HEAD without the flag (~30 s with
+    no DNS) — so a missing flag is logged. A model missing from the cache
+    fails in seconds. A failed load must not stop the orchestrator — chat,
+    reminders and HA work without memory — so it returns None: encode() then
+    raises EmbeddingModelUnavailableError, the startup self-test reports
+    FAILED and EmbeddingModelBroken pages. The default model is also refused
+    when its remote code did not come from the pinned commit (embedding_pin
+    docstring).
+    """
+    if not hf_constants.HF_HUB_OFFLINE:
+        logger.warning("[EMBEDDING] HF_HUB_OFFLINE is not set — the model load may call the Hugging Face Hub")
+    try:
+        model = SentenceTransformer(model_id, local_files_only=True, **embedding_load_kwargs(model_id))
+    except Exception as e:
+        logger.error(
+            "[EMBEDDING] Model load FAILED (%s) — memory is off. It loads offline (HF_HUB_OFFLINE=1) "
+            "from the HF cache only; if it is not there, run `docker exec brain-orchestrator python -m "
+            "orchestrator.embedding_pin fetch`, then restart the orchestrator (orchestrator/embedding_pin.py)",
+            type(e).__name__,
+            exc_info=True,
+        )
+        return None
+    if model_id == DEFAULT_EMBEDDING_MODEL:
+        loaded = remote_code_revisions()
+        if loaded != {EMBEDDING_CODE_REVISION}:
+            logger.error(
+                "[EMBEDDING] Model REFUSED — its remote code loaded from %s, not the pinned %s; memory is off. "
+                "Run `docker exec brain-orchestrator python -m orchestrator.embedding_pin check` "
+                "(orchestrator/embedding_pin.py)",
+                sorted(loaded) or "no commit",
+                EMBEDDING_CODE_REVISION,
+            )
+            return None
+    return model
+
+
+embedding_model = _CountingEmbedder(_load_embedding_model(EMBEDDING_MODEL_NAME))
 
 # ---------------------------------------------------------------------------
 # Agentic settings

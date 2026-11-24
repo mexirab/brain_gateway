@@ -42,7 +42,7 @@ The script runs in two stages, separated by one reboot. **You don't have to re-r
 | Stage | What it does |
 |-------|--------------|
 | **1** | Installs Docker + docker-compose-v2, adds the NVIDIA container toolkit apt repo, installs `nvidia-driver-580-open` + `nvidia-container-toolkit`, configures the runtime, adds you to the `docker` group, installs a bash-profile auto-resume hook, then prompts you to reboot. |
-| **2 (auto-resumes on next login)** | Verifies `nvidia-smi` works, smoke-tests Docker+GPU integration, writes `API_TOKEN`, `DASHBOARD_TOKEN`, `SEARXNG_SECRET`, `JESS_LAN_IP`, `GATEWAY_ROOT_PATH`, and `COMPOSE_PROFILES=models` to `.env`; runs `scripts/detect_hardware.sh` to pick the right vLLM model for your GPU (auto-substitutes `VLLM_MODEL=Qwen/Qwen3-8B-AWQ` + `VLLM_EXTRA_ARGS=--tool-call-parser hermes` + `VLLM_MAX_MODEL_LEN=16384` if your card is below the 20 GiB tier-24 floor); brings up the **full local-AI base**: orchestrator + vLLM (LLM) + qwen-tts (TTS) + parakeet-stt (STT) + dashboard; waits up to 15 min for all four to report healthy (model weights are ~50 GB the first time); removes the auto-resume hook; hands off to the setup CLI. |
+| **2 (auto-resumes on next login)** | Verifies `nvidia-smi` works, smoke-tests Docker+GPU integration, writes `API_TOKEN`, `DASHBOARD_TOKEN`, `SEARXNG_SECRET`, `JESS_LAN_IP`, `GATEWAY_ROOT_PATH`, and `COMPOSE_PROFILES=models` to `.env`; runs `scripts/detect_hardware.sh` to pick the right vLLM model for your GPU (auto-substitutes `VLLM_MODEL=Qwen/Qwen3-8B-AWQ` + `VLLM_EXTRA_ARGS=--tool-call-parser hermes` + `VLLM_MAX_MODEL_LEN=16384` if your card is below the 20 GiB tier-24 floor); brings up the **full local-AI base**: orchestrator + vLLM (LLM) + qwen-tts (TTS) + parakeet-stt (STT) + dashboard; waits up to 15 min for all four to report healthy (model weights are ~50 GB the first time); downloads the memory (embedding) model into `data/hf_cache` once (`python -m orchestrator.embedding_pin fetch`, ~1.8 GB — the orchestrator itself never downloads it) and restarts the orchestrator; removes the auto-resume hook; hands off to the setup CLI. |
 | **Setup CLI** | 2 questions: your name, your timezone. Everything else takes auto-defaults — `assistant_name=Jess`, `adhd_mode=true`, `tone=warm`, `TTS_VOICE=aiden`. Saves identity via `/api/config/identity`, marks setup complete (kill switch flips), `docker compose up -d --force-recreate orchestrator` (recreate, not restart — env-file changes need it), prints the dashboard URL **and the auto-generated `DASHBOARD_TOKEN` login password**. ~30 seconds. |
 
 ### After install — Jess greets you
@@ -235,6 +235,12 @@ curl -s http://localhost:8888/health
 # {"ok":true,...}
 ```
 
+Then download the memory (embedding) model once. The orchestrator loads it offline from `data/hf_cache` and runs with memory off until it is there:
+
+```bash
+docker compose exec orchestrator python -m orchestrator.embedding_pin fetch && docker compose restart orchestrator
+```
+
 ---
 
 ## Step 6 — Run the express setup wizard
@@ -328,6 +334,7 @@ sudo tailscale cert --cert-file /opt/gateway_mvp/certs/<host>.crt \
 | `searxng` keeps restarting; `docker logs searxng` says `server.secret_key is not changed` | `SEARXNG_SECRET` not set (or empty) | Add one (Step 3 command), then `docker compose up -d searxng` |
 | Wizard returns 410 on `/api/setup/env` | Setup already marked complete | This is by design (kill switch). Edit `data/app/setup_state.json` → `setup_completed: false` to re-run, or use `/settings`. |
 | `qwen-tts` crash-loops with HF 401 | Stale model name in env | Confirm `QWEN_TTS_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` (or unset to use compose default) |
+| Jess doesn't remember anything; `docker compose logs orchestrator` shows `[EMBEDDING] Model load FAILED` | Embedding model not in `data/hf_cache` (the orchestrator never downloads it) | `docker compose exec orchestrator python -m orchestrator.embedding_pin fetch && docker compose restart orchestrator` |
 | Setup CLI can't reach orchestrator | `docker compose up -d` hasn't finished | `docker compose logs orchestrator`; wait until `curl http://localhost:8888/health` returns 200 |
 | Below-floor GPU crashes vLLM with `Unsupported speculative method: 'mtp'` | `.env.example` Lorbus defaults not overridden | `install.sh` does this automatically; if hand-installing, also unset `VLLM_EXTRA_ARGS` or set it to `--tool-call-parser hermes` |
 | Model takes 2+ minutes to first-respond | Cold start — vLLM is loading 16+ GiB of weights into VRAM | Wait. Subsequent requests are fast. |
