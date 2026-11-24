@@ -4,6 +4,17 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Jupiter voice moved to the bus-0b 5080 (2026-11-24)
+
+Host change, done live; this entry and the doc edits record it. The bus-0c RTX 5080 has two HDMI ports and the bus-0b card one, so the two closet monitors stay on bus 0c and the voice (`voxcpm-tts`) moved to bus 0b.
+
+- `/etc/voxcpm-tts.env` now pins the bus-0b card's UUID (old file: `/etc/voxcpm-tts.env.bak-bus0c`); Jupiter `.env` `JUPITER_TTS_GPU_UUID` changed with it, monitoring configs re-rendered and reloaded (`gpu_role="tts"` follows the voice; no TTS alerts).
+- Measured: healthy 27 s after the restart, 7.3 GiB on the new card; three short sentences 0.72–1.78 s (0.78–2.13 s on bus 0c just before).
+- **The voice card is now `cuda:0`.** An unpinned single-GPU experiment lands on the voice; pin experiments to the bus-0c card by UUID (`tts/voxcpm-tts-jupiter.service` header, `docs/VOICE_AND_TTS.md`).
+- Rollback: `sudo cp -p /etc/voxcpm-tts.env.bak-bus0c /etc/voxcpm-tts.env && sudo systemctl restart voxcpm-tts`, put the old UUID back in `.env`, then `scripts/generate-configs.sh && scripts/reload-monitoring.sh`.
+
+---
+
 ## [Unreleased] — Container → host firewall on Jupiter (2026-11-22)
 
 Branch `docs/container-host-reachability` (PR #176). Measured 2026-11-21: every Docker container on Jupiter reached every host service listening on all interfaces (ufw is inactive). A host unit now limits container → host traffic to an allow-list of (network, port) pairs. Installed on Jupiter in observe mode (logs, blocks nothing) since 2026-11-22. Design + measurements: `docs/internal/CONTAINER_HOST_REACHABILITY.md`; runbook: `monitoring/README.md` → Container → host firewall.
