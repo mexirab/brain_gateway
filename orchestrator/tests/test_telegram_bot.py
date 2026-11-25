@@ -1,5 +1,10 @@
 """Tests for the Telegram bot (two-way capture + reminder channel)."""
 
+import asyncio
+import json
+from unittest.mock import AsyncMock, MagicMock
+
+import httpx
 import pytest
 import respx
 from httpx import Response
@@ -7,14 +12,19 @@ from httpx import Response
 # Import shared at module scope: its import loads the embedding model (a
 # HuggingFace HEAD request on first load), which must happen OUTSIDE any
 # respx.mock context. Same convention as test_ntfy_feedback.
-from orchestrator import shared, state_store, telegram_bot  # noqa: F401
+import orchestrator.selfcare_manager as sc
+import orchestrator.vision_handler as vh
+from orchestrator import helios_power, shared, state_store, telegram_bot  # noqa: F401
 from orchestrator.config import settings
+from orchestrator.metrics import TELEGRAM_MEDIA_TOTAL, TELEGRAM_SEND_TOTAL
+from orchestrator.tests._helpers import metric_value
 
 API_BASE = "https://tg.test"
 TOKEN = "123456:test-token"
 BOT = f"{API_BASE}/bot{TOKEN}"
 SELF_URL = "http://self.test:8888"
 CHAT_ID = "1111"
+TTS_URL = "http://tts.test:5000"
 
 
 @pytest.fixture
@@ -40,14 +50,27 @@ def _clear_history():
     telegram_bot._denied_log_ts.clear()
 
 
-def _send_total(result: str, kind: str, reason: str) -> float:
-    from orchestrator.metrics import TELEGRAM_SEND_TOTAL
+@pytest.fixture
+async def client():
+    """A real httpx client; respx.mock (entered inside each test) intercepts it."""
+    async with httpx.AsyncClient() as c:
+        yield c
 
-    return TELEGRAM_SEND_TOTAL.labels(result=result, kind=kind, reason=reason)._value.get()
+
+def _send_total(result: str, kind: str, reason: str) -> float:
+    return metric_value(TELEGRAM_SEND_TOTAL, result=result, kind=kind, reason=reason)
+
+
+def _media_total(kind: str, result: str) -> float:
+    return metric_value(TELEGRAM_MEDIA_TOTAL, kind=kind, result=result)
 
 
 def _tg_ok(payload=None):
     return Response(200, json={"ok": True, "result": payload if payload is not None else {}})
+
+
+def _sent_json(route, i=0) -> dict:
+    return json.loads(route.calls[i].request.content)
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +78,6 @@ def _tg_ok(payload=None):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_deliver_disabled_is_skipped(monkeypatch):
     monkeypatch.setattr(settings, "telegram_enabled", False, raising=False)
     before = _send_total("skipped", "reminder", "disabled")
@@ -64,7 +86,6 @@ async def test_deliver_disabled_is_skipped(monkeypatch):
     assert _send_total("skipped", "reminder", "disabled") == before + 1
 
 
-@pytest.mark.asyncio
 async def test_deliver_without_chat_id_is_skipped(tg_on, monkeypatch):
     monkeypatch.setattr(settings, "telegram_allowed_chat_id", "", raising=False)
     result = await telegram_bot.deliver_via_telegram("r1", "take meds")
@@ -72,7 +93,6 @@ async def test_deliver_without_chat_id_is_skipped(tg_on, monkeypatch):
     assert result["reason"] == "missing_chat_id"
 
 
-@pytest.mark.asyncio
 async def test_deliver_sends_buttons(tg_on):
     with respx.mock:
         route = respx.post(f"{BOT}/sendMessage").mock(return_value=_tg_ok({"message_id": 7}))
@@ -81,10 +101,7 @@ async def test_deliver_sends_buttons(tg_on):
 
     assert result["success"] is True
     assert _send_total("ok", "reminder", "ok") == before + 1
-    sent = route.calls[0].request
-    import json
-
-    body = json.loads(sent.content)
+    body = _sent_json(route)
     assert body["chat_id"] == CHAT_ID
     assert "stretch break" in body["text"]
     buttons = body["reply_markup"]["inline_keyboard"][0]
@@ -92,7 +109,6 @@ async def test_deliver_sends_buttons(tg_on):
     assert buttons[1]["callback_data"] == "snooze:r42:10"
 
 
-@pytest.mark.asyncio
 async def test_deliver_api_error_is_failure(tg_on):
     with respx.mock:
         respx.post(f"{BOT}/sendMessage").mock(
@@ -129,81 +145,59 @@ def _msg(text: str, chat_id: str = CHAT_ID) -> dict:
     return {"chat": {"id": int(chat_id)}, "text": text}
 
 
-@pytest.mark.asyncio
-async def test_message_from_unknown_chat_is_dropped(tg_on):
+async def test_message_from_unknown_chat_is_dropped(tg_on, client):
     with respx.mock:  # no routes mocked: any request would raise
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            await telegram_bot._handle_message(client, _msg("hello", chat_id="9999"))
+        await telegram_bot._handle_message(client, _msg("hello", chat_id="9999"))
     # No exception = no outbound call was attempted.
 
 
-@pytest.mark.asyncio
-async def test_help_command_replies_without_chat_relay(tg_on):
+async def test_help_command_replies_without_chat_relay(tg_on, client):
     with respx.mock:
         route = respx.post(f"{BOT}/sendMessage").mock(return_value=_tg_ok({"message_id": 1}))
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            await telegram_bot._handle_message(client, _msg("/help"))
+        await telegram_bot._handle_message(client, _msg("/help"))
     assert route.called
-    import json
-
-    assert "Done / Snooze" in json.loads(route.calls[0].request.content)["text"]
+    assert "Done / Snooze" in _sent_json(route)["text"]
 
 
-@pytest.mark.asyncio
-async def test_text_relays_through_chat_route(tg_on):
-    chat_response = {"choices": [{"message": {"role": "assistant", "content": "Added to your list."}}]}
+def _mock_chat_relay(reply="ok", status=200):
+    respx.post(f"{BOT}/sendChatAction").mock(return_value=_tg_ok(True))
+    chat_response = {"choices": [{"message": {"role": "assistant", "content": reply}}]}
+    relay = respx.post(f"{SELF_URL}/v1/chat/completions").mock(
+        return_value=Response(200, json=chat_response) if status == 200 else Response(status, text="boom")
+    )
+    send = respx.post(f"{BOT}/sendMessage").mock(return_value=_tg_ok({"message_id": 2}))
+    return relay, send
+
+
+async def test_text_relays_through_chat_route(tg_on, client):
     with respx.mock:
-        respx.post(f"{BOT}/sendChatAction").mock(return_value=_tg_ok(True))
-        relay = respx.post(f"{SELF_URL}/v1/chat/completions").mock(return_value=Response(200, json=chat_response))
-        send = respx.post(f"{BOT}/sendMessage").mock(return_value=_tg_ok({"message_id": 2}))
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            await telegram_bot._handle_message(client, _msg("add milk to the shopping list"))
+        relay, send = _mock_chat_relay("Added to your list.")
+        await telegram_bot._handle_message(client, _msg("add milk to the shopping list"))
 
     assert relay.called
-    import json
-
-    relay_body = json.loads(relay.calls[0].request.content)
+    relay_body = _sent_json(relay)
     assert relay_body["messages"][-1] == {"role": "user", "content": "add milk to the shopping list"}
     assert relay.calls[0].request.headers["authorization"] == "Bearer test-api-token"
-    assert json.loads(send.calls[0].request.content)["text"] == "Added to your list."
+    assert _sent_json(send)["text"] == "Added to your list."
     # History committed on success
     assert len(telegram_bot._history[CHAT_ID]) == 2
 
 
-@pytest.mark.asyncio
-async def test_history_capped_and_new_resets(tg_on):
+async def test_history_capped_and_new_resets(tg_on, client):
     telegram_bot._history[CHAT_ID] = [{"role": "user", "content": str(i)} for i in range(10)]
-    chat_response = {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
     with respx.mock:
-        respx.post(f"{BOT}/sendChatAction").mock(return_value=_tg_ok(True))
-        respx.post(f"{SELF_URL}/v1/chat/completions").mock(return_value=Response(200, json=chat_response))
-        respx.post(f"{BOT}/sendMessage").mock(return_value=_tg_ok({"message_id": 3}))
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            await telegram_bot._handle_message(client, _msg("hi"))
-            # capped to telegram_history_turns (6)
-            assert len(telegram_bot._history[CHAT_ID]) == 6
-            await telegram_bot._handle_message(client, _msg("/new"))
+        _mock_chat_relay()
+        await telegram_bot._handle_message(client, _msg("hi"))
+        # capped to telegram_history_turns (6)
+        assert len(telegram_bot._history[CHAT_ID]) == 6
+        await telegram_bot._handle_message(client, _msg("/new"))
     assert CHAT_ID not in telegram_bot._history
 
 
-@pytest.mark.asyncio
-async def test_relay_failure_not_committed_to_history(tg_on):
+async def test_relay_failure_not_committed_to_history(tg_on, client):
     with respx.mock:
-        respx.post(f"{BOT}/sendChatAction").mock(return_value=_tg_ok(True))
-        respx.post(f"{SELF_URL}/v1/chat/completions").mock(return_value=Response(500, text="boom"))
-        send = respx.post(f"{BOT}/sendMessage").mock(return_value=_tg_ok({"message_id": 4}))
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            await telegram_bot._handle_message(client, _msg("hello?"))
+        _, send = _mock_chat_relay(status=500)
+        await telegram_bot._handle_message(client, _msg("hello?"))
     # Error reply still sent to the user, but nothing enters history.
     assert send.called
     assert telegram_bot._history.get(CHAT_ID, []) == []
@@ -222,103 +216,61 @@ def _callback(data: str, chat_id: str = CHAT_ID) -> dict:
     }
 
 
-@pytest.mark.asyncio
-async def test_callback_ack_completes_reminder(tg_on, tmp_db):
+def _mock_callback_api():
+    answer = respx.post(f"{BOT}/answerCallbackQuery").mock(return_value=_tg_ok(True))
+    edit = respx.post(f"{BOT}/editMessageText").mock(return_value=_tg_ok(True))
+    return answer, edit
+
+
+async def test_callback_ack_completes_reminder(tg_on, tmp_db, client):
     state_store.save_reminder("tg-r1", "take meds", "2026-07-05T10:00:00")
     with respx.mock:
-        respx.post(f"{BOT}/answerCallbackQuery").mock(return_value=_tg_ok(True))
-        respx.post(f"{BOT}/editMessageText").mock(return_value=_tg_ok(True))
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            await telegram_bot._handle_callback(client, _callback("ack:tg-r1"))
-
-    rem = state_store.get_reminder("tg-r1")
-    assert rem["status"] == "completed"
+        _mock_callback_api()
+        await telegram_bot._handle_callback(client, _callback("ack:tg-r1"))
+    assert state_store.get_reminder("tg-r1")["status"] == "completed"
 
 
-@pytest.mark.asyncio
-async def test_callback_ack_is_idempotent(tg_on, tmp_db):
+async def test_callback_ack_is_idempotent(tg_on, tmp_db, client):
     state_store.save_reminder("tg-r2", "take meds", "2026-07-05T10:00:00")
     state_store.mark_reminder_acked("tg-r2", via="telegram")
     with respx.mock:
-        answer = respx.post(f"{BOT}/answerCallbackQuery").mock(return_value=_tg_ok(True))
-        edit = respx.post(f"{BOT}/editMessageText").mock(return_value=_tg_ok(True))
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            await telegram_bot._handle_callback(client, _callback("ack:tg-r2"))
+        answer, edit = _mock_callback_api()
+        await telegram_bot._handle_callback(client, _callback("ack:tg-r2"))
     assert answer.called
     assert not edit.called  # replay: toast only, message untouched
 
 
-@pytest.fixture
-def clean_scheduler():
-    """Remove reminder_* jobs from the shared scheduler before and after."""
-    import contextlib
-
-    from orchestrator.shared import scheduler
-
-    def _sweep():
-        for job in list(scheduler.get_jobs()):
-            if job.id.startswith("reminder_"):
-                with contextlib.suppress(Exception):
-                    scheduler.remove_job(job.id)
-
-    _sweep()
-    yield scheduler
-    _sweep()
-
-
-@pytest.mark.asyncio
-async def test_callback_snooze_reopens_and_reschedules(tg_on, tmp_db, clean_scheduler):
+async def test_callback_snooze_reopens_and_reschedules(tg_on, tmp_db, delivery_clean_scheduler, client):
     state_store.save_reminder("tg-r3", "stretch", "2026-07-05T10:00:00")
     state_store.complete_reminder("tg-r3")
 
     with respx.mock:
-        respx.post(f"{BOT}/answerCallbackQuery").mock(return_value=_tg_ok(True))
-        respx.post(f"{BOT}/editMessageText").mock(return_value=_tg_ok(True))
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            await telegram_bot._handle_callback(client, _callback("snooze:tg-r3:15"))
+        _mock_callback_api()
+        await telegram_bot._handle_callback(client, _callback("snooze:tg-r3:15"))
 
     rem = state_store.get_reminder("tg-r3")
     assert rem["status"] == "pending"
     assert rem["snooze_count"] == 1
-    assert clean_scheduler.get_job("reminder_tg-r3") is not None
+    assert delivery_clean_scheduler.get_job("reminder_tg-r3") is not None
 
 
-@pytest.mark.asyncio
-async def test_callback_snooze_respects_limit(tg_on, tmp_db, monkeypatch):
+async def test_callback_snooze_respects_limit(tg_on, tmp_db, monkeypatch, client):
     monkeypatch.setattr(settings, "ntfy_max_snooze_count", 2, raising=False)
     state_store.save_reminder("tg-r4", "stretch", "2026-07-05T10:00:00")
     state_store.increment_snooze_count("tg-r4")
     state_store.increment_snooze_count("tg-r4")
     with respx.mock:
         answer = respx.post(f"{BOT}/answerCallbackQuery").mock(return_value=_tg_ok(True))
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            await telegram_bot._handle_callback(client, _callback("snooze:tg-r4:10"))
+        await telegram_bot._handle_callback(client, _callback("snooze:tg-r4:10"))
     assert answer.called
     assert state_store.get_reminder("tg-r4")["snooze_count"] == 2  # unchanged
 
 
-@pytest.mark.asyncio
-async def test_callback_from_unknown_chat_changes_nothing(tg_on, tmp_db):
+async def test_callback_from_unknown_chat_changes_nothing(tg_on, tmp_db, client):
     state_store.save_reminder("tg-r5", "take meds", "2026-07-05T10:00:00")
     with respx.mock:  # any outbound call would raise
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            await telegram_bot._handle_callback(client, _callback("ack:tg-r5", chat_id="9999"))
+        await telegram_bot._handle_callback(client, _callback("ack:tg-r5", chat_id="9999"))
     assert state_store.get_reminder("tg-r5")["status"] == "pending"
-
-
-# ---------------------------------------------------------------------------
-# allowlist parsing
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -327,14 +279,11 @@ async def test_callback_from_unknown_chat_changes_nothing(tg_on, tmp_db):
 
 
 async def _drain_bg_tasks():
-    import asyncio
-
     if telegram_bot._bg_tasks:
         await asyncio.gather(*list(telegram_bot._bg_tasks), return_exceptions=True)
 
 
-@pytest.mark.asyncio
-async def test_poll_once_advances_offset_and_dispatches(tg_on):
+async def test_poll_once_advances_offset_and_dispatches(tg_on, client):
     batch = {
         "ok": True,
         "result": [
@@ -350,43 +299,29 @@ async def test_poll_once_advances_offset_and_dispatches(tg_on):
             ]
         )
         send = respx.post(f"{BOT}/sendMessage").mock(return_value=_tg_ok({"message_id": 9}))
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            offset, hint = await telegram_bot._poll_once(client, 0)
-            assert (offset, hint) == (8, 0.0)  # max(update_id) + 1
-            await _drain_bg_tasks()
-            offset2, hint2 = await telegram_bot._poll_once(client, offset)
-
-    import json
+        offset, hint = await telegram_bot._poll_once(client, 0)
+        assert (offset, hint) == (8, 0.0)  # max(update_id) + 1
+        await _drain_bg_tasks()
+        offset2, hint2 = await telegram_bot._poll_once(client, offset)
 
     # Second request carries the advanced offset.
-    assert json.loads(poll.calls[1].request.content)["offset"] == 8
+    assert _sent_json(poll, 1)["offset"] == 8
     assert (offset2, hint2) == (8, 0.0)
     # The /help message in the batch was actually handled (dispatch ran).
     assert send.called
 
 
-@pytest.mark.asyncio
-async def test_poll_once_conflict_409_asks_for_long_sleep(tg_on):
+@pytest.mark.parametrize(
+    "response,hint",
+    [
+        pytest.param(Response(409, json={"ok": False, "description": "Conflict"}), 60.0, id="409-long-sleep"),
+        pytest.param(Response(500, text="oops"), -1.0, id="500-backoff"),
+    ],
+)
+async def test_poll_once_error_keeps_offset_and_signals(tg_on, client, response, hint):
     with respx.mock:
-        respx.post(f"{BOT}/getUpdates").mock(return_value=Response(409, json={"ok": False, "description": "Conflict"}))
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            offset, hint = await telegram_bot._poll_once(client, 3)
-    assert (offset, hint) == (3, 60.0)
-
-
-@pytest.mark.asyncio
-async def test_poll_once_server_error_signals_backoff(tg_on):
-    with respx.mock:
-        respx.post(f"{BOT}/getUpdates").mock(return_value=Response(500, text="oops"))
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            offset, hint = await telegram_bot._poll_once(client, 3)
-    assert (offset, hint) == (3, -1.0)
+        respx.post(f"{BOT}/getUpdates").mock(return_value=response)
+        assert await telegram_bot._poll_once(client, 3) == (3, hint)
 
 
 def test_redact_strips_bot_token(tg_on):
@@ -412,20 +347,16 @@ def test_allowlist_empty_denies_everyone(tg_on, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_selfcare_nudge_medication_sends_with_done_button(tg_on):
     with respx.mock:
         route = respx.post(f"{BOT}/sendMessage").mock(return_value=_tg_ok({"message_id": 11}))
         result = await telegram_bot.send_selfcare_nudge("medication", "Hey, did you take your Vyvanse?")
     assert result["success"] is True
-    import json
-
-    body = json.loads(route.calls[0].request.content)
+    body = _sent_json(route)
     assert "Vyvanse" in body["text"]
     assert body["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "sc:medication"
 
 
-@pytest.mark.asyncio
 async def test_selfcare_nudge_kind_gating(tg_on, monkeypatch):
     # default TELEGRAM_SELFCARE_NUDGES=medication → movement is skipped
     monkeypatch.setattr(settings, "telegram_selfcare_nudges", "medication", raising=False)
@@ -440,51 +371,31 @@ async def test_selfcare_nudge_kind_gating(tg_on, monkeypatch):
     assert result["success"] is True
 
 
-@pytest.mark.asyncio
-async def test_callback_selfcare_logs_medication(tg_on, monkeypatch):
-    logged = []
-    import orchestrator.selfcare_manager as sc
-
-    monkeypatch.setattr(sc, "record_medication_logged", lambda label: logged.append(label))
+@pytest.mark.parametrize(
+    "data,logged",
+    [
+        pytest.param("sc:medication", ["telegram:medication nudge"], id="medication-logged"),
+        pytest.param("sc:rm_rf_slash", [], id="unknown-kind-rejected"),
+    ],
+)
+async def test_callback_selfcare(tg_on, monkeypatch, client, data, logged):
+    seen = []
+    monkeypatch.setattr(sc, "record_medication_logged", lambda label: seen.append(label))
     with respx.mock:
-        answer = respx.post(f"{BOT}/answerCallbackQuery").mock(return_value=_tg_ok(True))
-        respx.post(f"{BOT}/editMessageText").mock(return_value=_tg_ok(True))
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            await telegram_bot._handle_callback(client, _callback("sc:medication"))
-    assert logged == ["telegram:medication nudge"]
+        answer, _ = _mock_callback_api()
+        await telegram_bot._handle_callback(client, _callback(data))
+    assert seen == logged
     assert answer.called
 
 
-@pytest.mark.asyncio
-async def test_callback_selfcare_rejects_unknown_kind(tg_on, monkeypatch):
-    logged = []
-    import orchestrator.selfcare_manager as sc
-
-    monkeypatch.setattr(sc, "record_medication_logged", lambda label: logged.append(label))
-    with respx.mock:
-        answer = respx.post(f"{BOT}/answerCallbackQuery").mock(return_value=_tg_ok(True))
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            await telegram_bot._handle_callback(client, _callback("sc:rm_rf_slash"))
-    assert logged == []
-    assert answer.called
-
-
-@pytest.mark.asyncio
 async def test_dispatch_nudge_mirrors_to_telegram(tg_on, monkeypatch):
-    import orchestrator.selfcare_manager as sc
-    from orchestrator import telegram_bot as tb
-
     async def _noop(*a, **k):
         return {"success": True}
 
     fired = []
     monkeypatch.setattr(sc, "_announce_voice", _noop)
     monkeypatch.setattr(sc, "_send_notification", _noop)
-    monkeypatch.setattr(tb, "fire_selfcare_nudge", lambda kind, text: fired.append((kind, text)))
+    monkeypatch.setattr(telegram_bot, "fire_selfcare_nudge", lambda kind, text: fired.append((kind, text)))
 
     await sc._dispatch_nudge("medication", "Hey, did you take your Guanfacine?")
     assert fired == [("medication", "Hey, did you take your Guanfacine?")]
@@ -521,12 +432,6 @@ def test_load_offset_defaults_to_zero(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _media_total(kind: str, result: str) -> float:
-    from orchestrator.metrics import TELEGRAM_MEDIA_TOTAL
-
-    return TELEGRAM_MEDIA_TOTAL.labels(kind=kind, result=result)._value.get()
-
-
 @pytest.fixture
 def voice_on(tg_on, monkeypatch):
     """Enable inbound voice with a configured STT endpoint."""
@@ -543,10 +448,6 @@ def photo_on(tg_on, monkeypatch):
     monkeypatch.setattr(settings, "telegram_photo_enabled", True, raising=False)
     monkeypatch.setattr(settings, "vision_enabled", True, raising=False)
     monkeypatch.setattr(settings, "vision_max_image_size", 10 * 1024 * 1024, raising=False)
-    from unittest.mock import AsyncMock
-
-    import orchestrator.vision_handler as vh
-
     monkeypatch.setattr(vh, "check_vision_health", AsyncMock(return_value=True))
     return settings
 
@@ -588,84 +489,72 @@ def _patch_send(monkeypatch):
     return sends
 
 
+def _patch_relay(monkeypatch, reply=None):
+    relay = AsyncMock(return_value=reply)
+    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
+    return relay
+
+
 # ----- _pick_image -----
 
 
-def test_pick_image_selects_largest_photo():
-    msg = {
-        "photo": [
-            {"file_id": "a", "file_size": 100, "width": 90},
-            {"file_id": "c", "file_size": 9000, "width": 1600},
-            {"file_id": "b", "file_size": 5000, "width": 1280},
-        ]
-    }
-    file_id, mime = telegram_bot._pick_image(msg)
-    assert file_id == "c"
-    assert mime == "image/jpeg"
-
-
-def test_pick_image_supported_document():
-    msg = {"document": {"file_id": "doc1", "mime_type": "image/png"}}
-    assert telegram_bot._pick_image(msg) == ("doc1", "image/png")
-
-
-def test_pick_image_rejects_non_image_document():
-    msg = {"document": {"file_id": "doc2", "mime_type": "application/pdf"}}
-    assert telegram_bot._pick_image(msg) == (None, "")
-
-
-def test_pick_image_empty_message():
-    assert telegram_bot._pick_image({}) == (None, "")
+@pytest.mark.parametrize(
+    "msg,expected",
+    [
+        pytest.param(
+            {
+                "photo": [
+                    {"file_id": "a", "file_size": 100, "width": 90},
+                    {"file_id": "c", "file_size": 9000, "width": 1600},
+                    {"file_id": "b", "file_size": 5000, "width": 1280},
+                ]
+            },
+            ("c", "image/jpeg"),
+            id="largest-photo",
+        ),
+        pytest.param(
+            {"document": {"file_id": "doc1", "mime_type": "image/png"}}, ("doc1", "image/png"), id="image-doc"
+        ),
+        pytest.param({"document": {"file_id": "doc2", "mime_type": "application/pdf"}}, (None, ""), id="pdf-rejected"),
+        pytest.param({}, (None, ""), id="empty"),
+    ],
+)
+def test_pick_image(msg, expected):
+    assert telegram_bot._pick_image(msg) == expected
 
 
 # ----- _stt_reachable -----
 
 
-@pytest.mark.asyncio
-async def test_stt_reachable_true_on_200(voice_on):
+@pytest.mark.parametrize(
+    "outcome,reachable",
+    [
+        pytest.param(Response(200, json={}), True, id="200"),
+        # A 404 on /v1/models still proves the server is answering.
+        pytest.param(Response(404, text="not found"), True, id="404"),
+        pytest.param(Response(503, text="down"), False, id="503"),
+        pytest.param(httpx.ConnectError("refused"), False, id="connect-error"),
+    ],
+)
+async def test_stt_reachable(voice_on, outcome, reachable):
     class _C:
         async def get(self, url, timeout=None):
-            return Response(200, json={})
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
 
-    assert await telegram_bot._stt_reachable(_C()) is True
-
-
-@pytest.mark.asyncio
-async def test_stt_reachable_true_on_404(voice_on):
-    # A 404 on /v1/models still proves the server is answering.
-    class _C:
-        async def get(self, url, timeout=None):
-            return Response(404, text="not found")
-
-    assert await telegram_bot._stt_reachable(_C()) is True
-
-
-@pytest.mark.asyncio
-async def test_stt_reachable_false_on_500(voice_on):
-    class _C:
-        async def get(self, url, timeout=None):
-            return Response(503, text="down")
-
-    assert await telegram_bot._stt_reachable(_C()) is False
-
-
-@pytest.mark.asyncio
-async def test_stt_reachable_false_on_connect_error(voice_on):
-    import httpx
-
-    class _C:
-        async def get(self, url, timeout=None):
-            raise httpx.ConnectError("refused")
-
-    assert await telegram_bot._stt_reachable(_C()) is False
+    assert await telegram_bot._stt_reachable(_C()) is reachable
 
 
 # ----- _handle_voice_impl -----
 
 
-@pytest.mark.asyncio
-async def test_voice_disabled_short_circuits(voice_on, monkeypatch):
-    monkeypatch.setattr(settings, "telegram_voice_enabled", False, raising=False)
+@pytest.mark.parametrize(
+    "flag,value",
+    [pytest.param("telegram_voice_enabled", False, id="voice-off"), pytest.param("stt_url", "", id="no-stt-url")],
+)
+async def test_voice_disabled_short_circuits(voice_on, monkeypatch, flag, value):
+    monkeypatch.setattr(settings, flag, value, raising=False)
     sends = _patch_send(monkeypatch)
     downloaded = []
     monkeypatch.setattr(telegram_bot, "_download_file", lambda *a, **k: downloaded.append(1))
@@ -678,16 +567,6 @@ async def test_voice_disabled_short_circuits(voice_on, monkeypatch):
     assert sends and "enabled" in sends[-1]["text"]
 
 
-@pytest.mark.asyncio
-async def test_voice_disabled_when_stt_url_empty(voice_on, monkeypatch):
-    monkeypatch.setattr(settings, "stt_url", "", raising=False)
-    sends = _patch_send(monkeypatch)
-    before = _media_total("voice", "disabled")
-    await telegram_bot._handle_voice_impl(_DummyClient(), CHAT_ID, _voice_msg())
-    assert _media_total("voice", "disabled") == before + 1
-
-
-@pytest.mark.asyncio
 async def test_voice_too_long(voice_on, monkeypatch):
     _patch_send(monkeypatch)
     downloaded = []
@@ -698,19 +577,13 @@ async def test_voice_too_long(voice_on, monkeypatch):
     assert downloaded == []
 
 
-@pytest.mark.asyncio
 async def test_voice_happy_path_transcribes_and_relays(voice_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
     sends = _patch_send(monkeypatch)
     monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"audio-bytes"))
     monkeypatch.setattr(telegram_bot, "_stt_reachable", AsyncMock(return_value=True))
     monkeypatch.setattr(telegram_bot, "_transcribe", AsyncMock(return_value="add milk to the list"))
-    relay = AsyncMock(return_value="Added milk.")
-    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
+    relay = _patch_relay(monkeypatch, "Added milk.")
     wake = AsyncMock()
-    from orchestrator import helios_power
-
     monkeypatch.setattr(helios_power, "wake_helios", wake)
 
     before = _media_total("voice", "ok")
@@ -725,63 +598,35 @@ async def test_voice_happy_path_transcribes_and_relays(voice_on, monkeypatch):
     assert "add milk to the list" in final and "Added milk." in final
 
 
-@pytest.mark.asyncio
-async def test_voice_wakes_helios_then_gives_up(voice_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
+@pytest.mark.parametrize("wake_enabled", [True, False], ids=["wake-then-give-up", "wake-disabled"])
+async def test_voice_stt_unreachable(voice_on, monkeypatch, wake_enabled):
+    monkeypatch.setattr(settings, "telegram_voice_wake_helios", wake_enabled, raising=False)
     sends = _patch_send(monkeypatch)
     monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"audio"))
     monkeypatch.setattr(telegram_bot, "_stt_reachable", AsyncMock(return_value=False))
     monkeypatch.setattr(telegram_bot, "_wait_for_stt", AsyncMock(return_value=False))
-    relay = AsyncMock()
-    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
+    relay = _patch_relay(monkeypatch)
     wake = AsyncMock(return_value={"ok": True})
-    from orchestrator import helios_power
-
     monkeypatch.setattr(helios_power, "wake_helios", wake)
 
     before = _media_total("voice", "stt_unreachable")
     await telegram_bot._handle_voice_impl(_DummyClient(), CHAT_ID, _voice_msg())
 
     assert _media_total("voice", "stt_unreachable") == before + 1
-    wake.assert_awaited_once()  # wake attempted
     relay.assert_not_awaited()  # never got to transcription
-    assert any("Waking" in s["text"] for s in sends)  # "waking" notice sent
+    if wake_enabled:
+        wake.assert_awaited_once()
+        assert any("Waking" in s["text"] for s in sends)  # "waking" notice sent
+    else:
+        wake.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_voice_stt_unreachable_wake_disabled(voice_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
-    monkeypatch.setattr(settings, "telegram_voice_wake_helios", False, raising=False)
-    _patch_send(monkeypatch)
-    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"audio"))
-    monkeypatch.setattr(telegram_bot, "_stt_reachable", AsyncMock(return_value=False))
-    relay = AsyncMock()
-    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
-    wake = AsyncMock()
-    from orchestrator import helios_power
-
-    monkeypatch.setattr(helios_power, "wake_helios", wake)
-
-    before = _media_total("voice", "stt_unreachable")
-    await telegram_bot._handle_voice_impl(_DummyClient(), CHAT_ID, _voice_msg())
-
-    assert _media_total("voice", "stt_unreachable") == before + 1
-    wake.assert_not_awaited()  # wake disabled -> never called
-    relay.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_voice_empty_transcript(voice_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
     _patch_send(monkeypatch)
     monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"audio"))
     monkeypatch.setattr(telegram_bot, "_stt_reachable", AsyncMock(return_value=True))
     monkeypatch.setattr(telegram_bot, "_transcribe", AsyncMock(return_value=""))
-    relay = AsyncMock()
-    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
+    relay = _patch_relay(monkeypatch)
 
     before = _media_total("voice", "empty_transcript")
     await telegram_bot._handle_voice_impl(_DummyClient(), CHAT_ID, _voice_msg())
@@ -793,7 +638,13 @@ async def test_voice_empty_transcript(voice_on, monkeypatch):
 # ----- _handle_photo_impl -----
 
 
-@pytest.mark.asyncio
+@pytest.fixture
+def photo_downloaded(photo_on, monkeypatch):
+    """Photo enabled, the download succeeds, sends recorded."""
+    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"jpegbytes"))
+    return _patch_send(monkeypatch)
+
+
 async def test_photo_disabled(photo_on, monkeypatch):
     monkeypatch.setattr(settings, "vision_enabled", False, raising=False)
     _patch_send(monkeypatch)
@@ -805,17 +656,9 @@ async def test_photo_disabled(photo_on, monkeypatch):
     assert downloaded == []
 
 
-@pytest.mark.asyncio
-async def test_photo_happy_path_relays_with_caption(photo_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
-    import orchestrator.vision_handler as vh
-
-    sends = _patch_send(monkeypatch)
-    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"jpegbytes"))
+async def test_photo_happy_path_relays_with_caption(photo_downloaded, monkeypatch):
     monkeypatch.setattr(vh, "analyze_image", AsyncMock(return_value="A grocery receipt for milk and eggs."))
-    relay = AsyncMock(return_value="Got it — added milk and eggs.")
-    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
+    relay = _patch_relay(monkeypatch, "Got it — added milk and eggs.")
 
     before = _media_total("photo", "ok")
     await telegram_bot._handle_photo_impl(_DummyClient(), CHAT_ID, _photo_msg(caption="from the store"))
@@ -830,22 +673,21 @@ async def test_photo_happy_path_relays_with_caption(photo_on, monkeypatch):
     assert "[PHOTO 1 CONTENT" in relayed and relayed.endswith("[END PHOTO 1 CONTENT]")
     assert relayed.index("from the store") < relayed.index("[PHOTO 1 CONTENT")
     assert vh.analyze_image.await_args.kwargs.get("thinking") is False
-    assert sends[-1]["text"].startswith("📷")
+    assert photo_downloaded[-1]["text"].startswith("📷")
 
 
-@pytest.mark.asyncio
-async def test_photo_vision_sentinel_not_relayed(photo_on, monkeypatch):
-    """CRITICAL regression: a bracketed sentinel from analyze_image must NOT be
-    forwarded to Jess as a real caption; result is vision_failed."""
-    from unittest.mock import AsyncMock
-
-    import orchestrator.vision_handler as vh
-
-    _patch_send(monkeypatch)
-    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"jpegbytes"))
-    monkeypatch.setattr(vh, "analyze_image", AsyncMock(return_value=vh._FAIL_TIMEOUT))
-    relay = AsyncMock()
-    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
+@pytest.mark.parametrize(
+    "analyze",
+    [
+        # CRITICAL regression: a bracketed sentinel from analyze_image must NOT
+        # be forwarded to Jess as a real caption.
+        pytest.param(AsyncMock(return_value=vh._FAIL_TIMEOUT), id="sentinel-not-relayed"),
+        pytest.param(AsyncMock(side_effect=RuntimeError("boom")), id="raises"),
+    ],
+)
+async def test_photo_vision_failure_is_not_relayed(photo_downloaded, monkeypatch, analyze):
+    monkeypatch.setattr(vh, "analyze_image", analyze)
+    relay = _patch_relay(monkeypatch)
 
     before = _media_total("photo", "vision_failed")
     await telegram_bot._handle_photo_impl(_DummyClient(), CHAT_ID, _photo_msg())
@@ -854,69 +696,75 @@ async def test_photo_vision_sentinel_not_relayed(photo_on, monkeypatch):
     relay.assert_not_awaited()  # sentinel never reaches Jess
 
 
-@pytest.mark.asyncio
-async def test_photo_vision_raises_is_vision_failed(photo_on, monkeypatch):
-    from unittest.mock import AsyncMock
+async def test_photo_bracket_shaped_description_is_framed_not_dropped(photo_downloaded, monkeypatch):
+    monkeypatch.setattr(vh, "analyze_image", AsyncMock(return_value='["eggs", "<tool_call>x</tool_call>"]'))
+    relay = _patch_relay(monkeypatch, "ok")
 
-    import orchestrator.vision_handler as vh
-
-    _patch_send(monkeypatch)
-    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"jpegbytes"))
-    monkeypatch.setattr(vh, "analyze_image", AsyncMock(side_effect=RuntimeError("boom")))
-    relay = AsyncMock()
-    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
-
-    before = _media_total("photo", "vision_failed")
     await telegram_bot._handle_photo_impl(_DummyClient(), CHAT_ID, _photo_msg())
 
-    assert _media_total("photo", "vision_failed") == before + 1
+    relayed = relay.await_args.args[2]
+    assert "[PHOTO 1 CONTENT" in relayed and "<tool_call>" not in relayed
+
+
+@pytest.mark.parametrize(
+    "wake_enabled,wake_result,reply",
+    [
+        pytest.param(False, None, "Send it again", id="wake-off-send-again"),
+        pytest.param(True, {"ok": True}, "waking them now", id="wake-on-waking"),
+        pytest.param(True, {"ok": False, "error": "ha unreachable"}, "Send it again", id="wake-failed-send-again"),
+    ],
+)
+async def test_photo_with_vision_asleep_skips_analysis(photo_downloaded, monkeypatch, wake_enabled, wake_result, reply):
+    monkeypatch.setattr(vh, "check_vision_health", AsyncMock(return_value=False))
+    analyze = AsyncMock(return_value="unused")
+    monkeypatch.setattr(vh, "analyze_image", analyze)
+    monkeypatch.setattr(shared, "HELIOS_WAKE_ENABLED", wake_enabled)
+    wake = AsyncMock(return_value=wake_result)
+    monkeypatch.setattr(helios_power, "wake_helios", wake)
+    relay = _patch_relay(monkeypatch)
+
+    before = _media_total("photo", "vision_unreachable")
+    await telegram_bot._handle_photo_impl(_DummyClient(), CHAT_ID, _photo_msg())
+
+    analyze.assert_not_awaited()
     relay.assert_not_awaited()
+    assert reply in photo_downloaded[-1]["text"]
+    if wake_enabled:
+        wake.assert_awaited_once()
+    else:
+        assert _media_total("photo", "vision_unreachable") == before + 1
+    if wake_result and not wake_result["ok"]:
+        assert "waking" not in photo_downloaded[-1]["text"]
 
 
 # ----- _handle_message dispatch to media handlers -----
 
 
-@pytest.mark.asyncio
-async def test_dispatch_voice_message_routes_to_voice_handler(tg_on, monkeypatch):
-    from unittest.mock import AsyncMock
+@pytest.mark.parametrize(
+    "msg,handler",
+    [pytest.param(_voice_msg(), "_handle_voice", id="voice"), pytest.param(_photo_msg(), "_handle_photo", id="photo")],
+)
+async def test_dispatch_media_message_routes_to_its_handler(tg_on, monkeypatch, msg, handler):
+    handlers = {"_handle_voice": AsyncMock(), "_handle_photo": AsyncMock()}
+    for name, mock in handlers.items():
+        monkeypatch.setattr(telegram_bot, name, mock)
 
-    voice_h = AsyncMock()
-    photo_h = AsyncMock()
-    monkeypatch.setattr(telegram_bot, "_handle_voice", voice_h)
-    monkeypatch.setattr(telegram_bot, "_handle_photo", photo_h)
+    await telegram_bot._handle_message(_DummyClient(), msg)
 
-    await telegram_bot._handle_message(_DummyClient(), _voice_msg())
-    voice_h.assert_awaited_once()
-    photo_h.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_dispatch_photo_message_routes_to_photo_handler(tg_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
-    voice_h = AsyncMock()
-    photo_h = AsyncMock()
-    monkeypatch.setattr(telegram_bot, "_handle_voice", voice_h)
-    monkeypatch.setattr(telegram_bot, "_handle_photo", photo_h)
-
-    await telegram_bot._handle_message(_DummyClient(), _photo_msg())
-    photo_h.assert_awaited_once()
-    voice_h.assert_not_awaited()
+    for name, mock in handlers.items():
+        assert mock.await_count == (1 if name == handler else 0)
 
 
-@pytest.mark.asyncio
 async def test_drain_pending_awaits_inflight_handlers():
     """On shutdown, _drain_pending lets an already-dispatched handler finish
     (so a deploy doesn't drop e.g. a Done-tap ack)."""
-    import asyncio as _a
-
     flag: dict = {}
 
     async def slow_handler():
-        await _a.sleep(0.05)
+        await asyncio.sleep(0.05)
         flag["done"] = True
 
-    t = _a.create_task(slow_handler())
+    t = asyncio.create_task(slow_handler())
     telegram_bot._bg_tasks.add(t)
     t.add_done_callback(telegram_bot._bg_tasks.discard)
 
@@ -928,9 +776,6 @@ async def test_drain_pending_awaits_inflight_handlers():
 # ---------------------------------------------------------------------------
 # spoken walkie-talkie reply (feat/telegram-voice-reply)
 # ---------------------------------------------------------------------------
-
-
-TTS_URL = "http://tts.test:5000"
 
 
 @pytest.fixture
@@ -945,8 +790,6 @@ def voice_reply_on(tg_on, monkeypatch):
 
 def _mock_client_with_post(post_mock):
     """A stand-in httpx client whose .post is the given AsyncMock."""
-    from unittest.mock import MagicMock
-
     client = MagicMock()
     client.post = post_mock
     return client
@@ -955,297 +798,117 @@ def _mock_client_with_post(post_mock):
 # ----- _synthesize_speech -----
 
 
-@pytest.mark.asyncio
 async def test_synthesize_speech_returns_bytes_on_200(voice_reply_on):
-    from unittest.mock import AsyncMock, MagicMock
+    post = AsyncMock(return_value=MagicMock(status_code=200, content=b"mp3-bytes"))
 
-    resp = MagicMock(status_code=200, content=b"mp3-bytes")
-    post = AsyncMock(return_value=resp)
-    client = _mock_client_with_post(post)
-
-    audio = await telegram_bot._synthesize_speech(client, "hello there")
+    audio = await telegram_bot._synthesize_speech(_mock_client_with_post(post), "hello there")
     assert audio == b"mp3-bytes"
     # Posts to the OpenAI-compatible speech endpoint requesting mp3.
-    called_url = post.await_args.args[0]
-    assert called_url == f"{TTS_URL}/v1/audio/speech"
+    assert post.await_args.args[0] == f"{TTS_URL}/v1/audio/speech"
     assert post.await_args.kwargs["json"]["response_format"] == "mp3"
     assert post.await_args.kwargs["json"]["input"] == "hello there"
 
 
-@pytest.mark.asyncio
-async def test_synthesize_speech_empty_content_is_none(voice_reply_on):
-    from unittest.mock import AsyncMock, MagicMock
-
-    resp = MagicMock(status_code=200, content=b"")
-    client = _mock_client_with_post(AsyncMock(return_value=resp))
-    assert await telegram_bot._synthesize_speech(client, "hi") is None
-
-
-@pytest.mark.asyncio
-async def test_synthesize_speech_non_200_is_none(voice_reply_on):
-    from unittest.mock import AsyncMock, MagicMock
-
-    resp = MagicMock(status_code=500, content=b"boom", text="boom")
-    client = _mock_client_with_post(AsyncMock(return_value=resp))
-    assert await telegram_bot._synthesize_speech(client, "hi") is None
-
-
-@pytest.mark.asyncio
-async def test_synthesize_speech_exception_is_none(voice_reply_on):
-    from unittest.mock import AsyncMock
-
-    post = AsyncMock(side_effect=RuntimeError("connect refused"))
-    client = _mock_client_with_post(post)
-    assert await telegram_bot._synthesize_speech(client, "hi") is None
+@pytest.mark.parametrize(
+    "post",
+    [
+        pytest.param(AsyncMock(return_value=MagicMock(status_code=200, content=b"")), id="empty-content"),
+        pytest.param(AsyncMock(return_value=MagicMock(status_code=500, content=b"boom", text="boom")), id="non-200"),
+        pytest.param(AsyncMock(side_effect=RuntimeError("connect refused")), id="exception"),
+    ],
+)
+async def test_synthesize_speech_failure_is_none(voice_reply_on, post):
+    assert await telegram_bot._synthesize_speech(_mock_client_with_post(post), "hi") is None
 
 
 # ----- _send_voice_reply -----
 
 
-@pytest.mark.asyncio
+def _tg_resp(status_code: int, payload: dict) -> MagicMock:
+    resp = MagicMock(status_code=status_code, content=json.dumps(payload).encode())
+    resp.json.return_value = payload
+    return resp
+
+
 async def test_send_voice_reply_true_on_ok(voice_reply_on):
-    from unittest.mock import AsyncMock, MagicMock
+    post = AsyncMock(return_value=_tg_resp(200, {"ok": True}))
 
-    resp = MagicMock(status_code=200, content=b'{"ok": true}')
-    resp.json.return_value = {"ok": True}
-    post = AsyncMock(return_value=resp)
-    client = _mock_client_with_post(post)
-
-    assert await telegram_bot._send_voice_reply(client, CHAT_ID, b"mp3") is True
+    assert await telegram_bot._send_voice_reply(_mock_client_with_post(post), CHAT_ID, b"mp3") is True
     # Multipart file upload of the mp3.
     assert "files" in post.await_args.kwargs
     assert post.await_args.kwargs["data"]["chat_id"] == CHAT_ID
 
 
-@pytest.mark.asyncio
-async def test_send_voice_reply_false_on_ok_false(voice_reply_on):
-    from unittest.mock import AsyncMock, MagicMock
-
-    resp = MagicMock(status_code=200, content=b'{"ok": false}')
-    resp.json.return_value = {"ok": False, "description": "bad"}
-    client = _mock_client_with_post(AsyncMock(return_value=resp))
-    assert await telegram_bot._send_voice_reply(client, CHAT_ID, b"mp3") is False
-
-
-@pytest.mark.asyncio
-async def test_send_voice_reply_false_on_non_200(voice_reply_on):
-    from unittest.mock import AsyncMock, MagicMock
-
-    resp = MagicMock(status_code=400, content=b'{"ok": false}')
-    resp.json.return_value = {"ok": False, "description": "Bad Request"}
-    client = _mock_client_with_post(AsyncMock(return_value=resp))
-    assert await telegram_bot._send_voice_reply(client, CHAT_ID, b"mp3") is False
-
-
-@pytest.mark.asyncio
-async def test_send_voice_reply_false_on_exception(voice_reply_on):
-    from unittest.mock import AsyncMock
-
-    client = _mock_client_with_post(AsyncMock(side_effect=RuntimeError("boom")))
-    assert await telegram_bot._send_voice_reply(client, CHAT_ID, b"mp3") is False
+@pytest.mark.parametrize(
+    "post",
+    [
+        pytest.param(AsyncMock(return_value=_tg_resp(200, {"ok": False, "description": "bad"})), id="ok-false"),
+        pytest.param(AsyncMock(return_value=_tg_resp(400, {"ok": False, "description": "Bad Request"})), id="400"),
+        pytest.param(AsyncMock(side_effect=RuntimeError("boom")), id="exception"),
+    ],
+)
+async def test_send_voice_reply_false_on_failure(voice_reply_on, post):
+    assert await telegram_bot._send_voice_reply(_mock_client_with_post(post), CHAT_ID, b"mp3") is False
 
 
 # ----- _maybe_send_voice_reply -----
 
 
-@pytest.mark.asyncio
-async def test_maybe_voice_reply_disabled_no_synth_no_metric(voice_reply_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
-    monkeypatch.setattr(settings, "telegram_voice_reply_enabled", False, raising=False)
+@pytest.mark.parametrize(
+    "flag,value,reply",
+    [
+        pytest.param("telegram_voice_reply_enabled", False, "hi there", id="disabled"),
+        pytest.param("tts_url", "", "hi there", id="no-tts-url"),
+        pytest.param(None, None, "   \n\t ", id="blank-reply"),
+    ],
+)
+async def test_maybe_voice_reply_skips_without_synth_or_metric(voice_reply_on, monkeypatch, flag, value, reply):
+    if flag:
+        monkeypatch.setattr(settings, flag, value, raising=False)
     synth = AsyncMock()
     monkeypatch.setattr(telegram_bot, "_synthesize_speech", synth)
 
-    before_ok = _media_total("voice_reply", "ok")
-    before_fail = _media_total("voice_reply", "tts_failed")
-    await telegram_bot._maybe_send_voice_reply(_DummyClient(), CHAT_ID, "hi there")
+    before = {r: _media_total("voice_reply", r) for r in ("ok", "tts_failed")}
+    await telegram_bot._maybe_send_voice_reply(_DummyClient(), CHAT_ID, reply)
 
     synth.assert_not_awaited()
-    assert _media_total("voice_reply", "ok") == before_ok  # no metric bumped
-    assert _media_total("voice_reply", "tts_failed") == before_fail
+    assert {r: _media_total("voice_reply", r) for r in before} == before  # no metric bumped
 
 
-@pytest.mark.asyncio
-async def test_maybe_voice_reply_empty_tts_url_no_synth(voice_reply_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
-    monkeypatch.setattr(settings, "tts_url", "", raising=False)
-    synth = AsyncMock()
-    monkeypatch.setattr(telegram_bot, "_synthesize_speech", synth)
-
-    before = _media_total("voice_reply", "tts_failed")
-    await telegram_bot._maybe_send_voice_reply(_DummyClient(), CHAT_ID, "hi there")
-
-    synth.assert_not_awaited()
-    assert _media_total("voice_reply", "tts_failed") == before
-
-
-@pytest.mark.asyncio
-async def test_maybe_voice_reply_blank_reply_no_synth(voice_reply_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
-    synth = AsyncMock()
-    monkeypatch.setattr(telegram_bot, "_synthesize_speech", synth)
-
-    before = _media_total("voice_reply", "tts_failed")
-    await telegram_bot._maybe_send_voice_reply(_DummyClient(), CHAT_ID, "   \n\t ")
-
-    synth.assert_not_awaited()
-    assert _media_total("voice_reply", "tts_failed") == before
-
-
-@pytest.mark.asyncio
-async def test_maybe_voice_reply_happy_path_ok_metric(voice_reply_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
-    synth = AsyncMock(return_value=b"mp3-bytes")
-    send = AsyncMock(return_value=True)
+@pytest.mark.parametrize(
+    "audio,sent_ok,result",
+    [
+        pytest.param(b"mp3-bytes", True, "ok", id="ok"),
+        pytest.param(None, None, "tts_failed", id="tts-failed-no-send"),
+        pytest.param(b"mp3-bytes", False, "send_failed", id="send-failed"),
+    ],
+)
+async def test_maybe_voice_reply_outcome_metric(voice_reply_on, monkeypatch, audio, sent_ok, result):
+    synth = AsyncMock(return_value=audio)
+    send = AsyncMock(return_value=sent_ok)
     monkeypatch.setattr(telegram_bot, "_synthesize_speech", synth)
     monkeypatch.setattr(telegram_bot, "_send_voice_reply", send)
 
-    before = _media_total("voice_reply", "ok")
+    before = _media_total("voice_reply", result)
     await telegram_bot._maybe_send_voice_reply(_DummyClient(), CHAT_ID, "all done")
 
+    assert _media_total("voice_reply", result) == before + 1
     synth.assert_awaited_once()
-    send.assert_awaited_once()
-    assert send.await_args.args[2] == b"mp3-bytes"  # synthesized audio handed to sender
-    assert _media_total("voice_reply", "ok") == before + 1
+    if audio is None:
+        send.assert_not_awaited()  # no audio -> never attempt sendVoice
+    else:
+        send.assert_awaited_once()
+        assert send.await_args.args[2] == audio  # synthesized audio handed to sender
 
 
-@pytest.mark.asyncio
-async def test_maybe_voice_reply_tts_failed_metric_no_send(voice_reply_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
-    synth = AsyncMock(return_value=None)
-    send = AsyncMock()
-    monkeypatch.setattr(telegram_bot, "_synthesize_speech", synth)
-    monkeypatch.setattr(telegram_bot, "_send_voice_reply", send)
-
-    before = _media_total("voice_reply", "tts_failed")
-    await telegram_bot._maybe_send_voice_reply(_DummyClient(), CHAT_ID, "all done")
-
-    assert _media_total("voice_reply", "tts_failed") == before + 1
-    send.assert_not_awaited()  # no audio -> never attempt sendVoice
-
-
-@pytest.mark.asyncio
-async def test_maybe_voice_reply_send_failed_metric(voice_reply_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
-    synth = AsyncMock(return_value=b"mp3-bytes")
-    send = AsyncMock(return_value=False)
-    monkeypatch.setattr(telegram_bot, "_synthesize_speech", synth)
-    monkeypatch.setattr(telegram_bot, "_send_voice_reply", send)
-
-    before = _media_total("voice_reply", "send_failed")
-    await telegram_bot._maybe_send_voice_reply(_DummyClient(), CHAT_ID, "all done")
-
-    assert _media_total("voice_reply", "send_failed") == before + 1
-
-
-@pytest.mark.asyncio
 async def test_maybe_voice_reply_truncates_to_max_chars(voice_reply_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
     monkeypatch.setattr(settings, "telegram_voice_reply_max_chars", 50, raising=False)
     synth = AsyncMock(return_value=b"mp3-bytes")
     monkeypatch.setattr(telegram_bot, "_synthesize_speech", synth)
     monkeypatch.setattr(telegram_bot, "_send_voice_reply", AsyncMock(return_value=True))
 
-    long_reply = "x" * 500
-    await telegram_bot._maybe_send_voice_reply(_DummyClient(), CHAT_ID, long_reply)
+    await telegram_bot._maybe_send_voice_reply(_DummyClient(), CHAT_ID, "x" * 500)
 
     spoken = synth.await_args.args[1]
     assert len(spoken) <= 51  # 50 chars + the ellipsis
     assert spoken.endswith("…")
-
-
-@pytest.mark.asyncio
-async def test_photo_with_vision_asleep_skips_analysis(photo_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
-    import orchestrator.vision_handler as vh
-
-    sends = _patch_send(monkeypatch)
-    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"jpegbytes"))
-    monkeypatch.setattr(vh, "check_vision_health", AsyncMock(return_value=False))
-    analyze = AsyncMock(return_value="unused")
-    monkeypatch.setattr(vh, "analyze_image", analyze)
-    monkeypatch.setattr(shared, "HELIOS_WAKE_ENABLED", False)
-    relay = AsyncMock()
-    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
-
-    before = _media_total("photo", "vision_unreachable")
-    await telegram_bot._handle_photo_impl(_DummyClient(), CHAT_ID, _photo_msg())
-
-    analyze.assert_not_awaited()
-    relay.assert_not_awaited()
-    assert _media_total("photo", "vision_unreachable") == before + 1
-    assert "Send it again" in sends[-1]["text"]
-
-
-@pytest.mark.asyncio
-async def test_photo_bracket_shaped_description_is_framed_not_dropped(photo_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
-    import orchestrator.vision_handler as vh
-
-    _patch_send(monkeypatch)
-    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"jpegbytes"))
-    monkeypatch.setattr(vh, "analyze_image", AsyncMock(return_value='["eggs", "<tool_call>x</tool_call>"]'))
-    relay = AsyncMock(return_value="ok")
-    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
-
-    await telegram_bot._handle_photo_impl(_DummyClient(), CHAT_ID, _photo_msg())
-
-    relayed = relay.await_args.args[2]
-    assert "[PHOTO 1 CONTENT" in relayed and "<tool_call>" not in relayed
-
-
-@pytest.mark.asyncio
-async def test_photo_with_vision_asleep_wakes_helios_when_enabled(photo_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
-    import orchestrator.helios_power as hp
-    import orchestrator.vision_handler as vh
-
-    sends = _patch_send(monkeypatch)
-    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"jpegbytes"))
-    monkeypatch.setattr(vh, "check_vision_health", AsyncMock(return_value=False))
-    analyze = AsyncMock(return_value="unused")
-    monkeypatch.setattr(vh, "analyze_image", analyze)
-    monkeypatch.setattr(shared, "HELIOS_WAKE_ENABLED", True)
-    wake = AsyncMock(return_value={"ok": True})
-    monkeypatch.setattr(hp, "wake_helios", wake)
-    relay = AsyncMock()
-    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
-
-    await telegram_bot._handle_photo_impl(_DummyClient(), CHAT_ID, _photo_msg())
-
-    wake.assert_awaited_once()
-    analyze.assert_not_awaited()
-    relay.assert_not_awaited()
-    assert "waking them now" in sends[-1]["text"]
-
-
-@pytest.mark.asyncio
-async def test_photo_with_vision_asleep_wake_failure_says_send_again(photo_on, monkeypatch):
-    from unittest.mock import AsyncMock
-
-    import orchestrator.helios_power as hp
-    import orchestrator.vision_handler as vh
-
-    sends = _patch_send(monkeypatch)
-    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"jpegbytes"))
-    monkeypatch.setattr(vh, "check_vision_health", AsyncMock(return_value=False))
-    monkeypatch.setattr(vh, "analyze_image", AsyncMock(return_value="unused"))
-    monkeypatch.setattr(shared, "HELIOS_WAKE_ENABLED", True)
-    wake = AsyncMock(return_value={"ok": False, "error": "ha unreachable"})
-    monkeypatch.setattr(hp, "wake_helios", wake)
-    monkeypatch.setattr(telegram_bot, "_relay_locked", AsyncMock())
-
-    await telegram_bot._handle_photo_impl(_DummyClient(), CHAT_ID, _photo_msg())
-
-    wake.assert_awaited_once()
-    assert "waking" not in sends[-1]["text"]
-    assert "Send it again" in sends[-1]["text"]

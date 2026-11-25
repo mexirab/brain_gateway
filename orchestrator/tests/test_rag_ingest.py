@@ -17,6 +17,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from orchestrator.tests.fixtures_memory import FakeEmbedder
+
 
 @pytest.fixture
 def stubbed_shared(monkeypatch):
@@ -45,15 +47,7 @@ def stubbed_shared(monkeypatch):
 
     fake_coll.upsert.side_effect = _upsert
 
-    fake_model = MagicMock()
-    fake_model.encode.return_value = MagicMock(tolist=MagicMock(return_value=[[0.1] * 8]))
-
-    # encode returns one fake vector per input; side_effect handles variable
-    # batch sizes.
-    def _encode(batch, normalize_embeddings=True):
-        return MagicMock(tolist=MagicMock(return_value=[[0.1] * 8] * len(batch)))
-
-    fake_model.encode.side_effect = _encode
+    fake_model = FakeEmbedder([0.1] * 8)  # one vector per input of each batch
 
     monkeypatch.setattr(shared, "collection", fake_coll)
     monkeypatch.setattr(shared, "embedding_model", fake_model)

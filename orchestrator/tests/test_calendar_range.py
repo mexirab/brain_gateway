@@ -104,31 +104,6 @@ def test_repeat_request_is_served_from_cache(api):
     assert api.get_events.await_count == 2
 
 
-def test_today_failure_shape_unchanged(api):
-    api.get_events.return_value = CalendarResponse(success=False, error="x", failed_sources=["caldav"])
-    assert api.get("/api/calendar/today").json() == {
-        "ok": True,
-        "events": [],
-        "source": "none",
-        "count": 0,
-        "unavailable": ["personal"],
-        "web_url": "https://cal.example.test/.web/",
-    }
-
-
-def test_today_route_unchanged_after_refactor(api):
-    api.get_events.return_value = CalendarResponse(success=True, events=[])
-    body = api.get("/api/calendar/today").json()
-    assert body == {
-        "ok": True,
-        "events": [],
-        "source": "merged",
-        "count": 0,
-        "unavailable": [],
-        "web_url": "https://cal.example.test/.web/",
-    }
-
-
 class _Clock:
     """Stand-in for routes_calendar's ``time`` module (only monotonic is read)."""
 

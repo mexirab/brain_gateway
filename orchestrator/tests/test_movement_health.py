@@ -15,26 +15,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from orchestrator import selfcare_schedule
+from orchestrator.metrics import MOVEMENT_AUTO_DETECTED, MOVEMENT_HEALTH_LAST_UPDATE, MOVEMENT_HEALTH_READ
+from orchestrator.tests._helpers import metric_value
+
 STEPS = "sensor.test_phone_health_steps"
 STAND = "sensor.test_phone_stand_hours"
-
-
-def _can_import():
-    try:
-        from orchestrator import selfcare_manager  # noqa: F401
-
-        return True
-    except (ImportError, ModuleNotFoundError):
-        return False
-
-
-pytestmark = pytest.mark.skipif(not _can_import(), reason="needs orchestrator deps")
-
-
-def _metric(name, labels):
-    from prometheus_client import REGISTRY
-
-    return REGISTRY.get_sample_value(name, labels) or 0.0
 
 
 def _ha_iso(local_naive: datetime) -> str:
@@ -69,13 +55,8 @@ class FakeHA:
 
 
 @pytest.fixture
-def env():
-    from orchestrator import selfcare_manager as sm
-    from orchestrator import selfcare_schedule
-    from orchestrator.selfcare_manager import SelfCareState
-
-    sm._state = SelfCareState()
-    sm._health = sm._HealthMovementState()
+def env(selfcare_fresh_state):
+    sm = selfcare_fresh_state
     ha = FakeHA()
     with (
         patch.object(sm, "shared") as mock_shared,
@@ -91,8 +72,6 @@ def env():
         mock_shared.HA_TOKEN = "t" * 40
         mock_shared._http.get = AsyncMock(side_effect=ha.get)
         yield {"sm": sm, "shared": mock_shared, "ha": ha, "save_log": save_log, "resolve": resolve_inbox}
-    sm._state = SelfCareState()
-    sm._health = sm._HealthMovementState()
 
 
 T0 = datetime(2026, 11, 13, 10, 0)
@@ -118,28 +97,18 @@ class TestStepsDetection:
         await _read(sm, T0)
         walked = T0 + timedelta(minutes=8)
         ha.set(STEPS, "4300", changed=walked)
-        before = _metric("bgw_movement_auto_detected_total", {"source": "steps"})
+        before = metric_value(MOVEMENT_AUTO_DETECTED, source="steps")
         await _read(sm, T0 + timedelta(minutes=15))
         assert sm._state.sitting_since == walked
         assert sm._state.last_movement_nudge == walked
         env["save_log"].assert_called_once_with("movement", "health:steps")
         env["resolve"].assert_called_once_with("movement")
-        assert _metric("bgw_movement_auto_detected_total", {"source": "steps"}) == before + 1
-
-    async def test_steps_below_threshold_change_nothing(self, env):
-        sm, ha = env["sm"], env["ha"]
-        start = T0 - timedelta(hours=1)
-        sm._state.sitting_since = start
-        ha.set(STEPS, "4000", changed=T0)
-        await _read(sm, T0)
-        ha.set(STEPS, "4100", changed=T0 + timedelta(minutes=5))
-        await _read(sm, T0 + timedelta(minutes=15))
-        assert sm._state.sitting_since == start
-        env["save_log"].assert_not_called()
+        assert metric_value(MOVEMENT_AUTO_DETECTED, source="steps") == before + 1
 
     @pytest.mark.parametrize(
         ("threshold", "gained", "moved"),
         [
+            pytest.param(150, 100, False, id="100-of-150"),
             pytest.param(150, 149, False, id="149-of-150"),
             pytest.param(150, 150, True, id="150-of-150"),
             pytest.param(500, 300, False, id="300-of-500"),
@@ -156,6 +125,7 @@ class TestStepsDetection:
         ha.set(STEPS, str(4000 + gained), changed=walked)
         await _read(sm, T0 + timedelta(minutes=15))
         assert sm._state.sitting_since == (walked if moved else start)
+        assert env["save_log"].call_count == (1 if moved else 0)
 
     async def test_slow_trickle_never_adds_up(self, env):
         """The baseline moves every read, so 100 steps per check never counts."""
@@ -199,11 +169,11 @@ class TestStepsDetection:
         await _read(sm, T0)
         sm._state.sitting_since = T0 + timedelta(minutes=12)  # user said "I stretched"
         ha.set(STEPS, "4500", changed=T0 + timedelta(minutes=5))
-        before = _metric("bgw_movement_auto_detected_total", {"source": "steps"})
+        before = metric_value(MOVEMENT_AUTO_DETECTED, source="steps")
         await _read(sm, T0 + timedelta(minutes=15))
         assert sm._state.sitting_since == T0 + timedelta(minutes=12)
         env["save_log"].assert_not_called()
-        assert _metric("bgw_movement_auto_detected_total", {"source": "steps"}) == before
+        assert metric_value(MOVEMENT_AUTO_DETECTED, source="steps") == before
 
 
 class TestNewDay:
@@ -330,8 +300,6 @@ class TestOvernightRestartAndStuckBaseline:
         env["resolve"].assert_not_called()
         # The new baseline is today's count, so a real walk after it counts.
         assert sm._health.baseline["steps"][0] == 800
-        from orchestrator import selfcare_schedule
-
         with (
             patch.object(selfcare_schedule, "category_interval_minutes", return_value=90),
             patch.object(sm, "_within_active_hours", return_value=True),
@@ -361,9 +329,9 @@ class TestBadReadings:
         ha.set(STEPS, "4000", changed=T0)
         await _read(sm, T0)
         ha.set(STEPS, state, changed=T0 + timedelta(minutes=5))
-        before = _metric("bgw_movement_health_read_total", {"kind": "steps", "result": result})
+        before = metric_value(MOVEMENT_HEALTH_READ, kind="steps", result=result)
         await _read(sm, T0 + timedelta(minutes=15))
-        assert _metric("bgw_movement_health_read_total", {"kind": "steps", "result": result}) == before + 1
+        assert metric_value(MOVEMENT_HEALTH_READ, kind="steps", result=result) == before + 1
         assert sm._state.sitting_since == start
         # The old baseline survives: the next good read still compares to 4000.
         ha.set(STEPS, "4300", changed=T0 + timedelta(minutes=25))
@@ -394,17 +362,17 @@ class TestBadReadings:
         sm, ha = env["sm"], env["ha"]
         ha.set(STEPS, "4000")
         ha.status[STEPS] = status
-        before = _metric("bgw_movement_health_read_total", {"kind": "steps", "result": result})
+        before = metric_value(MOVEMENT_HEALTH_READ, kind="steps", result=result)
         await _read(sm, T0)
-        assert _metric("bgw_movement_health_read_total", {"kind": "steps", "result": result}) == before + 1
+        assert metric_value(MOVEMENT_HEALTH_READ, kind="steps", result=result) == before + 1
         assert sm._health.baseline == {}
 
     async def test_connection_error_is_unreachable(self, env):
         sm = env["sm"]
         env["shared"]._http.get = AsyncMock(side_effect=OSError("boom"))
-        before = _metric("bgw_movement_health_read_total", {"kind": "steps", "result": "unreachable"})
+        before = metric_value(MOVEMENT_HEALTH_READ, kind="steps", result="unreachable")
         await _read(sm, T0)
-        assert _metric("bgw_movement_health_read_total", {"kind": "steps", "result": "unreachable"}) == before + 1
+        assert metric_value(MOVEMENT_HEALTH_READ, kind="steps", result="unreachable") == before + 1
 
     @pytest.mark.parametrize(
         "body",
@@ -419,9 +387,9 @@ class TestBadReadings:
         else:
             resp.json.return_value = body
         env["shared"]._http.get = AsyncMock(return_value=resp)
-        before = _metric("bgw_movement_health_read_total", {"kind": "steps", "result": "bad_value"})
+        before = metric_value(MOVEMENT_HEALTH_READ, kind="steps", result="bad_value")
         await _read(sm, T0)
-        assert _metric("bgw_movement_health_read_total", {"kind": "steps", "result": "bad_value"}) == before + 1
+        assert metric_value(MOVEMENT_HEALTH_READ, kind="steps", result="bad_value") == before + 1
         assert sm._health.baseline == {}
 
     @pytest.mark.parametrize(
@@ -458,17 +426,17 @@ class TestBadReadings:
         reported = T0 - timedelta(minutes=4)  # but the phone did report
         ha.set(STEPS, "4000", changed=changed, reported=reported)
         await _read(sm, T0)
-        got = _metric("bgw_movement_health_last_update_timestamp_seconds", {"kind": "steps"})
+        got = metric_value(MOVEMENT_HEALTH_LAST_UPDATE, kind="steps")
         assert got == pytest.approx(reported.astimezone().timestamp())
 
     async def test_age_gauge_ignores_a_future_report(self, env):
         sm, ha = env["sm"], env["ha"]
         ha.set(STEPS, "4000", changed=T0, reported=T0)
         await _read(sm, T0)
-        good = _metric("bgw_movement_health_last_update_timestamp_seconds", {"kind": "steps"})
+        good = metric_value(MOVEMENT_HEALTH_LAST_UPDATE, kind="steps")
         ha.set(STEPS, "4000", changed=T0, reported=datetime.now() + timedelta(days=2))
         await _read(sm, T0 + timedelta(minutes=15))
-        assert _metric("bgw_movement_health_last_update_timestamp_seconds", {"kind": "steps"}) == good
+        assert metric_value(MOVEMENT_HEALTH_LAST_UPDATE, kind="steps") == good
 
 
 class TestFailureLogging:
@@ -565,9 +533,9 @@ class TestStandHours:
         shared.MOVEMENT_STEPS_ENTITY = ""
         shared.MOVEMENT_STAND_ENTITY = STAND
         ha.set(STAND, "25", changed=T0)
-        before = _metric("bgw_movement_health_read_total", {"kind": "stand", "result": "bad_value"})
+        before = metric_value(MOVEMENT_HEALTH_READ, kind="stand", result="bad_value")
         await _read(sm, T0)
-        assert _metric("bgw_movement_health_read_total", {"kind": "stand", "result": "bad_value"}) == before + 1
+        assert metric_value(MOVEMENT_HEALTH_READ, kind="stand", result="bad_value") == before + 1
 
     async def test_both_sensors_newest_movement_wins(self, env):
         sm, ha, shared = env["sm"], env["ha"], env["shared"]
@@ -598,8 +566,6 @@ class TestGatingAndDebounce:
         shared._http.get.assert_not_called()
 
     async def test_movement_category_off_makes_no_ha_call(self, env):
-        from orchestrator import selfcare_schedule
-
         sm, shared = env["sm"], env["shared"]
         with patch.object(selfcare_schedule, "category_enabled", return_value=False):
             await _read(sm, T0)
@@ -621,11 +587,7 @@ class TestGatingAndDebounce:
 
 
 class TestRecordMovementAt:
-    def test_default_is_now(self, env):
-        sm = env["sm"]
-        before = datetime.now()
-        sm.record_movement_logged("voice:stretch")
-        assert sm._state.sitting_since >= before
+    """The default (now) is covered by test_selfcare_bridge.TestRecordMovementLogged."""
 
     def test_at_never_moves_the_clock_backwards(self, env):
         sm = env["sm"]
@@ -642,8 +604,6 @@ class TestSittingClockStartsWithTheDay:
     movement hours start must not count (the "546 minutes" first nudge)."""
 
     def _ctx(self, sm):
-        from orchestrator import selfcare_schedule
-
         return (
             patch.object(selfcare_schedule, "category_interval_minutes", return_value=90),
             patch.object(sm, "_within_active_hours", return_value=True),
@@ -675,11 +635,9 @@ class TestSittingClockStartsWithTheDay:
         a, b = self._ctx(sm)
         with a, b:
             msg = sm._check_movement(datetime(2026, 11, 13, 12, 40))
-        assert msg is not None and "about 100 minutes" in msg
+        assert msg is not None and "about 100 minutes" in msg and "sitting" in msg.lower()
 
     def test_window_that_wraps_midnight_counts_from_last_nights_start(self, env):
-        from orchestrator import selfcare_schedule
-
         sm = env["sm"]
         sm._state.sitting_since = datetime(2026, 11, 12, 20, 0)
         with patch.object(selfcare_schedule, "category_active_hours", return_value=("22:00", "06:00")):
@@ -691,8 +649,6 @@ class TestSittingClockStartsWithTheDay:
         [pytest.param((None, None), id="none"), pytest.param(("09:00", None), id="start-only")],
     )
     def test_no_full_window_keeps_the_old_behaviour(self, env, window):
-        from orchestrator import selfcare_schedule
-
         sm = env["sm"]
         sm._state.sitting_since = datetime(2026, 11, 13, 0, 5)
         with patch.object(selfcare_schedule, "category_active_hours", return_value=window):
@@ -732,8 +688,6 @@ class TestCheckSelfcareEndToEnd:
     NOW = datetime(2026, 11, 13, 14, 0)
 
     def _gates(self, sm):
-        from orchestrator import selfcare_schedule
-
         return (
             patch.object(sm, "datetime", _frozen(self.NOW)),
             patch.object(selfcare_schedule, "quiet_hours", return_value={}),
@@ -793,8 +747,6 @@ class TestCheckSelfcareEndToEnd:
     async def test_movement_counts_behind_every_gate(self, env, gate):
         """The phone read runs before the away / quiet-hours / routine gates,
         so walking while they hold the nudges still resets the clock."""
-        from orchestrator import selfcare_schedule
-
         sm, ha, shared = env["sm"], env["ha"], env["shared"]
         start = self._setup(sm, shared)
         if gate == "away":
@@ -864,30 +816,24 @@ class TestConfigValidator:
         s = self._settings(movement_steps_entity=bad)
         assert s.movement_steps_entity == ""
 
-    @pytest.mark.parametrize("value", [pytest.param(0, id="zero"), pytest.param(99999, id="huge")])
-    def test_out_of_range_threshold_resets_to_default(self, value):
-        assert self._settings(movement_steps_threshold=value).movement_steps_threshold == 150
-
-    @pytest.mark.parametrize(
-        "value",
-        [pytest.param("", id="empty"), pytest.param("abc", id="text"), pytest.param("150.5", id="decimal")],
-    )
-    def test_unparseable_threshold_falls_back_instead_of_failing_startup(self, value):
-        assert self._settings(movement_steps_threshold=value).movement_steps_threshold == 150
-
-    def test_threshold_from_string(self):
-        assert self._settings(movement_steps_threshold=" 300 ").movement_steps_threshold == 300
-
     @pytest.mark.parametrize(
         ("value", "expected"),
         [
+            pytest.param(0, 150, id="zero"),
+            pytest.param(99999, 150, id="huge"),
             pytest.param(19, 150, id="19"),
             pytest.param(20, 20, id="20"),
             pytest.param(5000, 5000, id="5000"),
             pytest.param(5001, 150, id="5001"),
+            pytest.param(" 300 ", 300, id="string"),
+            # Unparseable values fall back to the default instead of failing startup.
+            pytest.param("", 150, id="empty"),
+            pytest.param("abc", 150, id="text"),
+            pytest.param("150.5", 150, id="decimal"),
         ],
     )
-    def test_threshold_bounds(self, value, expected):
+    def test_threshold(self, value, expected):
+        """Valid range 20..5000; anything else (or unparseable) resets to 150."""
         assert self._settings(movement_steps_threshold=value).movement_steps_threshold == expected
 
     def test_read_from_env(self, monkeypatch):

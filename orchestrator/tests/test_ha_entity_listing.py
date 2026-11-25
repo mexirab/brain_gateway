@@ -13,7 +13,7 @@ Covers:
   unknown-entity suggestions, HA-unreachable handling, refresh timeout.
 
 No real Home Assistant is contacted: the client gets an ``httpx.MockTransport``
-and ``call_service`` is an ``AsyncMock``.
+(``ha_voice_ha_client``) and ``call_service`` is an ``AsyncMock``.
 """
 
 import asyncio
@@ -21,12 +21,13 @@ import random
 import time
 from unittest.mock import AsyncMock
 
-import httpx
 import pytest
 
 from orchestrator import shared, tool_handlers
-from orchestrator.ha_integration import Entity, ExecutionResult, HomeAssistantClient
+from orchestrator.ha_integration import Entity, ExecutionResult
 from orchestrator.metrics import HA_UNKNOWN_ENTITY
+from orchestrator.tests._helpers import metric_value
+from orchestrator.tests.fixtures_ha_voice import make_entity as ent
 from orchestrator.tool_definitions import (
     HA_LISTED_DOMAINS,
     format_ha_entity_listing,
@@ -42,16 +43,6 @@ PLUG = "switch.helios_test_plug"
 # ---------------------------------------------------------------------------
 
 
-def ent(entity_id: str, name=None) -> Entity:
-    domain = entity_id.split(".", 1)[0]
-    return Entity(
-        entity_id=entity_id,
-        domain=domain,
-        friendly_name="" if name is None else name,
-        state="off",
-    )
-
-
 def by_domain(*entities: Entity):
     out = {}
     for e in entities:
@@ -63,10 +54,6 @@ def by_domain(*entities: Entity):
 def _deny_defaults(monkeypatch):
     monkeypatch.setattr(shared, "HA_TOOL_DENY_ENTITIES", "")
     monkeypatch.setattr(shared, "HELIOS_PLUG_ENTITY", PLUG)
-
-
-def _states(entities):
-    return [{"entity_id": eid, "state": "off", "attributes": {"friendly_name": name}} for eid, name in entities]
 
 
 DEFAULT_STATES = [
@@ -83,46 +70,27 @@ DEFAULT_STATES = [
 ]
 
 
-class FakeHA:
-    """Controls the MockTransport behind a real HomeAssistantClient."""
-
-    def __init__(self, states):
-        self.states = states
-        self.fail = False
-        self.calls = 0
-
-    def handler(self, request: httpx.Request) -> httpx.Response:
-        self.calls += 1
-        if self.fail:
-            raise httpx.ConnectError("boom", request=request)
-        return httpx.Response(200, json=_states(self.states))
-
-
-async def make_client(states=DEFAULT_STATES, populate=True):
-    fake = FakeHA(states)
-    client = HomeAssistantClient(
-        url="http://ha.test:8123",
-        token="t",
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(fake.handler)),
-    )
-    if populate:
-        await client.refresh_entities(force=True)
-    return client, fake
-
-
 @pytest.fixture
-async def ha(monkeypatch):
-    client, fake = await make_client()
+def make_client(ha_voice_ha_client):
+    def make(states=DEFAULT_STATES, populate=True):
+        return ha_voice_ha_client(states, populate=populate)
+
+    return make
+
+
+async def _tool_client(make_client, monkeypatch, **kw):
+    """A client the tool handler uses, with call_service mocked to "Done"."""
+    client, fake = await make_client(**kw)
     client.call_service = AsyncMock(
         return_value=ExecutionResult(success=True, action="turn_on", entity_id="x", message="Done")
     )
     monkeypatch.setattr(tool_handlers, "ha_client", client)
-    yield client, fake
-    await client._http.aclose()
+    return client, fake
 
 
-def counter_value(counter) -> float:
-    return counter._value.get()
+@pytest.fixture
+async def ha(make_client, monkeypatch):
+    return await _tool_client(make_client, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
@@ -360,12 +328,12 @@ class TestDenied:
 
 
 # ---------------------------------------------------------------------------
-# HomeAssistantClient.suggest_entities / last_refresh_ok
+# HomeAssistantClient.suggest_entities (refresh flags: test_ha_registry.py)
 # ---------------------------------------------------------------------------
 
 
 class TestSuggestEntities:
-    async def test_same_domain_ranks_first(self):
+    async def test_same_domain_ranks_first(self, make_client):
         client, _ = await make_client(
             [
                 ("switch.kitchen_light", "Kitchen Light"),
@@ -376,9 +344,8 @@ class TestSuggestEntities:
         sugg = client.suggest_entities("light.kitchen_lights")
         assert sugg, "expected suggestions"
         assert sugg[0].domain == "light"
-        await client._http.aclose()
 
-    async def test_junk_not_suggested(self):
+    async def test_junk_not_suggested(self, make_client):
         client, _ = await make_client(
             [("light.kitchen", "Kitchen"), ("switch.office_desk", "Office Desk"), ("scene.movie_night", "Movie Night")]
         )
@@ -386,14 +353,12 @@ class TestSuggestEntities:
         # Same-domain bonus must not drag in an unrelated entity.
         sugg = client.suggest_entities("scene.kitchen")
         assert [e.entity_id for e in sugg] == ["light.kitchen"]
-        await client._http.aclose()
 
-    async def test_only_controllable_domains(self):
+    async def test_only_controllable_domains(self, make_client):
         client, _ = await make_client([("sensor.kitchen", "Kitchen"), ("light.kitchen", "Kitchen")])
         assert [e.entity_id for e in client.suggest_entities("sensor.kitchen")] == ["light.kitchen"]
-        await client._http.aclose()
 
-    async def test_deterministic_order(self):
+    async def test_deterministic_order(self, make_client):
         states = [(f"light.desk_lamp_{i}", f"Desk Lamp {i}") for i in range(10)]
         c1, _ = await make_client(states)
         c2, _ = await make_client(list(reversed(states)))
@@ -401,57 +366,19 @@ class TestSuggestEntities:
         b = [e.entity_id for e in c2.suggest_entities("light.desk_lamp", limit=5)]
         assert a == b
         assert len(a) == 5
-        await c1._http.aclose()
-        await c2._http.aclose()
 
-    async def test_empty_cache_or_query(self):
+    async def test_empty_cache_or_query(self, make_client):
         client, _ = await make_client(populate=False)
         assert client.suggest_entities("light.kitchen") == []
         client2, _ = await make_client()
-        assert client2.suggest_entities("light.") == [] or all(
-            e.domain in client2.CONTROLLABLE_DOMAINS for e in client2.suggest_entities("light.")
-        )
-        await client._http.aclose()
-        await client2._http.aclose()
+        assert all(e.domain in client2.CONTROLLABLE_DOMAINS for e in client2.suggest_entities("light."))
 
-    async def test_non_string_friendly_name_does_not_crash(self):
+    async def test_non_string_friendly_name_does_not_crash(self, make_client):
         client, _ = await make_client([("light.kitchen", "Kitchen")])
         client._entities_by_domain["light"].append(
             Entity(entity_id="light.weird", domain="light", friendly_name=12345, state="off")
         )
         client.suggest_entities("light.kitchn")  # must not raise
-        await client._http.aclose()
-
-
-class TestLastRefreshOk:
-    async def test_flags(self):
-        client, fake = await make_client(populate=False)
-        assert client.last_refresh_ok is True  # initial
-        fake.fail = True
-        n = await client.refresh_entities(force=True)
-        assert n == 0
-        assert client.last_refresh_ok is False
-        fake.fail = False
-        n = await client.refresh_entities(force=True)
-        assert n == len(DEFAULT_STATES)
-        assert client.last_refresh_ok is True
-        assert client.has_entities()
-        # Failure after success keeps the old cache but flips the flag.
-        fake.fail = True
-        assert await client.refresh_entities(force=True) == len(DEFAULT_STATES)
-        assert client.last_refresh_ok is False
-        assert client.get_entity("light.kitchen") is not None
-        await client._http.aclose()
-
-    async def test_http_error_status_marks_failed(self):
-        client = HomeAssistantClient(
-            url="http://ha.test",
-            token="t",
-            http_client=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(500))),
-        )
-        await client.refresh_entities(force=True)
-        assert client.last_refresh_ok is False
-        await client._http.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -459,117 +386,91 @@ class TestLastRefreshOk:
 # ---------------------------------------------------------------------------
 
 
+_FORMAT = "must look like"
+_NOT_CHAT = "can't be controlled from chat"
+_NOT_AVAILABLE = "isn't available from chat"
+_CONFIRM = "needs a confirmation step"
+
+
+def _refusal(entity_id, service, needle, *, data=None, env=None, id):  # noqa: A002
+    return pytest.param(entity_id, service, data, needle, env or {}, id=id)
+
+
+# Every call the guard refuses on the tool path. ``env`` sets shared.* first.
+REFUSALS = [
+    # malformed ids / services
+    _refusal("Light.Kitchen", "turn_on", _FORMAT, id="fmt-uppercase"),
+    _refusal("light.kitchen; rm -rf /", "turn_on", _FORMAT, id="fmt-injection"),
+    _refusal("light.kitchen\n", "turn_on", _FORMAT, id="fmt-newline-id"),
+    _refusal("kitchen", "turn_on", _FORMAT, id="fmt-no-domain"),
+    _refusal("light." + "a" * 129, "turn_on", _FORMAT, id="fmt-129-chars"),
+    _refusal("light.kitchen", "turn-on", _FORMAT, id="fmt-dash-service"),
+    _refusal("light.kitchen", "turn_on\n", _FORMAT, id="fmt-newline-service"),
+    _refusal("light.kitchen", "turn_on/../x", _FORMAT, id="fmt-path-service"),
+    _refusal(123, "turn_on", "must be strings", id="int-entity"),
+    _refusal(["light.kitchen"], "turn_on", "must be strings", id="list-entity"),
+    _refusal("light.kitchen", 1, "must be strings", id="int-service"),
+    # data that isn't an object
+    _refusal("light.kitchen", "turn_on", "data must be an object", data="brightness=128", id="data-str"),
+    _refusal("light.kitchen", "turn_on", "data must be an object", data=["entity_id", "x"], id="data-list"),
+    _refusal("light.kitchen", "turn_on", "data must be an object", data=5, id="data-int"),
+    _refusal("light.kitchen", "turn_on", "data must be an object", data='{"entity_id": "switch.x"}', id="data-json"),
+    # services off the allow-list
+    _refusal(
+        "scene.movie_night",
+        "apply",
+        _NOT_AVAILABLE,
+        data={"entities": {PLUG: "off", "lock.front_door": "unlocked"}},
+        id="scene-apply",
+    ),
+    _refusal("scene.movie_night", "create", _NOT_AVAILABLE, id="scene-create"),
+    _refusal("light.kitchen", "flash", _NOT_AVAILABLE, id="light-flash"),
+    _refusal("media_player.living_room_speaker", "reload", _NOT_AVAILABLE, id="mp-reload"),
+    # domains chat may not touch
+    _refusal("script.x", "turn_on", _NOT_CHAT, id="domain-script"),
+    _refusal("input_boolean.x", "turn_on", _NOT_CHAT, id="domain-input-boolean"),
+    _refusal("automation.y", "turn_on", _NOT_CHAT, id="domain-automation"),
+    _refusal("sensor.outdoor_temperature", "turn_on", _NOT_CHAT, id="domain-sensor"),
+    _refusal("vacuum.robo", "turn_on", _NOT_CHAT, id="domain-vacuum"),
+    # the Helios plug (any service, any domain with its object id) and the deny list
+    *(_refusal(PLUG, svc, _NOT_CHAT, id=f"plug-{svc}") for svc in ("turn_off", "turn_on", "toggle")),
+    _refusal(
+        "light.helios_monitoring_plug",
+        "turn_off",
+        _NOT_CHAT,
+        env={"HELIOS_PLUG_ENTITY": "switch.helios_monitoring_plug"},
+        id="plug-object-id-as-light",
+    ),
+    _refusal(
+        "switch.office_desk", "turn_off", _NOT_CHAT, env={"HA_TOOL_DENY_ENTITIES": "switch.office_*"}, id="deny-glob"
+    ),
+    # services that open the house
+    _refusal("lock.front_door", "unlock", _CONFIRM, id="lock-unlock"),
+    _refusal("lock.front_door", "open", _CONFIRM, id="lock-open"),
+    _refusal("lock.front_door", "toggle", _CONFIRM, id="lock-toggle"),
+    _refusal("cover.garage", "open_cover", _CONFIRM, id="cover-open"),
+    _refusal("cover.garage", "toggle", _CONFIRM, id="cover-toggle"),
+    _refusal("cover.garage", "set_cover_position", _CONFIRM, id="cover-position"),
+    _refusal("cover.garage", "open_cover_tilt", _CONFIRM, id="cover-tilt"),
+    _refusal("alarm_control_panel.home", "alarm_disarm_away", _NOT_CHAT, id="alarm-disarm-away"),
+    _refusal("alarm_control_panel.home", "alarm_disarm", _NOT_CHAT, id="alarm-disarm"),
+]
+
+
 class TestToolHomeAssistant:
-    @pytest.mark.parametrize(
-        "entity_id,service",
-        [
-            ("Light.Kitchen", "turn_on"),
-            ("light.kitchen; rm -rf /", "turn_on"),
-            ("light.kitchen\n", "turn_on"),
-            ("kitchen", "turn_on"),
-            ("light." + "a" * 129, "turn_on"),
-            ("light.kitchen", "turn-on"),
-            ("light.kitchen", "turn_on\n"),
-            ("light.kitchen", "turn_on/../x"),
-        ],
-    )
-    async def test_bad_format_refused(self, ha, entity_id, service):
+    @pytest.mark.parametrize("entity_id,service,data,needle,env", REFUSALS)
+    async def test_refused_call_never_reaches_ha(self, ha, monkeypatch, entity_id, service, data, needle, env):
         client, _ = ha
-        out = await tool_handlers.tool_home_assistant(entity_id, service)
-        assert out.startswith("Failed:")
-        assert "Nothing was changed" in out
-        client.call_service.assert_not_called()
-
-    @pytest.mark.parametrize("data", ["brightness=128", ["entity_id", "x"], 5, '{"entity_id": "switch.x"}'])
-    async def test_non_dict_data_refused(self, ha, data):
-        client, _ = ha
-        out = await tool_handlers.tool_home_assistant("light.kitchen", "turn_on", data)
-        assert out.startswith("Failed: data must be an object")
-        client.call_service.assert_not_called()
-
-    @pytest.mark.parametrize(
-        "entity_id,service", [(123, "turn_on"), (["light.kitchen"], "turn_on"), ("light.kitchen", 1)]
-    )
-    async def test_non_string_args_refused(self, ha, entity_id, service):
-        client, _ = ha
-        out = await tool_handlers.tool_home_assistant(entity_id, service)
-        assert out.startswith("Failed:")
-        client.call_service.assert_not_called()
-
-    async def test_scene_apply_with_entities_refused(self, ha):
-        client, _ = ha
-        out = await tool_handlers.tool_home_assistant(
-            "scene.movie_night", "apply", {"entities": {PLUG: "off", "lock.front_door": "unlocked"}}
-        )
-        assert "isn't available from chat" in out
-        client.call_service.assert_not_called()
-
-    @pytest.mark.parametrize(
-        "entity_id,service",
-        [("scene.movie_night", "create"), ("light.kitchen", "flash"), ("media_player.living_room_speaker", "reload")],
-    )
-    async def test_service_not_on_allow_list_refused(self, ha, entity_id, service):
-        client, _ = ha
-        out = await tool_handlers.tool_home_assistant(entity_id, service)
-        assert "isn't available from chat" in out
-        client.call_service.assert_not_called()
-
-    async def test_light_named_like_helios_plug_refused(self, ha, monkeypatch):
-        client, _ = ha
-        monkeypatch.setattr(shared, "HELIOS_PLUG_ENTITY", "switch.helios_monitoring_plug")
-        out = await tool_handlers.tool_home_assistant("light.helios_monitoring_plug", "turn_off")
-        assert "can't be controlled from chat" in out
+        for name, value in env.items():
+            monkeypatch.setattr(shared, name, value)
+        out = await tool_handlers.tool_home_assistant(entity_id, service, data)
+        assert out.startswith("Failed:") and out.endswith("Nothing was changed.")
+        assert needle in out
         client.call_service.assert_not_called()
 
     async def test_missing_args(self, ha):
         client, _ = ha
         assert await tool_handlers.tool_home_assistant("", "turn_on") == "Missing entity_id or service"
-        client.call_service.assert_not_called()
-
-    @pytest.mark.parametrize(
-        "entity_id", ["script.x", "input_boolean.x", "automation.y", "sensor.outdoor_temperature", "vacuum.robo"]
-    )
-    async def test_unlisted_domain_refused(self, ha, entity_id):
-        client, _ = ha
-        out = await tool_handlers.tool_home_assistant(entity_id, "turn_on")
-        assert "can't be controlled from chat" in out
-        client.call_service.assert_not_called()
-
-    async def test_helios_plug_refused(self, ha):
-        client, _ = ha
-        for svc in ("turn_off", "turn_on", "toggle"):
-            out = await tool_handlers.tool_home_assistant(PLUG, svc)
-            assert "can't be controlled from chat" in out
-        client.call_service.assert_not_called()
-
-    async def test_deny_glob_refused(self, ha, monkeypatch):
-        client, _ = ha
-        monkeypatch.setattr(shared, "HA_TOOL_DENY_ENTITIES", "switch.office_*")
-        out = await tool_handlers.tool_home_assistant("switch.office_desk", "turn_off")
-        assert "can't be controlled from chat" in out
-        client.call_service.assert_not_called()
-
-    @pytest.mark.parametrize(
-        "entity_id,service",
-        [
-            ("lock.front_door", "unlock"),
-            ("lock.front_door", "open"),
-            ("cover.garage", "open_cover"),
-            ("cover.garage", "toggle"),
-            ("cover.garage", "set_cover_position"),
-            ("cover.garage", "open_cover_tilt"),
-            ("lock.front_door", "toggle"),
-            ("alarm_control_panel.home", "alarm_disarm_away"),
-            ("alarm_control_panel.home", "alarm_disarm"),
-        ],
-    )
-    async def test_house_opening_services_refused(self, ha, entity_id, service):
-        client, _ = ha
-        out = await tool_handlers.tool_home_assistant(entity_id, service)
-        assert out.startswith("Failed:")
-        assert "Nothing was changed" in out
-        if entity_id.split(".")[0] in ("cover", "lock"):
-            assert "needs a confirmation step" in out
         client.call_service.assert_not_called()
 
     @pytest.mark.parametrize("entity_id,service", [("lock.front_door", "lock"), ("cover.garage", "close_cover")])
@@ -622,12 +523,12 @@ class TestToolHomeAssistant:
 
     async def test_unknown_entity_suggests(self, ha):
         client, _ = ha
-        before = counter_value(HA_UNKNOWN_ENTITY)
+        before = metric_value(HA_UNKNOWN_ENTITY)
         out = await tool_handlers.tool_home_assistant("light.kitchen_lights", "turn_on")
         assert "Closest matches" in out
         assert "light.kitchen" in out
         assert "Nothing was changed" in out
-        assert counter_value(HA_UNKNOWN_ENTITY) == before + 1
+        assert metric_value(HA_UNKNOWN_ENTITY) == before + 1
         client.call_service.assert_not_called()
 
     async def test_unknown_suggestions_exclude_denied_and_unlisted(self, ha):
@@ -640,10 +541,10 @@ class TestToolHomeAssistant:
 
     async def test_unknown_nothing_similar(self, ha):
         client, _ = ha
-        before = counter_value(HA_UNKNOWN_ENTITY)
+        before = metric_value(HA_UNKNOWN_ENTITY)
         out = await tool_handlers.tool_home_assistant("fan.zzqxw_vbn", "turn_on")
         assert "nothing similar" in out
-        assert counter_value(HA_UNKNOWN_ENTITY) == before + 1
+        assert metric_value(HA_UNKNOWN_ENTITY) == before + 1
         client.call_service.assert_not_called()
 
     async def test_unknown_picks_up_newly_added_entity(self, ha):
@@ -658,43 +559,29 @@ class TestToolHomeAssistant:
         client, fake = ha
         fake.fail = True
         client._last_refresh = None  # force a real (failing) refresh
-        before = counter_value(HA_UNKNOWN_ENTITY)
+        before = metric_value(HA_UNKNOWN_ENTITY)
         out = await tool_handlers.tool_home_assistant("light.kitchen_lights", "turn_on")
         assert "couldn't reach Home Assistant" in out
-        assert counter_value(HA_UNKNOWN_ENTITY) == before
+        assert metric_value(HA_UNKNOWN_ENTITY) == before
         client.call_service.assert_not_called()
 
-    async def test_unknown_with_empty_cache(self, monkeypatch):
-        client, fake = await make_client(populate=False)
-        fake.states = []  # HA reachable but returns nothing
-        client.call_service = AsyncMock()
-        monkeypatch.setattr(tool_handlers, "ha_client", client)
+    @pytest.mark.parametrize("ha_down", [False, True], ids=["ha-returns-nothing", "ha-down"])
+    async def test_empty_cache_and_no_answer_is_unreachable(self, make_client, monkeypatch, ha_down):
+        client, fake = await _tool_client(make_client, monkeypatch, populate=False)
+        if ha_down:
+            fake.fail = True
+        else:
+            fake.states = []
         out = await tool_handlers.tool_home_assistant("light.kitchen", "turn_on")
         assert "couldn't reach Home Assistant" in out
         client.call_service.assert_not_called()
-        await client._http.aclose()
 
-    async def test_empty_cache_ha_down(self, monkeypatch):
-        client, fake = await make_client(populate=False)
-        fake.fail = True
-        client.call_service = AsyncMock()
-        monkeypatch.setattr(tool_handlers, "ha_client", client)
-        out = await tool_handlers.tool_home_assistant("light.kitchen", "turn_on")
-        assert "couldn't reach Home Assistant" in out
-        client.call_service.assert_not_called()
-        await client._http.aclose()
-
-    async def test_empty_cache_filled_by_refresh_then_called(self, monkeypatch):
-        client, _ = await make_client(populate=False)
-        client.call_service = AsyncMock(
-            return_value=ExecutionResult(success=True, action="turn_on", entity_id="light.kitchen", message="Done")
-        )
-        monkeypatch.setattr(tool_handlers, "ha_client", client)
+    async def test_empty_cache_filled_by_refresh_then_called(self, make_client, monkeypatch):
+        client, _ = await _tool_client(make_client, monkeypatch, populate=False)
         assert await tool_handlers.tool_home_assistant("light.kitchen", "turn_on") == "Done"
         client.call_service.assert_awaited_once()
-        await client._http.aclose()
 
-    async def test_hanging_refresh_returns_promptly(self, ha):
+    async def test_hanging_refresh_returns_promptly(self, ha, monkeypatch):
         client, _ = ha
         never = asyncio.Event()
 
@@ -702,10 +589,11 @@ class TestToolHomeAssistant:
             await never.wait()
 
         client.refresh_entities = hang
+        monkeypatch.setattr(tool_handlers, "HA_REFRESH_TIMEOUT_S", 0.05)
         t0 = time.monotonic()
         out = await tool_handlers.tool_home_assistant("light.kitchen_lights", "turn_on")
         elapsed = time.monotonic() - t0
-        assert elapsed < 4.0
+        assert elapsed < 1.0
         assert "couldn't reach Home Assistant" in out
         assert client.last_refresh_ok is False
         client.call_service.assert_not_called()

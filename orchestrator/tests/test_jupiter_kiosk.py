@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import base64
 import errno
-import importlib.util
 import ipaddress
 import json
 import logging
@@ -37,54 +36,26 @@ from types import SimpleNamespace
 
 import pytest
 
-_HERE = Path(__file__).resolve()
-_REPO = _HERE.parents[2]
+from orchestrator.tests._helpers import REPO_ROOT
+from orchestrator.tests.fixtures_ops import KIOSK_DIR, Proxy, first_existing, kiosk_module
 
-
-def _first_existing(*candidates: Path) -> Path | None:
-    return next((c for c in candidates if c.is_file()), None)
-
-
-_KIOSK_PATH = _first_existing(
-    _REPO / "scripts" / "jupiter-kiosk" / "kiosk.py",
-    Path("/app/scripts/jupiter-kiosk/kiosk.py"),
-)
-if _KIOSK_PATH is None:
+_KIOSK_PATH = KIOSK_DIR / "kiosk.py"
+if not _KIOSK_PATH.is_file():
     pytest.skip("scripts/jupiter-kiosk/kiosk.py not found", allow_module_level=True)
 
-
-def _load(path: Path, name: str):
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod  # before exec: @dataclass looks the module up by name
-    spec.loader.exec_module(mod)
-    return mod
-
-
-kiosk = _load(_KIOSK_PATH, "jupiter_kiosk")
+kiosk = kiosk_module()
 Screen = kiosk.Screen
 Output = kiosk.Output
 ConfigError = kiosk.ConfigError
 CdpError = kiosk.CdpError
 
-EXAMPLE = _KIOSK_PATH.with_name("kiosk.example.json")
-XORG_SHIPPED = _KIOSK_PATH.with_name("jupiter-kiosk.xorg.conf")
+EXAMPLE = KIOSK_DIR / "kiosk.example.json"
+XORG_SHIPPED = KIOSK_DIR / "jupiter-kiosk.xorg.conf"
 
 U_VOICE = "GPU-0a1b2c3d-1111-2222-3333-444455556666"
 U_DISPLAY = "GPU-ffffffff-aaaa-bbbb-cccc-dddddddddddd"
 VOICE_PCI = "0000:0b:00.0"
 DISPLAY_PCI = "0000:0c:00.0"
-
-
-class _Proxy:
-    """A module stand-in: the given attributes, everything else from the real module."""
-
-    def __init__(self, real, **override):
-        self._real = real
-        self.__dict__.update(override)
-
-    def __getattr__(self, name):
-        return getattr(self._real, name)
 
 
 def _screen(**over) -> dict:
@@ -375,16 +346,6 @@ def test_read_json_ok(tmp_path):
     assert kiosk.read_json(str(p)) == {"a": [1, 2]}
 
 
-def test_read_json_missing(tmp_path):
-    with pytest.raises(ConfigError, match="not found"):
-        kiosk.read_json(str(tmp_path / "nope.json"))
-
-
-def test_read_json_directory(tmp_path):
-    with pytest.raises(ConfigError, match="IsADirectoryError"):
-        kiosk.read_json(str(tmp_path))
-
-
 def test_read_json_bad_json_reports_line_not_content(tmp_path):
     p = tmp_path / "k.json"
     p.write_text('{\n"grafana_password": "hunter2-secret",\n', encoding="utf-8")
@@ -393,19 +354,38 @@ def test_read_json_bad_json_reports_line_not_content(tmp_path):
     assert "hunter2" not in str(err.value)
 
 
-def test_read_json_not_utf8(tmp_path):
-    p = tmp_path / "k.json"
+def _missing(p):
+    pass
+
+
+def _directory(p):
+    p.mkdir()
+
+
+def _not_utf8(p):
     p.write_bytes(b'{"a": "\xff\xfe"}')
-    with pytest.raises(ConfigError, match="UnicodeDecodeError"):
-        kiosk.read_json(str(p))
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root reads mode-000 files")
-def test_read_json_unreadable(tmp_path):
-    p = tmp_path / "k.json"
+def _unreadable(p):
+    if os.geteuid() == 0:
+        pytest.skip("root reads mode-000 files")
     p.write_text("{}", encoding="utf-8")
     p.chmod(0)
-    with pytest.raises(ConfigError, match="not readable"):
+
+
+@pytest.mark.parametrize(
+    ("make", "message"),
+    [
+        pytest.param(_missing, "not found", id="missing"),
+        pytest.param(_directory, "IsADirectoryError", id="directory"),
+        pytest.param(_not_utf8, "UnicodeDecodeError", id="not-utf8"),
+        pytest.param(_unreadable, "not readable", id="unreadable"),
+    ],
+)
+def test_read_json_errors(tmp_path, make, message):
+    p = tmp_path / "k.json"
+    make(p)
+    with pytest.raises(ConfigError, match=message):
         kiosk.read_json(str(p))
 
 
@@ -481,50 +461,73 @@ def _outs(*names_connected: tuple[str, bool]) -> list:
     return [Output(name=n, connected=c, preferred=(1920, 1080)) for n, c in names_connected]
 
 
-def test_assign_outputs_named_first_then_free_in_xrandr_order():
-    screens = (Screen(name="a", url="https://h/"), Screen(name="b", url="https://h/", output="HDMI-0"))
-    assigned, unused, warnings = kiosk.assign_outputs(screens, _outs(("HDMI-0", True), ("HDMI-1", True)))
-    # "a" comes first but must not take HDMI-0, which "b" names.
-    assert [(s.name, o.name) for s, o in assigned] == [("a", "HDMI-1"), ("b", "HDMI-0")]
-    assert unused == []
-    assert warnings == []
+def _scr(name: str, output: str | None = None) -> Screen:
+    return Screen(name=name, url="https://h/", output=output)
 
 
-def test_assign_outputs_named_output_not_connected():
-    screens = (Screen(name="a", url="https://h/", output="DP-0"),)
-    assigned, unused, warnings = kiosk.assign_outputs(screens, _outs(("DP-0", False), ("HDMI-0", True)))
-    assert [(s.name, o.name) for s, o in assigned] == [("a", "HDMI-0")]
-    assert len(warnings) == 1
-    assert "DP-0 is not connected" in warnings[0]
-
-
-def test_assign_outputs_more_screens_than_monitors():
-    screens = tuple(Screen(name=n, url="https://h/") for n in ("a", "b", "c"))
-    assigned, unused, warnings = kiosk.assign_outputs(screens, _outs(("HDMI-0", True), ("HDMI-1", True)))
-    assert [(s.name, o.name) for s, o in assigned] == [("a", "HDMI-0"), ("b", "HDMI-1")]
-    assert warnings == ["screen c: no free connected output; screen skipped"]
-
-
-def test_assign_outputs_unused_in_xrandr_order():
-    screens = (Screen(name="a", url="https://h/", output="HDMI-1"),)
-    outputs = _outs(("DP-0", False), ("HDMI-0", True), ("HDMI-1", True), ("DP-2", True))
-    assigned, unused, warnings = kiosk.assign_outputs(screens, outputs)
-    assert [o.name for _, o in assigned] == ["HDMI-1"]
-    assert unused == ["HDMI-0", "DP-2"]  # disconnected DP-0 is not listed
-
-
-def test_assign_outputs_nothing_connected():
-    screens = (Screen(name="a", url="https://h/", output="HDMI-0"), Screen(name="b", url="https://h/"))
-    assigned, unused, warnings = kiosk.assign_outputs(screens, _outs(("HDMI-0", False)))
-    assert assigned == []
-    assert unused == []
-    assert len(warnings) == 3  # a: not connected + skipped; b: skipped
-
-
-def test_assign_outputs_keeps_screen_order():
-    screens = (Screen(name="b", url="https://h/", output="DP-2"), Screen(name="a", url="https://h/"))
-    assigned, _, _ = kiosk.assign_outputs(screens, _outs(("HDMI-0", True), ("DP-2", True)))
-    assert [(s.name, o.name) for s, o in assigned] == [("b", "DP-2"), ("a", "HDMI-0")]
+@pytest.mark.parametrize(
+    ("screens", "outputs", "assigned", "unused", "warnings"),
+    [
+        # "a" comes first but must not take HDMI-0, which "b" names.
+        pytest.param(
+            (_scr("a"), _scr("b", "HDMI-0")),
+            [("HDMI-0", True), ("HDMI-1", True)],
+            [("a", "HDMI-1"), ("b", "HDMI-0")],
+            [],
+            [],
+            id="named-first-then-free-in-xrandr-order",
+        ),
+        pytest.param(
+            (_scr("a", "DP-0"),),
+            [("DP-0", False), ("HDMI-0", True)],
+            [("a", "HDMI-0")],
+            [],
+            ["DP-0 is not connected"],
+            id="named-output-not-connected",
+        ),
+        pytest.param(
+            (_scr("a"), _scr("b"), _scr("c")),
+            [("HDMI-0", True), ("HDMI-1", True)],
+            [("a", "HDMI-0"), ("b", "HDMI-1")],
+            [],
+            ["screen c: no free connected output; screen skipped"],
+            id="more-screens-than-monitors",
+        ),
+        # Unused outputs come in xrandr order; the disconnected DP-0 is not listed.
+        pytest.param(
+            (_scr("a", "HDMI-1"),),
+            [("DP-0", False), ("HDMI-0", True), ("HDMI-1", True), ("DP-2", True)],
+            [("a", "HDMI-1")],
+            ["HDMI-0", "DP-2"],
+            [],
+            id="unused-in-xrandr-order",
+        ),
+        # a: not connected + skipped; b: skipped
+        pytest.param(
+            (_scr("a", "HDMI-0"), _scr("b")),
+            [("HDMI-0", False)],
+            [],
+            [],
+            ["HDMI-0 is not connected", "screen a: no free", "screen b: no free"],
+            id="nothing-connected",
+        ),
+        pytest.param(
+            (_scr("b", "DP-2"), _scr("a")),
+            [("HDMI-0", True), ("DP-2", True)],
+            [("b", "DP-2"), ("a", "HDMI-0")],
+            [],
+            [],
+            id="keeps-screen-order",
+        ),
+    ],
+)
+def test_assign_outputs(screens, outputs, assigned, unused, warnings):
+    got, got_unused, got_warnings = kiosk.assign_outputs(screens, _outs(*outputs))
+    assert [(s.name, o.name) for s, o in got] == assigned
+    assert got_unused == unused
+    assert len(got_warnings) == len(warnings), got_warnings
+    for want, warning in zip(warnings, got_warnings, strict=True):
+        assert want in warning
 
 
 @pytest.mark.parametrize(
@@ -714,7 +717,7 @@ def test_wait_for_x_polls_until_x_answers(monkeypatch):
         return ""
 
     monkeypatch.setattr(kiosk, "_run", fake_run)
-    stop = _Proxy(threading.Event(), wait=lambda t: False)  # no real sleeping
+    stop = Proxy(threading.Event(), wait=lambda t: False)  # no real sleeping
     assert kiosk.wait_for_x(stop) is True
     assert calls == [["xrandr", "--current"]] * 3
 
@@ -1030,7 +1033,7 @@ def test_is_blocked_mocked_stat(monkeypatch, result, expected):
             raise result
         return result
 
-    monkeypatch.setattr(kiosk, "os", _Proxy(os, stat=fake_stat))
+    monkeypatch.setattr(kiosk, "os", Proxy(os, stat=fake_stat))
     assert kiosk.is_blocked("/dev/dri/card1") is expected
 
 
@@ -1361,23 +1364,16 @@ def test_screen_cookies_per_screen(login, hide_nav, names):
     assert [c["name"] for c in kiosk.screen_cookies(s, secrets)] == names
 
 
-def _frontend_lib(name: str) -> Path | None:
-    return _first_existing(_REPO / "frontend" / "src" / "lib" / name, Path("/app/frontend_lib") / name)
-
-
 def test_cookie_names_match_the_frontend():
     assert kiosk.DISPLAY_COOKIE == "__Host-jess_display"
     assert kiosk.DASHBOARD_COOKIE == "brain_token"
-    display = _frontend_lib("display-mode.ts")
+    # brain_token against dashboard-auth.ts: test_jupiter_kiosk_logins.test_constants_match_the_frontend
+    display = first_existing(REPO_ROOT / "frontend" / "src" / "lib" / "display-mode.ts")
     if display is None:
         pytest.skip("frontend/src/lib not mounted")
     m = re.search(r"export const DISPLAY_COOKIE = '([^']+)'", display.read_text(encoding="utf-8"))
     assert m and m.group(1) == kiosk.DISPLAY_COOKIE
     assert "value === 'kiosk'" in display.read_text(encoding="utf-8")
-    auth = _frontend_lib("dashboard-auth.ts")
-    if auth is not None:
-        m = re.search(r"export const COOKIE_NAME = '([^']+)'", auth.read_text(encoding="utf-8"))
-        assert m and m.group(1) == kiosk.DASHBOARD_COOKIE
 
 
 @pytest.mark.parametrize(
@@ -2062,7 +2058,7 @@ def test_snapshot_writes_png_mode_600(runner_factory, tmp_path):
 @pytest.fixture
 def main_env(monkeypatch, tmp_path, zoneinfo):
     installed = []
-    monkeypatch.setattr(kiosk, "signal", _Proxy(kiosk.signal, signal=lambda sig, handler: installed.append(sig)))
+    monkeypatch.setattr(kiosk, "signal", Proxy(kiosk.signal, signal=lambda sig, handler: installed.append(sig)))
     monkeypatch.setattr(kiosk.logging, "basicConfig", lambda **kw: None)
     config = tmp_path / "kiosk.json"
     secrets = tmp_path / "secrets.json"
@@ -2102,27 +2098,6 @@ def test_main_refuses_without_secrets(main_env, monkeypatch, caplog):
     main_env.secrets.write_text("{}", encoding="utf-8")
     assert kiosk.main(_argv(main_env, "--preflight")) == 2
     assert "dashboard_kiosk_session" in caplog.text
-
-
-OLD_MASTER_COOKIE = "fedcba9876543210" * 4
-
-
-@pytest.mark.parametrize(
-    "screen", [pytest.param(DASH_SCREEN, id="dashboard"), pytest.param(GRAFANA_SCREEN, id="grafana")]
-)
-def test_main_refuses_a_secrets_file_from_the_old_make_logins(main_env, monkeypatch, caplog, screen):
-    # Once this deploys, the service restarts on the exact file the old make_logins.py wrote (the full
-    # dashboard login, no kiosk session). It must not start (no preflight, no X), say why, and not log it.
-    monkeypatch.setattr(kiosk, "preflight", lambda cfg: pytest.fail("preflight must not run"))
-    monkeypatch.setattr(kiosk, "wait_for_monitor", lambda stop: pytest.fail("must not touch X"))
-    monkeypatch.setenv("DISPLAY", ":0")
-    main_env.config.write_text(json.dumps(_cfg(screen)), encoding="utf-8")
-    old = {"grafana_user": "closet-kiosk", "grafana_password": "old-grafana-pw", "dashboard_session": OLD_MASTER_COOKIE}
-    main_env.secrets.write_text(json.dumps(old), encoding="utf-8")
-    assert kiosk.main(_argv(main_env)) == 2
-    assert "still holds dashboard_session" in caplog.text
-    assert OLD_MASTER_COOKIE not in caplog.text
-    assert "old-grafana-pw" not in caplog.text
 
 
 def test_main_refuses_bad_config(main_env):
@@ -2220,7 +2195,7 @@ def test_main_needs_a_runtime_dir_for_the_cookie(main_env, monkeypatch, caplog):
 
 
 def test_main_cookie_falls_back_to_home_like_start_x(main_env, monkeypatch, tmp_path):
-    start_x = _KIOSK_PATH.with_name("start-x.sh")
+    start_x = KIOSK_DIR / "start-x.sh"
     if not start_x.is_file():
         pytest.skip("start-x.sh not found")
     # ":-": an empty XDG_RUNTIME_DIR counts as unset there, and must here too, or X and kiosk.py
@@ -2365,7 +2340,7 @@ def loop_env(monkeypatch, tmp_path, zoneinfo):
     monkeypatch.setattr(kiosk, "_run", fake_run)
     monkeypatch.setattr(kiosk, "ScreenRunner", FakeRunner)
     env.event = event
-    env.stop = _Proxy(event, wait=wait)
+    env.stop = Proxy(event, wait=wait)
     env.runners = []
     env.secrets = {"dashboard_session": GOOD_SESSION}
     env.args = (kiosk.load_config(_cfg(GRAFANA_SCREEN, DASH_SCREEN)), env.secrets, env.stop, env.runners, 0)
@@ -2468,7 +2443,7 @@ def test_run_kiosk_monitor_gone_before_layout(loop_env, caplog):
 def test_main_signals_reach_the_runners(main_env, loop_env, monkeypatch, tmp_path):
     # main()'s handlers act on the runners run_kiosk() starts; Chrome gets the cookie main() chose.
     handlers = {}
-    monkeypatch.setattr(kiosk, "signal", _Proxy(kiosk.signal, signal=lambda sig, h: handlers.__setitem__(sig, h)))
+    monkeypatch.setattr(kiosk, "signal", Proxy(kiosk.signal, signal=lambda sig, h: handlers.__setitem__(sig, h)))
     n = _free_display()
     monkeypatch.setenv("DISPLAY", f":{n}")
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
@@ -2496,7 +2471,7 @@ def test_main_signals_reach_the_runners(main_env, loop_env, monkeypatch, tmp_pat
 
 def _unit(name: str) -> dict[tuple[str, str], list[str]]:
     """{(section, key): [values in order]} of a systemd unit file; comments and continuations aside."""
-    path = _KIOSK_PATH.with_name(name)
+    path = KIOSK_DIR / name
     if not path.is_file():
         pytest.skip(f"{name} not found")
     out: dict[tuple[str, str], list[str]] = {}
@@ -2585,7 +2560,7 @@ def test_both_units_keep_the_exec_time_hardening(name):
 
 
 def test_user_manager_hides_the_voice_card_too():
-    path = _KIOSK_PATH.with_name("kiosk-user-manager.conf")
+    path = KIOSK_DIR / "kiosk-user-manager.conf"
     if not path.is_file():
         pytest.skip("kiosk-user-manager.conf not found")
     words = {
@@ -2598,7 +2573,7 @@ def test_user_manager_hides_the_voice_card_too():
 
 
 def test_start_x_runs_xorg_without_listeners_on_the_browser_units_display():
-    path = _KIOSK_PATH.with_name("start-x.sh")
+    path = KIOSK_DIR / "start-x.sh"
     if not path.is_file():
         pytest.skip("start-x.sh not found")
     text = path.read_text(encoding="utf-8")

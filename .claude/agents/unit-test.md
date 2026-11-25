@@ -13,15 +13,12 @@ After code changes pass code review. Trigger with `/test` or as part of the post
 ## Test Infrastructure
 
 - **Framework**: pytest with `asyncio_mode = auto`
-- **Config**: there is no `pytest.ini`, and the repo-root `pyproject.toml` (which sets `asyncio_mode = "auto"`) is NOT mounted into the test container — so always pass `-o asyncio_mode=auto` on the command line (see Running tests)
-- **Tests dir**: `orchestrator/tests/`
-- **Fixtures**: `orchestrator/tests/conftest.py` (tmp_db, mode_router)
-- **Existing tests** (27 files, verify on disk with `ls orchestrator/tests/` before claiming something is missing):
-  - Core: `test_config`, `test_db_module`, `test_exceptions_module`, `test_shared_parsing`, `test_tool_registry_module`
-  - Loop / routing: `test_unified_loop`, `test_nemotron_loop` (legacy), `test_mode_router`, `test_tier_selection`
-  - State / persistence: `test_state_store`, `test_mempalace`, `test_log_buffer`
-  - Features: `test_focus_manager`, `test_focus_body_doubling`, `test_focus_state_class`, `test_auto_learn`, `test_brain_dump`, `test_task_decomposition`, `test_progress_tracker`, `test_routine_manager`, `test_selfcare_manager`, `test_context_tracker`
-  - Integrations: `test_ha_validation`, `test_vision_handler`, `test_claude_code_tracker`
+- **Config**: there is no `pytest.ini`, and the repo-root `pyproject.toml` (which sets `asyncio_mode = "auto"`) is NOT mounted into the test container — so always pass `-o asyncio_mode=auto` on the command line (see Running tests). conftest refuses to run without it.
+- **Tests dir**: `orchestrator/tests/` (~150 files). Check `ls orchestrator/tests/` and grep before adding a file: extend the existing file for that module instead of creating a near-duplicate.
+- **Fixtures**:
+  - `conftest.py`: `tmp_db` (copy of a state_store DB template built once per session), `mode_router`, plus autouse resets.
+  - `fixtures_<area>.py` (`loop`, `ha_voice`, `delivery`, `selfcare`, `pantry`, `memory`, `ops`, `coder`): shared fixtures listed in `__all__`, named with the area prefix (`delivery_ntfy_on`, `memory_palace`). conftest imports them suite-wide and refuses a name clash. Read the module docstring before writing a fixture that may already exist. Plain helpers in these modules are imported by name.
+  - `_helpers.py`: `load_script(path, name)` imports a host script by file path (`scripts/…`, `monitoring/…`, no `.py` needed); `metric_value(metric, sample="", **labels)` reads a Prometheus metric (sums matching series, name every label when the test is about which series moved).
 
 ## What to test
 
@@ -29,7 +26,7 @@ After code changes pass code review. Trigger with `/test` or as part of the post
 1. **Happy path** — expected inputs produce expected outputs
 2. **Edge cases** — empty strings, None, missing keys, zero values
 3. **Error paths** — exceptions are raised or handled correctly
-4. **Async functions** — use `async def test_*` (auto mode handles the event loop)
+4. **Async functions** — plain `async def test_*`; never add `@pytest.mark.asyncio` (auto mode handles the event loop)
 
 ### For tool handlers (tool_handlers.py)
 - Mock external calls (httpx, HA, Google APIs) with `unittest.mock.AsyncMock`
@@ -51,11 +48,15 @@ Routes are split by domain — `routes_chat.py`, `routes_calendar.py`, `routes_d
 ## Rules
 
 1. **Mock external dependencies** — never call real LLMs, HA, Google APIs, or TTS in tests
-2. **Use existing fixtures** from conftest.py (tmp_db, mode_router)
-3. **Test file naming**: `test_{module_name}.py`
-4. **Don't test implementation details** — test behavior and outputs
-5. **Keep tests fast** — no sleeps, no real network calls
-6. **One assertion per concern** — multiple asserts are fine if testing one logical thing
+2. **Use existing fixtures** from conftest.py and `fixtures_<area>.py`; put a fixture two files need in the area's `fixtures_<area>.py` (add it to `__all__`, prefix the name)
+3. **Never import another test file** — shared code goes in `fixtures_<area>.py` or `_helpers.py`
+4. **No import guards** — no `_can_import` / skip-if-import-fails: the image has every dependency, so a failed import is a real failure. `pytest.importorskip` only for an optional extra the image may lack
+5. **Test the real code** — import the function under test; never copy production code into the test, and no tautologies (asserting a constant equals itself)
+6. **Test file naming**: `test_{module_name}.py`
+7. **Don't test implementation details** — test behavior and outputs
+8. **Keep tests fast** — no sleeps, no real network calls
+9. **One assertion per concern** — multiple asserts are fine if testing one logical thing
+10. **Short test ids** — conftest fails collection on node ids over 300 chars; give big parametrize values `pytest.param(..., id="short")`
 
 ## Running tests
 
@@ -64,22 +65,25 @@ Tests run in a **throwaway container** built from the `gateway_nerves-orchestrat
 Before you start:
 
 1. **Run from the session's worktree**, not the live checkout (`/home/labadmin/gateway_nerves` — CI deploys from it). `cd` into the worktree you were given so `$PWD` mounts your code.
-2. **Check memory first:** `free -g`. Jupiter has 31 GB shared with Home Assistant, monitoring and Immich. If `available` is under ~8 GB, wait or ask before starting.
+2. **Check memory first:** `free -g`. Jupiter's RAM is shared with Home Assistant, monitoring and Immich. If `available` is under ~8 GB, wait or ask before starting.
 3. **One test container at a time.** Jupiter hard-froze on 2026-10-16 with several heavy containers running at once. Don't start a second run (or run files in parallel) until the first exits.
 4. **Never kill/stop/rm containers you didn't start.** `--rm` cleans up your own; if a run hangs, stop only that container by the name you gave it.
 
 ```bash
 # All tests (from the worktree root). No pytest.ini, pyproject.toml not mounted → asyncio_mode on the CLI.
+# /tmp on tmpfs: the suite fsyncs heavily (SQLite, atomic writes); without it a run is ~4x slower on Jupiter's disk.
 # The data/ mount is needed by test_palace_system_wing.py (reads data/palace.yaml).
-docker run --rm -m 6g --name unit-test-$$ \
+docker run --rm -m 6g --name unit-test-$$ --tmpfs /tmp:rw,exec,size=8g \
   -v "$PWD/orchestrator:/app/orchestrator:ro" -v "$PWD/scripts:/app/scripts:ro" -v "$PWD/data:/app/data_repo:ro" -w /app \
   gateway_nerves-orchestrator \
   sh -c "pip install -q pytest pytest-asyncio respx && python -m pytest -o asyncio_mode=auto -p no:cacheprovider orchestrator/tests -q"
 
 # Single file / single test: swap the target
 #   ... orchestrator/tests/test_mode_router.py -q
-#   ... orchestrator/tests/test_mode_router.py::test_explainer_mode -q
+#   ... orchestrator/tests/test_mode_router.py::test_long_input_routes_without_error -q
 ```
+
+The full suite takes about 2 min. Tests that read files outside `orchestrator/`, `scripts/` and `data/` (compose files, `coder/`, `monitoring/`, `tts/`, `frontend/src`, `.github`) skip in this container; mount the ones you need read-only under `/app/` to run them (a few are host-only, e.g. `test_jupiter_deadman.py`).
 
 The mounts are read-only and the container is discarded, so edited tests are picked up on the next run — no `docker cp`, no image rebuild. If the image is missing or stale (new requirement), say so and ask before running `docker compose build orchestrator`.
 

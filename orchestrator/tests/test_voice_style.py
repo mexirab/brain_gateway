@@ -24,6 +24,7 @@ from prometheus_client import REGISTRY
 
 from orchestrator import state_store, voice_style
 from orchestrator.config import settings
+from orchestrator.tests.fixtures_ha_voice import FakeTTS
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -31,8 +32,8 @@ from orchestrator.config import settings
 
 
 @pytest.fixture(autouse=True)
-def isolated(tmp_path, monkeypatch):
-    """Fresh YAML path, cache, reply mode and state DB for every test."""
+def isolated(tmp_path, monkeypatch, tmp_db):
+    """Fresh YAML path, cache, reply mode and state DB (``tmp_db``) for every test."""
     yaml_path = tmp_path / "voice_style.yaml"
     monkeypatch.setattr(voice_style, "VOICE_STYLE_PATH", str(yaml_path))
     monkeypatch.setattr(voice_style, "_cache", None)
@@ -40,9 +41,7 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(voice_style, "_reply_mode_at", 0.0)
     monkeypatch.setattr(voice_style, "_one_reply_style", "")
     monkeypatch.setattr(voice_style, "_one_reply_at", 0.0)
-    monkeypatch.setattr(state_store, "DB_PATH", str(tmp_path / "vs_state.db"))
     monkeypatch.setattr(settings, "tts_style_enabled", True, raising=False)
-    state_store.init_db()
     return yaml_path
 
 
@@ -715,33 +714,16 @@ class _FakeHTTP:
         return _FakeResp()
 
 
-class _StyleBackend:
-    audio_format = "audio/mpeg"
-
-    def __init__(self):
-        self.styles = []
-
-    async def synthesize(self, text, voice=None, style=""):
-        self.styles.append(style)
-        return b"ID3mp3"
-
-
 @pytest.fixture
-def vision_client(monkeypatch):
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
+def vision_client(ha_voice_route_client, monkeypatch):
     from orchestrator import routes_vision, shared
 
     fake_http = _FakeHTTP()
     monkeypatch.setattr(routes_vision, "TTS_URL", "http://tts.test")
     monkeypatch.setattr(shared, "_http", fake_http, raising=False)
-    monkeypatch.setattr(shared, "_last_voice_activity_at", 0.0, raising=False)
-    backend = _StyleBackend()
+    backend = FakeTTS(audio=b"ID3mp3")
     monkeypatch.setattr(shared, "tts_backend", backend, raising=False)
-    app = FastAPI()
-    app.include_router(routes_vision.router)
-    return TestClient(app), fake_http, backend
+    return ha_voice_route_client, fake_http, backend
 
 
 def test_speech_proxy_strips_client_instructions_without_style(vision_client):

@@ -204,6 +204,45 @@ async def test_poll_failed_read_announces_nothing(monkeypatch):
     h.voice.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    "minutes,tiers,already,fired,wording",
+    [
+        pytest.param(55, (60, 30, 15, 5), (), 60, "in about an hour", id="55min-tier60"),
+        pytest.param(28, (60, 30, 15, 5), (), 30, "wrapping up", id="28min-closest-is-30"),
+        pytest.param(28, (60, 30, 15, 5), (30,), 60, None, id="28min-30-done-takes-60"),
+        pytest.param(28, (60, 30, 15, 5), (30, 60), None, None, id="28min-all-reached-done"),
+        pytest.param(14, (60, 30, 15, 5), (60,), 15, None, id="14min-tier15"),
+        pytest.param(4, (60, 30, 15, 5), (60, 30, 15), 5, None, id="4min-tier5"),
+        pytest.param(70, (60, 30, 15, 5), (), None, None, id="70min-before-any-tier"),
+        pytest.param(40, (45,), (), 45, "in 45 minutes", id="custom-45-generic-wording"),
+        pytest.param(85, (90,), (), 90, "in 90 minutes", id="custom-90-generic-wording"),
+    ],
+)
+async def test_poll_tiered_announces_closest_unannounced_tier_and_marks_larger(
+    monkeypatch, minutes, tiers, already, fired, wording
+):
+    """The real poll_calendar tier choice: the smallest reached, not yet
+    announced tier is spoken, then it and every larger tier are marked so a
+    later poll never says "in about an hour" for an event 10 minutes away."""
+    h = _Poll(monkeypatch, tiered=True)
+    monkeypatch.setattr(shared, "CALENDAR_ALERT_TIERS", list(tiers), raising=False)
+    ev = _ev("Team sync", _soon(minutes), "caldav")
+    key = calendar_sources.alert_key(ev)
+    preseeded = {f"cal:{key}:{t}" for t in already}
+    h.notified = set(preseeded)
+
+    await h.poll(ev)
+
+    if fired is None:
+        h.voice.assert_not_awaited()
+        assert h.notified == preseeded
+        return
+    assert h.voice.await_count == 1
+    assert h.notified == preseeded | {f"cal:{key}:{t}" for t in tiers if t >= fired}
+    if wording:
+        assert wording in h.voice.await_args.args[0]
+
+
 # ---------------------------------------------------------------------------
 # jobs_calendar.process_emails_for_events
 # ---------------------------------------------------------------------------
@@ -489,6 +528,32 @@ def test_today_unknown_source_label_passthrough(api):
     with _patch_events_on(CalendarResponse(success=True, events=[], failed_sources=["mystery"])):
         body = api.get("/api/calendar/today").json()
     assert body["unavailable"] == ["mystery"] and body["source"] == "merged" and body["count"] == 0
+
+
+@pytest.mark.parametrize(
+    "web_url,expected_url", [("https://cal.example.test/.web/", "https://cal.example.test/.web/"), ("", None)]
+)
+@pytest.mark.parametrize(
+    "resp,source,unavailable",
+    [
+        pytest.param(CalendarResponse(success=True, events=[]), "merged", [], id="ok-empty"),
+        pytest.param(
+            CalendarResponse(success=False, error="x", failed_sources=["caldav"]), "none", ["personal"], id="failed"
+        ),
+    ],
+)
+def test_today_full_shape_and_web_url(api, monkeypatch, resp, source, unavailable, web_url, expected_url):
+    monkeypatch.setattr(shared, "CALENDAR_WEB_URL", web_url, raising=False)
+    with _patch_events_on(resp):
+        body = api.get("/api/calendar/today").json()
+    assert body == {
+        "ok": True,
+        "events": [],
+        "source": source,
+        "count": 0,
+        "unavailable": unavailable,
+        "web_url": expected_url,
+    }
 
 
 # ---------------------------------------------------------------------------

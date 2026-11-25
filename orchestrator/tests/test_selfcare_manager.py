@@ -5,38 +5,20 @@ nudge timing, quiet hours, and smart suppression.
 Requires full orchestrator dependencies (runs inside Docker).
 """
 
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
-def _can_import():
-    try:
-        from orchestrator import selfcare_manager  # noqa: F401
-
-        return True
-    except (ImportError, ModuleNotFoundError):
-        return False
-
-
-_skip_no_deps = pytest.mark.skipif(
-    not _can_import(),
-    reason="selfcare_manager requires full orchestrator dependencies",
-)
+from orchestrator import data_manager, selfcare_schedule, state_store
+from orchestrator.metrics import SELFCARE_LOGGED
+from orchestrator.tests._helpers import metric_value
 
 
 @pytest.fixture(autouse=True)
-def reset_state():
-    """Reset selfcare_manager state and mock deps."""
-    if not _can_import():
-        pytest.skip("deps unavailable")
-
-    from orchestrator import selfcare_manager
-    from orchestrator.selfcare_manager import SelfCareState
-
-    selfcare_manager._state = SelfCareState()
-
+def reset_state(selfcare_fresh_state):
+    """Fresh selfcare_manager state (fixtures_selfcare) and mocked deps."""
+    selfcare_manager = selfcare_fresh_state
     with (
         patch.object(selfcare_manager, "_announce_voice", new_callable=AsyncMock),
         patch.object(selfcare_manager, "shared") as mock_shared,
@@ -54,9 +36,6 @@ def reset_state():
 
         yield {"module": selfcare_manager, "mock_shared": mock_shared}
 
-    selfcare_manager._state = SelfCareState()
-    patch.stopall()
-
 
 @pytest.fixture
 def sm(reset_state):
@@ -68,40 +47,52 @@ def mock_shared(reset_state):
     return reset_state["mock_shared"]
 
 
+def _logged(action):
+    return metric_value(SELFCARE_LOGGED, action=action)
+
+
 # ---------------------------------------------------------------------------
-# Logging actions
+# Logging actions + bgw_selfcare_logged_total (one increment per logical log)
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
-class TestLogSelfcare:
-    @pytest.mark.asyncio
-    async def test_log_meal(self, sm):
-        result = await sm.log_selfcare("meal", "lunch")
-        assert "lunch" in result
-        assert sm._state.last_meal_reported is not None
+@pytest.mark.parametrize(
+    ("action", "detail", "reply", "state_set"),
+    [
+        pytest.param("meal", "lunch", "lunch", lambda st: st.last_meal_reported is not None, id="meal"),
+        pytest.param(
+            "medication", "Adderall", "logged", lambda st: "adderall" in st.last_med_confirmation, id="medication"
+        ),
+        pytest.param("water", None, "hydrated", lambda st: st.last_hydration_nudge is not None, id="water"),
+        pytest.param("movement", None, "moving", lambda st: st.sitting_since is not None, id="movement"),
+    ],
+)
+async def test_log_selfcare(sm, action, detail, reply, state_set):
+    """Each action answers, moves its nudge gate, and bumps the counter exactly
+    once. The meal path is the trap: log_selfcare('meal') routes through
+    record_meal_logged(), the SOLE meal incrementer — two increments would be
+    the double-count bug."""
+    before = _logged(action)
+    result = await sm.log_selfcare(action, detail)
+    assert reply in result.lower()
+    assert state_set(sm._state)
+    assert _logged(action) - before == 1
 
-    @pytest.mark.asyncio
-    async def test_log_medication(self, sm):
-        result = await sm.log_selfcare("medication", "Adderall")
-        assert "Logged" in result
-        assert "adderall" in sm._state.last_med_confirmation
 
-    @pytest.mark.asyncio
-    async def test_log_water(self, sm):
-        result = await sm.log_selfcare("water")
-        assert "hydrated" in result.lower()
+async def test_log_unknown_action_changes_nothing(sm):
+    """Unknown action returns early before any counter touch."""
+    actions = ("meal", "medication", "water", "movement")
+    before = {a: _logged(a) for a in actions}
+    result = await sm.log_selfcare("sleep")
+    assert "Unknown" in result
+    assert {a: _logged(a) for a in actions} == before
 
-    @pytest.mark.asyncio
-    async def test_log_movement(self, sm):
-        result = await sm.log_selfcare("movement")
-        assert "moving" in result.lower()
-        assert sm._state.sitting_since is not None
 
-    @pytest.mark.asyncio
-    async def test_log_unknown(self, sm):
-        result = await sm.log_selfcare("sleep")
-        assert "Unknown" in result
+def test_record_meal_logged_helper_increments_once(sm):
+    """The other record_*_logged helpers' counters are checked in test_selfcare_bridge."""
+    before = _logged("meal")
+    sm.record_meal_logged("dinner")
+    assert _logged("meal") - before == 1
 
 
 # ---------------------------------------------------------------------------
@@ -116,8 +107,6 @@ def pin_meal_schedule():
     configured box can disable meal nudges or narrow active_hours, flaking
     these assertions). category_active_hours -> (None, None) = always active;
     category_interval_minutes -> the fallback the caller passes."""
-    from orchestrator import selfcare_schedule
-
     with (
         patch.object(selfcare_schedule, "category_enabled", return_value=True),
         patch.object(selfcare_schedule, "category_active_hours", return_value=(None, None)),
@@ -126,50 +115,27 @@ def pin_meal_schedule():
         yield
 
 
-@_skip_no_deps
 @pytest.mark.usefixtures("pin_meal_schedule")
-class TestMealCheck:
-    def test_no_meal_after_noon(self, sm):
-        now = datetime(2026, 3, 20, 13, 30)
-        result = sm._check_meals(now)
-        assert result is not None
-        assert "no meals" in result.lower()
-
-    def test_no_nudge_before_noon(self, sm):
-        now = datetime(2026, 3, 20, 10, 0)
-        result = sm._check_meals(now)
+@pytest.mark.parametrize(
+    ("last_meal", "now", "expected"),
+    [
+        pytest.param(None, datetime(2026, 3, 20, 13, 30), "no meals", id="none-after-noon"),
+        pytest.param(None, datetime(2026, 3, 20, 10, 0), None, id="none-before-noon"),
+        pytest.param(datetime(2026, 3, 20, 8, 0), datetime(2026, 3, 20, 13, 0), "lunch", id="5h-lunch"),
+        pytest.param(datetime(2026, 3, 20, 12, 0), datetime(2026, 3, 20, 18, 0), "dinner", id="6h-dinner"),
+        pytest.param(datetime(2026, 3, 20, 10, 0), datetime(2026, 3, 20, 15, 0), "snack", id="5h-snack"),
+        pytest.param(datetime(2026, 3, 20, 12, 0), datetime(2026, 3, 20, 13, 0), None, id="recent-meal"),
+    ],
+)
+def test_check_meals(sm, last_meal, now, expected):
+    """MEAL_NUDGE_HOURS = 4 (fixture): no meal by noon nudges, then a nudge
+    named for the time of day once 4 h have passed since the last meal."""
+    sm._state.last_meal_reported = last_meal
+    result = sm._check_meals(now)
+    if expected is None:
         assert result is None
-
-    def test_nudge_after_hours_since_meal_lunch(self, sm, mock_shared):
-        mock_shared.MEAL_NUDGE_HOURS = 4
-        sm._state.last_meal_reported = datetime(2026, 3, 20, 8, 0)
-        now = datetime(2026, 3, 20, 13, 0)  # 5 hours later, 1pm
-        result = sm._check_meals(now)
-        assert result is not None
-        assert "lunch" in result.lower()
-
-    def test_nudge_after_hours_since_meal_dinner(self, sm, mock_shared):
-        mock_shared.MEAL_NUDGE_HOURS = 4
-        sm._state.last_meal_reported = datetime(2026, 3, 20, 12, 0)
-        now = datetime(2026, 3, 20, 18, 0)  # 6 hours later, 6pm
-        result = sm._check_meals(now)
-        assert result is not None
-        assert "dinner" in result.lower()
-
-    def test_nudge_afternoon_snack(self, sm, mock_shared):
-        mock_shared.MEAL_NUDGE_HOURS = 4
-        sm._state.last_meal_reported = datetime(2026, 3, 20, 10, 0)
-        now = datetime(2026, 3, 20, 15, 0)  # 5 hours later, 3pm
-        result = sm._check_meals(now)
-        assert result is not None
-        assert "snack" in result.lower()
-
-    def test_no_nudge_recent_meal(self, sm, mock_shared):
-        mock_shared.MEAL_NUDGE_HOURS = 4
-        sm._state.last_meal_reported = datetime(2026, 3, 20, 12, 0)
-        now = datetime(2026, 3, 20, 13, 0)  # 1 hour later
-        result = sm._check_meals(now)
-        assert result is None
+    else:
+        assert expected in result.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -177,9 +143,7 @@ class TestMealCheck:
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
 class TestDailyReset:
-    @pytest.mark.asyncio
     async def test_meal_reset_on_new_day(self, sm, mock_shared):
         """last_meal_reported should reset to None at day boundary."""
         mock_shared.PRESENCE_ENABLED = False
@@ -206,7 +170,6 @@ class TestDailyReset:
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
 class TestHydrationCheck:
     def test_first_call_no_nudge(self, sm):
         now = datetime(2026, 3, 20, 10, 0)
@@ -227,23 +190,11 @@ class TestHydrationCheck:
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
 class TestMovementCheck:
     def test_first_call_no_nudge(self, sm):
         now = datetime(2026, 3, 20, 10, 0)
         result = sm._check_movement(now)
         assert result is None  # initializes timer
-
-    def test_nudge_after_sitting(self, sm, mock_shared):
-        mock_shared.MOVEMENT_INTERVAL = 90
-        # Inside the default 09:00-18:00 movement hours: time before 09:00
-        # doesn't count (test_movement_health.TestSittingClockStartsWithTheDay).
-        sm._state.sitting_since = datetime(2026, 3, 20, 9, 30)
-        sm._state.last_movement_nudge = None
-        now = datetime(2026, 3, 20, 11, 30)  # 120 min sitting
-        result = sm._check_movement(now)
-        assert result is not None
-        assert "sitting" in result.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -251,21 +202,18 @@ class TestMovementCheck:
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
-class TestQuietHours:
-    def test_in_quiet_hours_night(self, sm):
-        assert sm._in_quiet_hours(time(23, 0), time(22, 0), time(7, 0)) is True
-
-    def test_in_quiet_hours_early_morning(self, sm):
-        assert sm._in_quiet_hours(time(5, 0), time(22, 0), time(7, 0)) is True
-
-    def test_not_in_quiet_hours(self, sm):
-        assert sm._in_quiet_hours(time(12, 0), time(22, 0), time(7, 0)) is False
-
-    def test_same_day_range(self, sm):
-        # Non-wrapping: 13:00-15:00
-        assert sm._in_quiet_hours(time(14, 0), time(13, 0), time(15, 0)) is True
-        assert sm._in_quiet_hours(time(12, 0), time(13, 0), time(15, 0)) is False
+@pytest.mark.parametrize(
+    ("now", "start", "end", "quiet"),
+    [
+        pytest.param(time(23, 0), time(22, 0), time(7, 0), True, id="night"),
+        pytest.param(time(5, 0), time(22, 0), time(7, 0), True, id="early-morning"),
+        pytest.param(time(12, 0), time(22, 0), time(7, 0), False, id="midday"),
+        pytest.param(time(14, 0), time(13, 0), time(15, 0), True, id="same-day-inside"),
+        pytest.param(time(12, 0), time(13, 0), time(15, 0), False, id="same-day-outside"),
+    ],
+)
+def test_in_quiet_hours(sm, now, start, end, quiet):
+    assert sm._in_quiet_hours(now, start, end) is quiet
 
 
 # ---------------------------------------------------------------------------
@@ -273,15 +221,12 @@ class TestQuietHours:
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
 class TestStatus:
-    @pytest.mark.asyncio
     async def test_status_empty(self, sm):
         status = await sm.get_selfcare_status()
         assert status["last_meal"] is None
         assert status["meds_confirmed_today"] == {}
 
-    @pytest.mark.asyncio
     async def test_status_with_data(self, sm):
         await sm.log_selfcare("meal", "sandwich")
         await sm.log_selfcare("medication", "Adderall")
@@ -289,13 +234,10 @@ class TestStatus:
         assert status["last_meal"] is not None
         assert "adderall" in status["meds_confirmed_today"]
 
-    @pytest.mark.asyncio
     async def test_status_clears_stale_yesterday_state_on_read(self, sm):
         """Regression: get_selfcare_status() must apply the daily reset on read
         so stale yesterday timestamps don't surface as e.g. 'sitting 32 hours'
         when the nudge loop has been paused (presence=away) past midnight."""
-        from datetime import datetime, timedelta
-
         yesterday = datetime.now() - timedelta(hours=26)
         sm._state.last_meal_reported = yesterday
         sm._state.sitting_since = yesterday
@@ -310,104 +252,14 @@ class TestStatus:
 
 
 # ---------------------------------------------------------------------------
-# Prometheus metric — SELFCARE_LOGGED increments exactly once per logical log
-# ---------------------------------------------------------------------------
-
-
-def _selfcare_value(action):
-    """Read the bgw_selfcare_logged_total sample for an action, 0 if unseen."""
-    from orchestrator.metrics import SELFCARE_LOGGED
-
-    try:
-        return SELFCARE_LOGGED.labels(action=action)._value.get()
-    except Exception:
-        return 0.0
-
-
-@_skip_no_deps
-class TestSelfcareMetric:
-    """One increment per logical self-care log, no double-counting.
-
-    The meal path is the trap: log_selfcare('meal') routes through
-    record_meal_logged(), which is the SOLE incrementer for meals — so a meal
-    log must bump the counter exactly once, not twice (the bug would be if
-    both log_selfcare and record_meal_logged incremented).
-    """
-
-    @pytest.mark.asyncio
-    async def test_log_meal_increments_once(self, sm):
-        before = _selfcare_value("meal")
-        await sm.log_selfcare("meal", "lunch")
-        after = _selfcare_value("meal")
-        assert after - before == 1, "meal must increment exactly once (no double-count via record_meal_logged)"
-
-    @pytest.mark.asyncio
-    async def test_log_medication_increments_once(self, sm):
-        before = _selfcare_value("medication")
-        await sm.log_selfcare("medication", "Adderall")
-        after = _selfcare_value("medication")
-        assert after - before == 1
-
-    @pytest.mark.asyncio
-    async def test_log_water_increments_once(self, sm):
-        before = _selfcare_value("water")
-        await sm.log_selfcare("water")
-        after = _selfcare_value("water")
-        assert after - before == 1
-
-    @pytest.mark.asyncio
-    async def test_log_movement_increments_once(self, sm):
-        before = _selfcare_value("movement")
-        await sm.log_selfcare("movement")
-        after = _selfcare_value("movement")
-        assert after - before == 1
-
-    @pytest.mark.asyncio
-    async def test_log_unknown_does_not_increment(self, sm):
-        # Unknown action returns early before any counter touch.
-        before_meal = _selfcare_value("meal")
-        before_med = _selfcare_value("medication")
-        await sm.log_selfcare("sleep")
-        assert _selfcare_value("meal") == before_meal
-        assert _selfcare_value("medication") == before_med
-
-    def test_record_meal_logged_helper_increments_once(self, sm):
-        before = _selfcare_value("meal")
-        sm.record_meal_logged("dinner")
-        after = _selfcare_value("meal")
-        assert after - before == 1
-
-    def test_record_medication_logged_helper_increments_once(self, sm):
-        before = _selfcare_value("medication")
-        sm.record_medication_logged("routine:meds")
-        after = _selfcare_value("medication")
-        assert after - before == 1
-
-    def test_record_hydration_logged_helper_increments_once(self, sm):
-        before = _selfcare_value("water")
-        sm.record_hydration_logged("glass")
-        after = _selfcare_value("water")
-        assert after - before == 1
-
-    def test_record_movement_logged_helper_increments_once(self, sm):
-        before = _selfcare_value("movement")
-        sm.record_movement_logged("set:squat")
-        after = _selfcare_value("movement")
-        assert after - before == 1
-
-
-# ---------------------------------------------------------------------------
 # Meds nudge windows — driven by category_times("meds"), not a hardcoded 8pm
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
 class TestCheckMedsWindow:
     _MEDS = {"daily": {"morning": [{"name": "Vyvanse"}], "evening": [{"name": "Guanfacine"}]}}
 
     def _ctx(self, times):
-        from orchestrator import data_manager, selfcare_schedule
-
         return (
             patch.object(selfcare_schedule, "category_enabled", return_value=True),
             patch.object(selfcare_schedule, "category_times", return_value=times),
@@ -442,8 +294,6 @@ class TestCheckMedsWindow:
             assert sm._check_meds(now, now) is None
 
     def test_disabled_meds_category_no_nudge(self, sm):
-        from orchestrator import selfcare_schedule
-
         now = datetime(2026, 3, 20, 21, 15)
         with patch.object(selfcare_schedule, "category_enabled", return_value=False):
             assert sm._check_meds(now, now) is None
@@ -459,11 +309,8 @@ _SATURDAY_AM = datetime(2026, 3, 21, 7, 30)
 _SUNDAY_AM = datetime(2026, 3, 22, 7, 30)
 
 
-@_skip_no_deps
 class TestCheckMedsWeekdays:
     def _ctx(self, meds):
-        from orchestrator import data_manager, selfcare_schedule
-
         return (
             patch.object(selfcare_schedule, "category_enabled", return_value=True),
             patch.object(selfcare_schedule, "category_times", return_value=["07:00", "21:00"]),
@@ -549,7 +396,6 @@ class TestCheckMedsWeekdays:
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
 class TestIsBroadMedConfirmation:
     """`_is_broad_med_confirmation` decides whether restoring a selfcare_log med
     row should re-arm the generic 'medication' gate. Broad = window-wide
@@ -579,7 +425,6 @@ class TestIsBroadMedConfirmation:
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
 class TestRestoreState:
     """Regression coverage for the meds-nudge-restore-gate fix.
 
@@ -601,8 +446,6 @@ class TestRestoreState:
         get_last_selfcare(...) calls (meal/water/movement) return None.
         `medications` is what get_medications() returns (or raises if
         meds_raises)."""
-        from orchestrator import data_manager, state_store
-
         gm = (
             MagicMock(side_effect=RuntimeError("meds config unavailable"))
             if meds_raises

@@ -1,9 +1,8 @@
 """
 Tests for orchestrator/presence_tracker.py::get_presence_prompt_context.
 
-Covers all 6 branches of the function and asserts that the recently
-parameterized user_name (was hardcoded "Nadim") is correctly pulled
-from shared.profile.user_name.
+Covers all 6 branches of the function; the user name in every one comes
+from shared.profile.user_name (it was hardcoded once).
 """
 
 from datetime import datetime, timedelta
@@ -41,69 +40,40 @@ def test_branch_1_presence_disabled_returns_empty(monkeypatch):
     assert presence_tracker.get_presence_prompt_context() == ""
 
 
-def test_branch_2_home_with_current_room(reset_state):
-    """is_home + current_room → '{name} is home, currently in the {room}.'"""
-    reset_state.is_home = True
-    reset_state.current_room = "office"
-    reset_state.last_motion_room = "office"
-    reset_state.last_motion_time = datetime.now()
-
-    result = presence_tracker.get_presence_prompt_context()
-    assert result == "TestUser is home, currently in the office."
-
-
-def test_branch_3_home_with_last_motion_only(reset_state):
-    """is_home + last_motion_room (no current_room) + last_seen_ago_minutes → 'last seen in {room} {N} minutes ago.'"""
-    reset_state.is_home = True
-    reset_state.current_room = None  # cleared (e.g. >10min stale)
-    reset_state.last_motion_room = "kitchen"
-    reset_state.last_motion_time = datetime.now() - timedelta(minutes=15)
-
-    result = presence_tracker.get_presence_prompt_context()
-    assert result == "TestUser is home, last seen in the kitchen 15 minutes ago."
-
-
-def test_branch_4_home_with_nothing_else(reset_state):
-    """is_home + no room data → '{name} is home.'"""
-    reset_state.is_home = True
-    reset_state.current_room = None
-    reset_state.last_motion_room = None
-    reset_state.last_motion_time = None
-
-    result = presence_tracker.get_presence_prompt_context()
-    assert result == "TestUser is home."
-
-
-def test_branch_5_away_with_minutes(reset_state):
-    """away + away_minutes → '{name} is away from home (N minutes).'"""
-    reset_state.is_home = False
-    reset_state.away_since = datetime.now() - timedelta(minutes=42)
-
-    result = presence_tracker.get_presence_prompt_context()
-    assert result == "TestUser is away from home (42 minutes)."
-
-
-def test_branch_6_away_with_nothing_else(reset_state):
-    """away + no away_since → '{name} is away from home.'"""
-    reset_state.is_home = False
-    reset_state.away_since = None
-
-    result = presence_tracker.get_presence_prompt_context()
-    assert result == "TestUser is away from home."
-
-
-def test_parameterization_uses_profile_user_name(reset_state, monkeypatch):
-    """Sanity check: changing profile.user_name flows through to the output."""
-
-    class _OtherProfile:
-        user_name = "Alice"
-
-    monkeypatch.setattr(shared, "profile", _OtherProfile(), raising=False)
-
-    reset_state.is_home = True
-    reset_state.current_room = "den"
-    reset_state.last_motion_time = datetime.now()
-
-    result = presence_tracker.get_presence_prompt_context()
-    assert result == "Alice is home, currently in the den."
-    assert "Nadim" not in result
+@pytest.mark.parametrize(
+    "state, expected",
+    [
+        pytest.param(
+            {"is_home": True, "current_room": "office", "last_motion_room": "office", "motion_min_ago": 0},
+            "TestUser is home, currently in the office.",
+            id="home-current-room",
+        ),
+        # current_room cleared (e.g. >10 min stale): last motion + minutes ago
+        pytest.param(
+            {"is_home": True, "current_room": None, "last_motion_room": "kitchen", "motion_min_ago": 15},
+            "TestUser is home, last seen in the kitchen 15 minutes ago.",
+            id="home-last-motion",
+        ),
+        pytest.param(
+            {"is_home": True, "current_room": None, "last_motion_room": None, "motion_min_ago": None},
+            "TestUser is home.",
+            id="home-no-room",
+        ),
+        pytest.param({"is_home": False, "away_min": 42}, "TestUser is away from home (42 minutes).", id="away-minutes"),
+        pytest.param({"is_home": False, "away_min": None}, "TestUser is away from home.", id="away"),
+    ],
+)
+def test_prompt_context_branches(reset_state, state, expected):
+    """The name comes from shared.profile.user_name (was hardcoded)."""
+    now = datetime.now()
+    reset_state.is_home = state["is_home"]
+    for attr in ("current_room", "last_motion_room"):
+        if attr in state:
+            setattr(reset_state, attr, state[attr])
+    if "motion_min_ago" in state:
+        minutes = state["motion_min_ago"]
+        reset_state.last_motion_time = None if minutes is None else now - timedelta(minutes=minutes)
+    if "away_min" in state:
+        minutes = state["away_min"]
+        reset_state.away_since = None if minutes is None else now - timedelta(minutes=minutes)
+    assert presence_tracker.get_presence_prompt_context() == expected

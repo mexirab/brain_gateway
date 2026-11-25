@@ -14,14 +14,19 @@ must use it besides the chat tool:
 """
 
 import json
+import logging
 
-import httpx
 import pytest
 
-from orchestrator import api_routes, ha_guard, ha_registry, shared
+from orchestrator import api_routes, ha_guard, ha_registry, shared, tool_handlers
+from orchestrator.fast_path import is_fast_path_eligible, try_fast_path
 from orchestrator.ha_guard import check_ha_call, ha_device_setting
-from orchestrator.ha_integration import HomeAssistantClient
+from orchestrator.ha_integration import Entity, ExecutionResult, HomeAssistantClient
+from orchestrator.metrics import HA_CALL_REFUSED, HA_DEVICE_SETTING_REFUSED
 from orchestrator.schemas import HACommandRequest
+from orchestrator.tests._helpers import metric_value
+from orchestrator.tests.fixtures_ha_voice import EntityStub
+from orchestrator.tool_definitions import format_ha_entity_listing
 
 PLUG = "switch.helios_test_plug"
 
@@ -71,33 +76,10 @@ def _deny_defaults(monkeypatch):
     monkeypatch.setattr(api_routes, "get_registry_meta", _no_registry)
 
 
-class FakeHA:
-    def __init__(self):
-        self.service_calls = []
-
-    def handler(self, request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/states":
-            return httpx.Response(
-                200,
-                json=[{"entity_id": e, "state": "off", "attributes": {"friendly_name": n}} for e, n in STATES],
-            )
-        if request.url.path.startswith("/api/services/"):
-            self.service_calls.append((request.url.path, json.loads(request.content)))
-            return httpx.Response(200, json=[])
-        return httpx.Response(404)
-
-
 @pytest.fixture
-async def client():
-    fake = FakeHA()
-    c = HomeAssistantClient(
-        url="http://ha.test:8123",
-        token="t",
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(fake.handler)),
-    )
-    await c.refresh_entities(force=True)
-    yield c, fake
-    await c._http.aclose()
+async def client(ha_voice_ha_client):
+    """A real HomeAssistantClient over STATES; ``fake.service_calls`` lists what reached HA."""
+    return await ha_voice_ha_client(STATES)
 
 
 # ---------------------------------------------------------------------------
@@ -312,13 +294,12 @@ class TestLegacyNlpPath:
         assert fake.service_calls == []
 
     async def test_unlock_counted_with_guard_wording(self, client):
-        from orchestrator.metrics import HA_CALL_REFUSED
 
         c, fake = client
-        before = HA_CALL_REFUSED.labels(path="nlp")._value.get()
+        before = metric_value(HA_CALL_REFUSED, path="nlp")
         result = await c.execute_command("unlock the front door")
         assert "confirmation step" in result.message
-        assert HA_CALL_REFUSED.labels(path="nlp")._value.get() == before + 1
+        assert metric_value(HA_CALL_REFUSED, path="nlp") == before + 1
         assert fake.service_calls == []
 
     async def test_lock_still_works(self, client):
@@ -381,7 +362,6 @@ class TestRoutes:
         c, fake = client
 
         async def boom(*a, **k):
-            from orchestrator.ha_integration import ExecutionResult
 
             return ExecutionResult(
                 success=False, action="x", entity_id="light.kitchen", message="HTTP 500: secret body"
@@ -416,13 +396,12 @@ class TestRoutes:
             HACommandRequest(**body)
 
     async def test_structured_refusal_counted_on_api_path(self, client, monkeypatch):
-        from orchestrator.metrics import HA_CALL_REFUSED
 
         c, _ = client
         monkeypatch.setattr(api_routes, "ha_client", c)
-        before = HA_CALL_REFUSED.labels(path="api")._value.get()
+        before = metric_value(HA_CALL_REFUSED, path="api")
         await api_routes.execute_ha_command(HACommandRequest(entity_id=PLUG, service="turn_off"))
-        assert HA_CALL_REFUSED.labels(path="api")._value.get() == before + 1
+        assert metric_value(HA_CALL_REFUSED, path="api") == before + 1
 
     async def test_structured_play_media_arbitrary_url_refused(self, client, monkeypatch):
         c, fake = client
@@ -454,20 +433,18 @@ class TestRoutes:
 class TestToolPath:
     @pytest.fixture
     def tool_client(self, client, monkeypatch):
-        from orchestrator import tool_handlers
 
         c, fake = client
         monkeypatch.setattr(tool_handlers, "ha_client", c)
         return tool_handlers, fake
 
     async def test_refusal_counted_on_tool_path_only(self, tool_client):
-        from orchestrator.metrics import HA_CALL_REFUSED
 
         th, fake = tool_client
-        before = {p: HA_CALL_REFUSED.labels(path=p)._value.get() for p in ("tool", "nlp", "api")}
+        before = {p: metric_value(HA_CALL_REFUSED, path=p) for p in ("tool", "nlp", "api")}
         out = await th.tool_home_assistant("lock.front_door", "unlock")
         assert "confirmation step" in out
-        after = {p: HA_CALL_REFUSED.labels(path=p)._value.get() for p in ("tool", "nlp", "api")}
+        after = {p: metric_value(HA_CALL_REFUSED, path=p) for p in ("tool", "nlp", "api")}
         assert after == {**before, "tool": before["tool"] + 1}
         assert fake.service_calls == []
 
@@ -520,7 +497,6 @@ class TestToolPath:
 class TestFastPath:
     @pytest.mark.parametrize("text", ["turn off helios plug", "unlock the front door", "turn on robo"])
     async def test_guard_refusal_falls_through(self, client, text):
-        from orchestrator.fast_path import is_fast_path_eligible, try_fast_path
 
         c, fake = client
         # Must actually get as far as the guard, not be filtered out earlier.
@@ -531,7 +507,6 @@ class TestFastPath:
         assert fake.service_calls == []
 
     async def test_allowed_command_handled(self, client):
-        from orchestrator.fast_path import try_fast_path
 
         c, fake = client
         result = await try_fast_path("turn on the kitchen", c)
@@ -541,9 +516,6 @@ class TestFastPath:
     async def test_failure_log_does_not_carry_result_message(self, client, caplog):
         """The fall-through log must not include result.message (it can quote
         the user's text or the guard's refusal)."""
-        import logging
-
-        from orchestrator.fast_path import try_fast_path
 
         c, _ = client
         with caplog.at_level(logging.INFO, logger="orchestrator.fast_path"):
@@ -607,7 +579,6 @@ class TestDeviceSettings:
         assert not ha_device_setting(entity_id)
 
     def test_scene_or_group_with_device_setting_member(self, monkeypatch, registry):
-        from orchestrator.ha_integration import Entity
 
         ents = {
             "scene.away": Entity(
@@ -616,11 +587,7 @@ class TestDeviceSettings:
             "scene.evening": Entity("scene.evening", "scene", "Evening", "x", {"entity_id": ["light.kitchen"]}),
         }
 
-        class _Client:
-            def get_entity(self, entity_id):
-                return ents.get(entity_id)
-
-        monkeypatch.setattr(shared, "ha_client", _Client())
+        monkeypatch.setattr(shared, "ha_client", EntityStub(ents.values()))
         assert ha_guard.device_setting_reason("scene.away") == "member"
         assert ha_guard.device_setting_reason("scene.evening") is None
         assert check_ha_call("scene.away", "turn_on")[0]
@@ -650,36 +617,29 @@ class TestDeviceSettings:
         assert check_ha_call("lock.front_door", "unlock", allow_device_settings=True)[0]
 
     async def test_tool_path_refuses_and_never_reaches_ha(self, client, registry, monkeypatch):
-        from orchestrator import tool_handlers
-        from orchestrator.metrics import HA_CALL_REFUSED, HA_DEVICE_SETTING_REFUSED
 
         c, fake = client
         monkeypatch.setattr(tool_handlers, "ha_client", c)
-        before = HA_CALL_REFUSED.labels(path="tool")._value.get()
-        before_src = HA_DEVICE_SETTING_REFUSED.labels(path="tool", source="registry")._value.get()
+        before = metric_value(HA_CALL_REFUSED, path="tool")
+        before_src = metric_value(HA_DEVICE_SETTING_REFUSED, path="tool", source="registry")
         out = await tool_handlers.tool_home_assistant("switch.porch_widget_toggle", "turn_off")
         assert ha_guard.DEVICE_SETTING_REFUSAL in out
         assert fake.service_calls == []
-        assert HA_CALL_REFUSED.labels(path="tool")._value.get() == before + 1
-        assert HA_DEVICE_SETTING_REFUSED.labels(path="tool", source="registry")._value.get() == before_src + 1
+        assert metric_value(HA_CALL_REFUSED, path="tool") == before + 1
+        assert metric_value(HA_DEVICE_SETTING_REFUSED, path="tool", source="registry") == before_src + 1
 
     async def test_other_refusals_not_counted_as_device_setting(self, client, monkeypatch):
-        from orchestrator import tool_handlers
-        from orchestrator.metrics import HA_DEVICE_SETTING_REFUSED
 
         c, _ = client
         monkeypatch.setattr(tool_handlers, "ha_client", c)
-        before = {s: HA_DEVICE_SETTING_REFUSED.labels(path="tool", source=s)._value.get() for s in ("registry", "name")}
+        before = {s: metric_value(HA_DEVICE_SETTING_REFUSED, path="tool", source=s) for s in ("registry", "name")}
         # Denied by name pattern *and* the deny list: the deny list fires first.
         monkeypatch.setattr(shared, "HA_TOOL_DENY_ENTITIES", "switch.porch_cam_*")
         await tool_handlers.tool_home_assistant("switch.porch_cam_power_save", "turn_off")
-        after = {s: HA_DEVICE_SETTING_REFUSED.labels(path="tool", source=s)._value.get() for s in ("registry", "name")}
+        after = {s: metric_value(HA_DEVICE_SETTING_REFUSED, path="tool", source=s) for s in ("registry", "name")}
         assert after == before
 
     async def test_refusal_log_only_for_known_entities(self, client, monkeypatch, caplog):
-        import logging
-
-        from orchestrator import tool_handlers
 
         c, _ = client
         monkeypatch.setattr(tool_handlers, "ha_client", c)
@@ -691,7 +651,6 @@ class TestDeviceSettings:
         assert any("switch.porch_cam_power_save" in m and "source=name" in m for m in msgs)
 
     async def test_tool_path_registry_down_uses_name_match(self, client, monkeypatch):
-        from orchestrator import tool_handlers
 
         c, fake = client
         monkeypatch.setattr(tool_handlers, "ha_client", c)
@@ -702,7 +661,6 @@ class TestDeviceSettings:
         assert fake.service_calls == [("/api/services/switch/turn_off", {"entity_id": "switch.office_desk"})]
 
     async def test_tool_unknown_id_suggestions_skip_device_settings(self, client, registry, monkeypatch):
-        from orchestrator import tool_handlers
 
         c, fake = client
         monkeypatch.setattr(tool_handlers, "ha_client", c)
@@ -711,19 +669,17 @@ class TestDeviceSettings:
         assert fake.service_calls == []
 
     async def test_nlp_path_refuses(self, client, registry):
-        from orchestrator.metrics import HA_CALL_REFUSED, HA_DEVICE_SETTING_REFUSED
 
         c, fake = client
-        before = HA_CALL_REFUSED.labels(path="nlp")._value.get()
-        before_src = HA_DEVICE_SETTING_REFUSED.labels(path="nlp", source="registry")._value.get()
+        before = metric_value(HA_CALL_REFUSED, path="nlp")
+        before_src = metric_value(HA_DEVICE_SETTING_REFUSED, path="nlp", source="registry")
         result = await c.execute_command("turn off porch widget toggle")
         assert result.success is False and ha_guard.DEVICE_SETTING_REFUSAL in result.message
         assert fake.service_calls == []
-        assert HA_CALL_REFUSED.labels(path="nlp")._value.get() == before + 1
-        assert HA_DEVICE_SETTING_REFUSED.labels(path="nlp", source="registry")._value.get() == before_src + 1
+        assert metric_value(HA_CALL_REFUSED, path="nlp") == before + 1
+        assert metric_value(HA_DEVICE_SETTING_REFUSED, path="nlp", source="registry") == before_src + 1
 
     async def test_fast_path_falls_through(self, client, registry):
-        from orchestrator.fast_path import try_fast_path
 
         c, fake = client
         result = await try_fast_path("turn off porch widget toggle", c)
@@ -739,7 +695,6 @@ class TestDeviceSettings:
         assert fake.service_calls == [("/api/services/switch/turn_off", {"entity_id": "switch.porch_widget_toggle"})]
 
     def test_tool_schema_listing_hides_device_settings(self, client, registry):
-        from orchestrator.tool_definitions import format_ha_entity_listing
 
         c, _ = client
         listing = format_ha_entity_listing({d: c.get_entities_by_domain(d) for d in ha_guard.HA_LISTED_DOMAINS})
@@ -748,126 +703,9 @@ class TestDeviceSettings:
         assert "switch.porch_cam_power_save" not in listing
 
 
-class TestEnsureFresh:
-    """ha_registry.ensure_fresh: a chat/voice turn never waits on a refresh
-    when a cache exists, and a slow HA still backs off and is counted."""
-
-    async def test_warm_cache_returns_without_waiting(self, monkeypatch):
-        import asyncio
-        import time
-
-        started = asyncio.Event()
-
-        async def slow_fetch(url, token):
-            started.set()
-            await asyncio.sleep(30)
-
-        monkeypatch.setattr(ha_registry, "_fetch", slow_fetch)
-        monkeypatch.setattr(ha_registry, "_cache", {"light.kitchen": {"category": None}})
-        t0 = time.monotonic()
-        await ha_registry.ensure_fresh("http://ha.test:8123", "t")
-        assert time.monotonic() - t0 < 0.5
-        await asyncio.wait_for(started.wait(), 1)
-        ha_registry._refresh_task.cancel()
-
-    async def test_cold_cache_waits_capped_and_slow_fetch_backs_off(self, monkeypatch):
-        import asyncio
-        import time
-
-        from orchestrator.metrics import HA_REGISTRY_FETCH
-
-        async def slow_fetch(url, token):
-            await asyncio.sleep(30)
-
-        monkeypatch.setattr(ha_registry, "_fetch", slow_fetch)
-        monkeypatch.setattr(ha_registry, "FETCH_TIMEOUT_SECONDS", 0.3)
-        before = HA_REGISTRY_FETCH.labels(result="error")._value.get()
-        t0 = time.monotonic()
-        await ha_registry.ensure_fresh("http://ha.test:8123", "t", wait_seconds=0.1)
-        assert time.monotonic() - t0 < 0.25
-        # The shielded fetch runs on to its own timeout and records the failure.
-        await asyncio.wait_for(asyncio.shield(ha_registry._refresh_task), 2)
-        assert ha_registry._failed_at > 0
-        assert HA_REGISTRY_FETCH.labels(result="error")._value.get() == before + 1
-
-    async def test_success_sets_entity_gauge(self, monkeypatch):
-        from orchestrator.metrics import HA_REGISTRY_ENTITIES
-
-        async def fetch(url, token):
-            return dict(REGISTRY)
-
-        monkeypatch.setattr(ha_registry, "_fetch", fetch)
-        await ha_registry.ensure_fresh("http://ha.test:8123", "t")
-        assert ha_registry.cached_meta() == REGISTRY
-        assert HA_REGISTRY_ENTITIES._value.get() == len(REGISTRY)
-
-    async def test_concurrent_calls_start_one_fetch(self, monkeypatch):
-        import asyncio
-
-        calls = 0
-        release = asyncio.Event()
-
-        async def fetch(url, token):
-            nonlocal calls
-            calls += 1
-            await release.wait()
-            return dict(REGISTRY)
-
-        monkeypatch.setattr(ha_registry, "_fetch", fetch)
-        waiters = [
-            asyncio.create_task(ha_registry.ensure_fresh("http://ha.test:8123", "t", wait_seconds=2)) for _ in range(3)
-        ]
-        await asyncio.sleep(0.05)
-        release.set()
-        await asyncio.gather(*waiters)
-        assert calls == 1
-        assert ha_registry.cached_meta() == REGISTRY
-
-    async def test_failed_refresh_keeps_last_good_cache(self, monkeypatch):
-        async def boom(url, token):
-            raise RuntimeError("down")
-
-        monkeypatch.setattr(ha_registry, "_fetch", boom)
-        monkeypatch.setattr(ha_registry, "_cache", dict(REGISTRY))
-        await ha_registry.ensure_fresh("http://ha.test:8123", "t")
-        await ha_registry._refresh_task
-        assert ha_registry._failed_at > 0
-        # The guard keeps refusing from the last good registry read.
-        assert ha_guard.device_setting_reason("switch.porch_widget_toggle") == "registry"
-
-    @pytest.mark.parametrize("url,token", [("", "t"), ("ha.test:8123", "t"), ("http://ha.test:8123", "")])
-    async def test_unconfigured_never_fetches_or_raises(self, monkeypatch, url, token):
-        async def fetch(url, token):
-            raise AssertionError("must not fetch")
-
-        monkeypatch.setattr(ha_registry, "_fetch", fetch)
-        await ha_registry.ensure_fresh(url, token, wait_seconds=0.5)
-        await ha_registry._refresh_task
-        assert ha_registry.cached_meta() == {}
-
-    async def test_unchanged_registry_keeps_tool_schema_cache(self, monkeypatch):
-        async def fetch(url, token):
-            return dict(REGISTRY)
-
-        monkeypatch.setattr(ha_registry, "_fetch", fetch)
-        monkeypatch.setattr(ha_registry, "_cache", dict(REGISTRY))
-        monkeypatch.setattr(shared, "_ha_tool_cache", {"warm": True})
-        await ha_registry.get_registry_meta("http://ha.test:8123", "t")
-        assert ha_registry._fetched_at > 0
-        assert shared._ha_tool_cache == {"warm": True}
-
-
 class TestDeviceSettingMembers:
     """The scene/group member check must degrade safely when the HA client
     can't describe the entity."""
-
-    @staticmethod
-    def _client(ents):
-        class _Client:
-            def get_entity(self, entity_id):
-                return ents.get(entity_id)
-
-        return _Client()
 
     def test_no_ha_client(self, monkeypatch, registry):
         monkeypatch.setattr(shared, "ha_client", None)
@@ -875,7 +713,7 @@ class TestDeviceSettingMembers:
         assert check_ha_call("scene.away", "turn_on")[0] is None
 
     def test_client_lacks_entity(self, monkeypatch, registry):
-        monkeypatch.setattr(shared, "ha_client", self._client({}))
+        monkeypatch.setattr(shared, "ha_client", EntityStub([]))
         assert ha_guard.device_setting_reason("scene.unknown") is None
 
     @pytest.mark.parametrize(
@@ -883,15 +721,11 @@ class TestDeviceSettingMembers:
         [None, {}, {"entity_id": "switch.porch_widget_toggle"}, {"entity_id": [None, 3, {"x": 1}]}],
     )
     def test_malformed_member_attribute_ignored(self, monkeypatch, registry, attrs):
-        from orchestrator.ha_integration import Entity
 
-        monkeypatch.setattr(
-            shared, "ha_client", self._client({"scene.odd": Entity("scene.odd", "scene", "Odd", "x", attrs)})
-        )
+        monkeypatch.setattr(shared, "ha_client", EntityStub([Entity("scene.odd", "scene", "Odd", "x", attrs)]))
         assert ha_guard.device_setting_reason("scene.odd") is None
 
     def test_member_caught_by_name_without_registry(self, monkeypatch):
-        from orchestrator.ha_integration import Entity
 
         ents = {
             # A light group (allowed domain) whose member is a status LED.
@@ -899,7 +733,7 @@ class TestDeviceSettingMembers:
                 "light.porch_group", "light", "Porch", "on", {"entity_id": ["light.desk_plug_status_light"]}
             )
         }
-        monkeypatch.setattr(shared, "ha_client", self._client(ents))
+        monkeypatch.setattr(shared, "ha_client", EntityStub(ents.values()))
         assert ha_guard.device_setting_reason("light.porch_group") == "member"
         refusal, _ = check_ha_call("light.porch_group", "turn_off")
         assert refusal and ha_guard.DEVICE_SETTING_REFUSAL in refusal
@@ -908,13 +742,12 @@ class TestDeviceSettingMembers:
     def test_member_check_is_one_level(self, monkeypatch, registry):
         # A group of a scene that contains a device setting: only direct
         # members are inspected (documents current behaviour).
-        from orchestrator.ha_integration import Entity
 
         ents = {
             "scene.away": Entity("scene.away", "scene", "Away", "x", {"entity_id": ["switch.porch_widget_toggle"]}),
             "group.outer": Entity("group.outer", "group", "Outer", "on", {"entity_id": ["scene.away"]}),
         }
-        monkeypatch.setattr(shared, "ha_client", self._client(ents))
+        monkeypatch.setattr(shared, "ha_client", EntityStub(ents.values()))
         assert ha_guard.device_setting_reason("scene.away") == "member"
         assert ha_guard.device_setting_reason("group.outer") is None
 

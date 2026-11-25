@@ -8,6 +8,7 @@ round-trip against a real actual-server was run separately during development
 """
 
 import asyncio
+import copy
 import datetime as dt
 import sqlite3
 import types
@@ -18,6 +19,8 @@ from pydantic import ValidationError
 
 from orchestrator import actual_client, finance_manager
 from orchestrator.actual_client import ActualCategory, ActualSnapshot, ActualTransaction
+from orchestrator.metrics import BUDGET_SYNC_DEGRADED, BUDGET_SYNC_DEGRADED_STATE, BUDGET_SYNC_TOTAL
+from orchestrator.tests._helpers import metric_value
 
 
 @pytest.fixture
@@ -97,6 +100,27 @@ def _map(path, **cats):
 def _spent(path, ym):
     rows = _q(path, "SELECT discretionary_spent, discretionary_budget FROM budget_periods WHERE year_month = ?", (ym,))
     return (rows[0]["discretionary_spent"], rows[0]["discretionary_budget"]) if rows else (None, None)
+
+
+def _fetch_returns(monkeypatch, result):
+    """Patch actual_client.fetch_snapshot_async: return a fresh copy of ``result`` on
+    every call, or raise it if it is an exception."""
+
+    async def fetch(today=None):
+        if isinstance(result, BaseException):
+            raise result
+        return copy.deepcopy(result)
+
+    monkeypatch.setattr(actual_client, "fetch_snapshot_async", fetch)
+
+
+def _finance_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(finance_manager.router)
+    return TestClient(app)
 
 
 # --------------------------------------------------------------------------- apply_snapshot
@@ -233,41 +257,30 @@ def test_legacy_ynab_schema_is_migrated(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- orchestration / client
-
-
-@pytest.mark.asyncio
 async def test_sync_not_configured_is_a_noop(fdb, monkeypatch):
     monkeypatch.setattr(actual_client.settings, "actual_server_url", "")
     res = await finance_manager.sync_budget_transactions()
     assert res["synced"] == 0 and "not configured" in res["error"]
 
 
-@pytest.mark.asyncio
 async def test_fetch_failure_recorded_without_raising(fdb, monkeypatch):
     monkeypatch.setattr(actual_client.settings, "actual_server_url", "http://127.0.0.1:1")
     monkeypatch.setattr(actual_client.settings, "actual_password", "x")
     monkeypatch.setattr(actual_client.settings, "actual_budget_file", "B")
 
-    async def boom(today=None):
-        raise ConnectionError("refused")
-
-    monkeypatch.setattr(actual_client, "fetch_snapshot_async", boom)
+    _fetch_returns(monkeypatch, ConnectionError("refused"))
     res = await finance_manager.sync_budget_transactions()
     assert res["synced"] == 0 and "refused" in res["error"]
     st = finance_manager._status_sync()
     assert st["connected"] is False and "refused" in st["last_error"]
 
 
-@pytest.mark.asyncio
 async def test_successful_sync_populates_category_cache(fdb, monkeypatch):
     monkeypatch.setattr(actual_client.settings, "actual_server_url", "http://127.0.0.1:1")
     monkeypatch.setattr(actual_client.settings, "actual_password", "x")
     monkeypatch.setattr(actual_client.settings, "actual_budget_file", "B")
 
-    async def ok(today=None):
-        return _snap([_tx("a", "-4")])
-
-    monkeypatch.setattr(actual_client, "fetch_snapshot_async", ok)
+    _fetch_returns(monkeypatch, _snap([_tx("a", "-4")]))
     res = await finance_manager.sync_budget_transactions()
     assert res["inserted"] == 1
     cats = await finance_manager.get_budget_categories()
@@ -291,11 +304,12 @@ def test_sync_window_start(today, months, expected):
 def test_config_validator_disables_incomplete_actual_config(monkeypatch):
     from orchestrator.config import Settings
 
-    s = Settings(actual_server_url="http://10.0.0.248:5006", actual_password="", actual_budget_file="X")
+    s = Settings(_env_file=None, actual_server_url="http://10.0.0.248:5006", actual_password="", actual_budget_file="X")
     assert s.actual_server_url == ""
-    s = Settings(actual_server_url="ftp://x", actual_password="p", actual_budget_file="X")
+    s = Settings(_env_file=None, actual_server_url="ftp://x", actual_password="p", actual_budget_file="X")
     assert s.actual_server_url == ""
     s = Settings(
+        _env_file=None,
         actual_server_url="http://10.0.0.248:5006",
         actual_password="p",
         actual_budget_file="X",
@@ -474,7 +488,6 @@ def _configure(monkeypatch):
     monkeypatch.setattr(actual_client.settings, "actual_budget_file", "B")
 
 
-@pytest.mark.asyncio
 async def test_trigger_sync_returns_502_on_failure_and_respects_cooldown(fdb, monkeypatch):
     _configure(monkeypatch)
     calls = {"n": 0}
@@ -490,21 +503,16 @@ async def test_trigger_sync_returns_502_on_failure_and_respects_cooldown(fdb, mo
     assert r2.status_code == 502 and calls["n"] == 1
 
 
-@pytest.mark.asyncio
 async def test_trigger_sync_ok_envelope(fdb, monkeypatch):
     _configure(monkeypatch)
 
-    async def ok(today=None):
-        return _snap([_tx("a", "-4")])
-
-    monkeypatch.setattr(actual_client, "fetch_snapshot_async", ok)
+    _fetch_returns(monkeypatch, _snap([_tx("a", "-4")]))
     r = await finance_manager.trigger_sync()
     assert r["ok"] is True and r["inserted"] == 1
     r2 = await finance_manager.trigger_sync()
     assert r2["ok"] is True and r2["cooldown"] is True
 
 
-@pytest.mark.asyncio
 async def test_concurrent_sync_reports_busy_instead_of_queueing(fdb, monkeypatch):
     _configure(monkeypatch)
     gate = asyncio.Event()
@@ -522,7 +530,6 @@ async def test_concurrent_sync_reports_busy_instead_of_queueing(fdb, monkeypatch
     assert "error" not in await first
 
 
-@pytest.mark.asyncio
 async def test_categories_negative_cache(fdb, monkeypatch):
     _configure(monkeypatch)
     calls = {"n": 0}
@@ -538,19 +545,15 @@ async def test_categories_negative_cache(fdb, monkeypatch):
     assert r1.status_code == 502 and r2.status_code == 502 and calls["n"] == 1
 
 
-@pytest.mark.asyncio
 async def test_apply_failure_marks_status_disconnected(fdb, monkeypatch):
     _configure(monkeypatch)
     finance_manager.apply_snapshot(_snap([_tx("a", "-1")]))  # a prior success
     assert finance_manager._status_sync()["connected"] is True
 
-    async def ok(today=None):
-        return _snap([])
-
     def broken(snapshot):
         raise sqlite3.OperationalError("disk I/O error")
 
-    monkeypatch.setattr(actual_client, "fetch_snapshot_async", ok)
+    _fetch_returns(monkeypatch, _snap([]))
     monkeypatch.setattr(finance_manager, "apply_snapshot", broken)
     res = await finance_manager.sync_budget_transactions()
     assert "local database error" in res["error"]
@@ -558,7 +561,6 @@ async def test_apply_failure_marks_status_disconnected(fdb, monkeypatch):
     assert st["connected"] is False and "local database error" in st["last_error"]
 
 
-@pytest.mark.asyncio
 async def test_mapping_route_reflags_and_recomputes(fdb):
     finance_manager.apply_snapshot(_snap([_tx("a", "-10"), _tx("b", "-5", category="Rent")]))
     ym = dt.date.today().strftime("%Y-%m")
@@ -578,7 +580,6 @@ def test_mapping_request_rejects_string_booleans_and_bad_names():
         finance_manager.CategoryMappingRequest(mappings={"x" * 201: True})
 
 
-@pytest.mark.asyncio
 async def test_reset_route_clears_synced_rows(fdb):
     _map(fdb, Dining_Out=True)
     finance_manager.apply_snapshot(_snap([_tx("a", "-10")]))
@@ -626,7 +627,6 @@ def test_migration_adds_discretionary_override_idempotently(tmp_path, monkeypatc
     assert _q(path, "SELECT discretionary_override FROM transactions")[0][0] is None
 
 
-@pytest.mark.asyncio
 async def test_reclassify_missing_id_is_404_ok_false(fdb):
     import json as _json
 
@@ -652,30 +652,19 @@ async def test_reclassify_missing_id_is_404_ok_false(fdb):
     ],
 )
 def test_reclassify_route_rejects_bad_bodies_with_422(fdb, body):
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    app = FastAPI()
-    app.include_router(finance_manager.router)
-    r = TestClient(app).post("/api/finance/transactions/reclassify", json=body)
+    r = _finance_client().post("/api/finance/transactions/reclassify", json=body)
     assert r.status_code == 422
 
 
 def test_reclassify_route_happy_path_envelope(fdb):
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
     _map(fdb, Rent=False)
     finance_manager.apply_snapshot(_snap([_tx("b", "-50", category="Rent", group="Bills")]))
-    app = FastAPI()
-    app.include_router(finance_manager.router)
     tid = _row(fdb, "actual:b")["id"]
-    r = TestClient(app).post("/api/finance/transactions/reclassify", json={"id": tid, "is_discretionary": True})
+    r = _finance_client().post("/api/finance/transactions/reclassify", json={"id": tid, "is_discretionary": True})
     assert r.status_code == 200
     assert r.json()["ok"] is True and r.json()["is_discretionary"] is True
 
 
-@pytest.mark.asyncio
 async def test_reclassify_synced_row_sets_override_and_undo_clears_it(fdb):
     _map(fdb, Rent=False)
     finance_manager.apply_snapshot(_snap([_tx("b", "-50", category="Rent", group="Bills")]))
@@ -695,7 +684,6 @@ async def test_reclassify_synced_row_sets_override_and_undo_clears_it(fdb):
     assert _spent(fdb, ym)[0] == pytest.approx(0)
 
 
-@pytest.mark.asyncio
 async def test_reclassify_unmapped_category_treated_as_non_discretionary(fdb):
     # No mapping row at all -> mapping value is 0, so True is an override and False clears it.
     finance_manager.apply_snapshot(_snap([_tx("u", "-8", category="Mystery")]))
@@ -705,7 +693,6 @@ async def test_reclassify_unmapped_category_treated_as_non_discretionary(fdb):
     assert _row(fdb, "actual:u")["discretionary_override"] is None
 
 
-@pytest.mark.asyncio
 async def test_reclassify_manual_row_never_gets_override(fdb):
     _map(fdb, Dining_Out=True)
     ym = dt.date.today().strftime("%Y-%m")
@@ -727,7 +714,6 @@ async def test_reclassify_manual_row_never_gets_override(fdb):
         assert row["discretionary_override"] is None
 
 
-@pytest.mark.asyncio
 async def test_reclassify_current_month_keeps_remaining_with_synced_fun_money(fdb):
     _map(fdb, Rent=False, Dining_Out=True)
     finance_manager.apply_snapshot(
@@ -756,7 +742,6 @@ async def test_reclassify_current_month_keeps_remaining_with_synced_fun_money(fd
     assert budget3 - spent3 == pytest.approx(120.01)
 
 
-@pytest.mark.asyncio
 async def test_reclassify_without_synced_fun_money_leaves_budget_untouched(fdb):
     _map(fdb, Rent=False)
     finance_manager.apply_snapshot(_snap([_tx("b", "-50", category="Rent", group="Bills")], fun_balance=None))
@@ -768,7 +753,6 @@ async def test_reclassify_without_synced_fun_money_leaves_budget_untouched(fdb):
     assert budget1 == pytest.approx(budget0)
 
 
-@pytest.mark.asyncio
 async def test_reclassify_past_month_leaves_budget_untouched_even_with_fun_money(fdb):
     _map(fdb, Rent=False)
     prev = _month(-1).replace(day=5)
@@ -781,7 +765,6 @@ async def test_reclassify_past_month_leaves_budget_untouched_even_with_fun_money
     assert budget1 == pytest.approx(budget0)
 
 
-@pytest.mark.asyncio
 async def test_resync_update_path_keeps_override_and_others_follow_mapping(fdb):
     _map(fdb, Dining_Out=True, Rent=False)
     finance_manager.apply_snapshot(_snap([_tx("a", "-10"), _tx("b", "-50", category="Rent", group="Bills")]))
@@ -821,7 +804,6 @@ def test_resync_on_conflict_path_keeps_override(fdb):
     assert _spent(fdb, dt.date.today().strftime("%Y-%m"))[0] == pytest.approx(30)
 
 
-@pytest.mark.asyncio
 async def test_mapping_change_respects_override(fdb):
     _map(fdb, Dining_Out=False)
     finance_manager.apply_snapshot(_snap([_tx("a", "-10"), _tx("b", "-5")]))
@@ -870,7 +852,6 @@ def test_synced_fun_money_balance(fdb, last_result, expected):
         assert isinstance(got, float) and got == pytest.approx(expected)
 
 
-@pytest.mark.asyncio
 async def test_reclassify_repeated_flips_are_idempotent(fdb):
     _map(fdb, Rent=False)
     finance_manager.apply_snapshot(
@@ -884,7 +865,6 @@ async def test_reclassify_repeated_flips_are_idempotent(fdb):
         assert budget - spent == pytest.approx(120.01)
 
 
-@pytest.mark.asyncio
 async def test_reclassify_rederives_budget_absolutely_from_synced_balance(fdb):
     """A drifted budget (e.g. from a past race) is corrected, not compounded."""
     _map(fdb, Rent=False)
@@ -900,12 +880,7 @@ async def test_reclassify_rederives_budget_absolutely_from_synced_balance(fdb):
 
 
 def test_reclassify_route_max_sqlite_id_is_404_not_500(fdb):
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    app = FastAPI()
-    app.include_router(finance_manager.router)
-    r = TestClient(app).post("/api/finance/transactions/reclassify", json={"id": 2**63 - 1, "is_discretionary": True})
+    r = _finance_client().post("/api/finance/transactions/reclassify", json={"id": 2**63 - 1, "is_discretionary": True})
     assert r.status_code == 404 and r.json()["ok"] is False
 
 
@@ -988,7 +963,7 @@ def test_refresh_actual_dataset_writes_all_rows_and_is_idempotent(fdb):
     snap = _hist_snap(txns)
     out = budget_manager.refresh_actual_dataset(snap)
     assert out["row_count"] == 4
-    assert BUDGET_HISTORY_ROWS._value.get() == 4
+    assert metric_value(BUDGET_HISTORY_ROWS) == 4
     rows = _bt("actual")
     assert len(rows) == 4
     assert sum(1 for r in rows if r["payee"] == "Cafe" and r["amount"] == -6) == 2
@@ -1043,7 +1018,6 @@ def test_refresh_actual_dataset_refuses_csv_named_actual(fdb):
     assert len(_bt("actual")) == 1 and state_store.get_budget_import("actual")["source_file"] == "old.csv"
 
 
-@pytest.mark.asyncio
 async def test_query_requires_dataset_when_no_actual_history(fdb):
     from orchestrator import budget_manager
 
@@ -1051,7 +1025,6 @@ async def test_query_requires_dataset_when_no_actual_history(fdb):
     assert "dataset is required" in out["error"]
 
 
-@pytest.mark.asyncio
 async def test_query_defaults_to_actual_dataset(fdb):
     from orchestrator import budget_manager
 
@@ -1065,7 +1038,6 @@ async def test_query_defaults_to_actual_dataset(fdb):
     assert other["dataset"] == "ynab2020" and other["total_outflow"] == pytest.approx(-7)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("name", [" Actual ", "actual", "ACTUAL"])
 async def test_import_file_refuses_reserved_actual_name(fdb, tmp_path, name):
     from orchestrator import budget_manager
@@ -1109,10 +1081,9 @@ def test_fetch_snapshot_passes_history_start(monkeypatch, history_months, expect
 def _refresh_count(result):
     from orchestrator.metrics import BUDGET_HISTORY_REFRESH_TOTAL
 
-    return BUDGET_HISTORY_REFRESH_TOTAL.labels(result=result)._value.get()
+    return metric_value(BUDGET_HISTORY_REFRESH_TOTAL, result=result)
 
 
-@pytest.mark.asyncio
 async def test_sync_refreshes_history_when_advanced(fdb, monkeypatch):
     from orchestrator import state_store
     from orchestrator.config import settings
@@ -1121,10 +1092,7 @@ async def test_sync_refreshes_history_when_advanced(fdb, monkeypatch):
     monkeypatch.setattr(settings, "jess_advanced", True)
     old = _old(10)
 
-    async def ok(today=None):
-        return _hist_snap([_tx("a", "-4"), _tx("b", "-8", date=old), _tx("c", "50")])
-
-    monkeypatch.setattr(actual_client, "fetch_snapshot_async", ok)
+    _fetch_returns(monkeypatch, _hist_snap([_tx("a", "-4"), _tx("b", "-8", date=old), _tx("c", "50")]))
     before = _refresh_count("ok")
     res = await finance_manager.sync_budget_transactions()
     assert "error" not in res
@@ -1136,7 +1104,6 @@ async def test_sync_refreshes_history_when_advanced(fdb, monkeypatch):
     assert cached.transactions == [] and cached.categories and cached.fun_money_balance is not None
 
 
-@pytest.mark.asyncio
 async def test_sync_survives_history_refresh_failure(fdb, monkeypatch):
     from orchestrator import budget_manager
     from orchestrator.config import settings
@@ -1144,13 +1111,10 @@ async def test_sync_survives_history_refresh_failure(fdb, monkeypatch):
     _configure(monkeypatch)
     monkeypatch.setattr(settings, "jess_advanced", True)
 
-    async def ok(today=None):
-        return _hist_snap([_tx("a", "-4")])
-
     def boom(snapshot):
         raise ValueError("dataset 'actual' is a CSV import")
 
-    monkeypatch.setattr(actual_client, "fetch_snapshot_async", ok)
+    _fetch_returns(monkeypatch, _hist_snap([_tx("a", "-4")]))
     monkeypatch.setattr(budget_manager, "refresh_actual_dataset", boom)
     before = _refresh_count("error")
     res = await finance_manager.sync_budget_transactions()
@@ -1159,7 +1123,6 @@ async def test_sync_survives_history_refresh_failure(fdb, monkeypatch):
     assert finance_manager._category_cache is not None
 
 
-@pytest.mark.asyncio
 async def test_sync_skips_history_when_not_advanced(fdb, monkeypatch):
     from orchestrator import budget_manager, state_store
     from orchestrator.config import settings
@@ -1169,10 +1132,7 @@ async def test_sync_skips_history_when_not_advanced(fdb, monkeypatch):
     called = []
     monkeypatch.setattr(budget_manager, "refresh_actual_dataset", lambda s: called.append(s))
 
-    async def ok(today=None):
-        return _hist_snap([_tx("a", "-4")])
-
-    monkeypatch.setattr(actual_client, "fetch_snapshot_async", ok)
+    _fetch_returns(monkeypatch, _hist_snap([_tx("a", "-4")]))
     before_ok, before_err = _refresh_count("ok"), _refresh_count("error")
     res = await finance_manager.sync_budget_transactions()
     assert "error" not in res and "history_rows" not in res and called == []
@@ -1180,7 +1140,6 @@ async def test_sync_skips_history_when_not_advanced(fdb, monkeypatch):
     assert (_refresh_count("ok"), _refresh_count("error")) == (before_ok, before_err)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("raw,expected", [(-1, 1), (999, 100), ("x", 20), (None, 20), (5, 5), ("7", 7)])
 async def test_query_budget_handler_clamps_limit(fdb, monkeypatch, raw, expected):
     from orchestrator import budget_manager, tool_handlers
@@ -1196,7 +1155,6 @@ async def test_query_budget_handler_clamps_limit(fdb, monkeypatch, raw, expected
     assert seen["limit"] == expected
 
 
-@pytest.mark.asyncio
 async def test_query_budget_handler_adds_as_of_and_note(fdb):
     import json
 
@@ -1210,7 +1168,6 @@ async def test_query_budget_handler_adds_as_of_and_note(fdb):
     assert out["groups"][0]["key"] == "Cafe"
 
 
-@pytest.mark.asyncio
 async def test_query_budget_handler_no_as_of_for_csv_and_no_note_on_error(fdb):
     import json
 
@@ -1224,12 +1181,6 @@ async def test_query_budget_handler_no_as_of_for_csv_and_no_note_on_error(fdb):
 
 
 # --------------------------------------------------------------------------- degraded syncs + mass-delete guard
-
-
-def _counter(name, **labels):
-    from prometheus_client import REGISTRY
-
-    return REGISTRY.get_sample_value(name, labels) or 0.0
 
 
 def _seed_rows(fdb, n):
@@ -1275,7 +1226,6 @@ def test_mass_delete_thresholds(fdb, seeded, kept, refused):
         assert finance_manager.apply_snapshot(snap)["deleted"] == seeded - kept
 
 
-@pytest.mark.asyncio
 async def test_reset_accepts_a_refused_mass_delete(fdb):
     _seed_rows(fdb, 30)
     short = _snap([_tx("r0", "-1")])
@@ -1301,7 +1251,6 @@ def test_rows_leaving_the_window_at_month_rollover_are_not_counted_as_deletes(fd
     assert finance_manager.apply_snapshot(_snap([]))["deleted"] == 0
 
 
-@pytest.mark.asyncio
 async def test_sync_refusal_is_counted_recorded_and_skips_history(fdb, monkeypatch):
     from orchestrator.config import settings
 
@@ -1310,23 +1259,20 @@ async def test_sync_refusal_is_counted_recorded_and_skips_history(fdb, monkeypat
     _seed_rows(fdb, 30)
     assert finance_manager._status_sync()["connected"] is True
 
-    async def short(today=None):
-        return _snap([])
-
     history_calls = []
     from orchestrator import budget_manager
 
     monkeypatch.setattr(budget_manager, "refresh_actual_dataset", lambda s: history_calls.append(s))
-    monkeypatch.setattr(actual_client, "fetch_snapshot_async", short)
-    refused0 = _counter("bgw_budget_sync_total", result="refused")
-    ok0 = _counter("bgw_budget_sync_total", result="ok")
-    deg0 = _counter("bgw_budget_sync_degraded_total", reason="mass_delete")
+    _fetch_returns(monkeypatch, _snap([]))
+    refused0 = metric_value(BUDGET_SYNC_TOTAL, result="refused")
+    ok0 = metric_value(BUDGET_SYNC_TOTAL, result="ok")
+    deg0 = metric_value(BUDGET_SYNC_DEGRADED, reason="mass_delete")
 
     res = await finance_manager.sync_budget_transactions()
     assert res["refused"] is True and res["synced"] == 0 and res["error"].startswith("refused:")
-    assert _counter("bgw_budget_sync_total", result="refused") == refused0 + 1
-    assert _counter("bgw_budget_sync_total", result="ok") == ok0
-    assert _counter("bgw_budget_sync_degraded_total", reason="mass_delete") == deg0 + 1
+    assert metric_value(BUDGET_SYNC_TOTAL, result="refused") == refused0 + 1
+    assert metric_value(BUDGET_SYNC_TOTAL, result="ok") == ok0
+    assert metric_value(BUDGET_SYNC_DEGRADED, reason="mass_delete") == deg0 + 1
     assert history_calls == []  # the suspect snapshot never reaches query_budget's dataset
     st = finance_manager._status_sync()
     assert st["connected"] is False and st["last_error"].startswith("refused:")
@@ -1336,46 +1282,38 @@ async def test_sync_refusal_is_counted_recorded_and_skips_history(fdb, monkeypat
     assert resp.status_code == 502
 
 
-@pytest.mark.asyncio
 async def test_degraded_sync_is_ok_but_counted_and_persisted(fdb, monkeypatch, caplog):
     _configure(monkeypatch)
     snap = _snap([_tx("a", "-4")], fun_balance=None)
     snap.month_stats_error = "TypeError"
     snap.degraded = ["month_stats_failed"]
 
-    async def ok(today=None):
-        return snap
-
-    monkeypatch.setattr(actual_client, "fetch_snapshot_async", ok)
-    ok0 = _counter("bgw_budget_sync_total", result="ok")
-    deg0 = _counter("bgw_budget_sync_degraded_total", reason="month_stats_failed")
-    fun0 = _counter("bgw_budget_sync_degraded_total", reason="fun_money_missing")
+    _fetch_returns(monkeypatch, snap)
+    ok0 = metric_value(BUDGET_SYNC_TOTAL, result="ok")
+    deg0 = metric_value(BUDGET_SYNC_DEGRADED, reason="month_stats_failed")
+    fun0 = metric_value(BUDGET_SYNC_DEGRADED, reason="fun_money_missing")
     with caplog.at_level("INFO", logger="orchestrator.finance_manager"):
         res = await finance_manager.sync_budget_transactions()
     assert res["inserted"] == 1 and res["degraded"] == ["month_stats_failed"]
-    assert _counter("bgw_budget_sync_total", result="ok") == ok0 + 1
-    assert _counter("bgw_budget_sync_degraded_total", reason="month_stats_failed") == deg0 + 1
-    assert _counter("bgw_budget_sync_degraded_total", reason="fun_money_missing") == fun0  # one root cause
+    assert metric_value(BUDGET_SYNC_TOTAL, result="ok") == ok0 + 1
+    assert metric_value(BUDGET_SYNC_DEGRADED, reason="month_stats_failed") == deg0 + 1
+    assert metric_value(BUDGET_SYNC_DEGRADED, reason="fun_money_missing") == fun0  # one root cause
     assert finance_manager._status_sync()["last_result"]["degraded"] == ["month_stats_failed"]
     line = next(r.getMessage() for r in caplog.records if "Synced budget" in r.getMessage())
     assert "could not be evaluated (TypeError)" in line and "not found" not in line
 
 
-@pytest.mark.asyncio
 async def test_clean_sync_reports_no_degradation(fdb, monkeypatch):
     _configure(monkeypatch)
 
-    async def ok(today=None):
-        return _snap([_tx("a", "-4")])
-
-    monkeypatch.setattr(actual_client, "fetch_snapshot_async", ok)
+    _fetch_returns(monkeypatch, _snap([_tx("a", "-4")]))
     before = {
-        r: _counter("bgw_budget_sync_degraded_total", reason=r)
+        r: metric_value(BUDGET_SYNC_DEGRADED, reason=r)
         for r in ("month_stats_failed", "fun_money_missing", "mass_delete")
     }
     res = await finance_manager.sync_budget_transactions()
     assert res["degraded"] == []
-    assert {r: _counter("bgw_budget_sync_degraded_total", reason=r) for r in before} == before
+    assert {r: metric_value(BUDGET_SYNC_DEGRADED, reason=r) for r in before} == before
 
 
 def _fm_snap(**kw):
@@ -1434,10 +1372,9 @@ def test_fetch_snapshot_fun_money_degradation(monkeypatch, configured, cats, exp
 
 
 def _state(reason):
-    return _counter("bgw_budget_sync_degraded_state", reason=reason)
+    return metric_value(BUDGET_SYNC_DEGRADED_STATE, reason=reason)
 
 
-@pytest.mark.asyncio
 async def test_degraded_state_gauge_follows_the_last_judged_sync(fdb, monkeypatch):
     _configure(monkeypatch)
     snaps = []
@@ -1452,10 +1389,7 @@ async def test_degraded_state_gauge_follows_the_last_judged_sync(fdb, monkeypatc
     await finance_manager.sync_budget_transactions()
     assert _state("fun_money_missing") == 1 and _state("month_stats_failed") == 0 and _state("mass_delete") == 0
 
-    async def down(today=None):
-        raise ConnectionError("refused")
-
-    monkeypatch.setattr(actual_client, "fetch_snapshot_async", down)
+    _fetch_returns(monkeypatch, ConnectionError("refused"))
     await finance_manager.sync_budget_transactions()
     assert _state("fun_money_missing") == 1  # a fetch error judges nothing
 
@@ -1465,21 +1399,17 @@ async def test_degraded_state_gauge_follows_the_last_judged_sync(fdb, monkeypatc
     assert _state("fun_money_missing") == 0  # cleared by the first clean sync
 
 
-@pytest.mark.asyncio
 async def test_refusal_sets_mass_delete_state_and_unknown_reasons_are_ignored(fdb, monkeypatch):
     from orchestrator.metrics import record_budget_sync_degraded
 
     _configure(monkeypatch)
     _seed_rows(fdb, 30)
 
-    async def short(today=None):
-        return _snap([])
-
-    monkeypatch.setattr(actual_client, "fetch_snapshot_async", short)
+    _fetch_returns(monkeypatch, _snap([]))
     await finance_manager.sync_budget_transactions()
     assert _state("mass_delete") == 1
     record_budget_sync_degraded(["not_a_reason"])  # bounded labels: dropped, others reset
-    assert _counter("bgw_budget_sync_degraded_state", reason="not_a_reason") == 0
+    assert metric_value(BUDGET_SYNC_DEGRADED_STATE, reason="not_a_reason") == 0
     assert _state("mass_delete") == 0
 
 
@@ -1491,7 +1421,6 @@ def _route_json(resp):
     return resp.status_code, _json.loads(resp.body)
 
 
-@pytest.mark.asyncio
 async def test_accept_deletions_needs_a_refusal_first(fdb, monkeypatch):
     _configure(monkeypatch)
     finance_manager.apply_snapshot(_snap([_tx("a", "-1")]))
@@ -1506,7 +1435,6 @@ async def test_accept_deletions_needs_a_refusal_first(fdb, monkeypatch):
     assert code == 409 and body["ok"] is False and called == []
 
 
-@pytest.mark.asyncio
 async def test_accept_deletions_applies_once_keeping_old_months_and_surviving_overrides(fdb, monkeypatch):
     _configure(monkeypatch)
     _map(fdb, Dining_Out=True)
@@ -1522,10 +1450,7 @@ async def test_accept_deletions_applies_once_keeping_old_months_and_surviving_ov
         conn.execute("UPDATE transactions SET discretionary_override = 0 WHERE external_id = 'actual:r1'")
     conn.close()
 
-    async def short(today=None):
-        return _snap([_tx("r0", "-1"), _tx("r1", "-1")])
-
-    monkeypatch.setattr(actual_client, "fetch_snapshot_async", short)
+    _fetch_returns(monkeypatch, _snap([_tx("r0", "-1"), _tx("r1", "-1")]))
     res = await finance_manager.sync_budget_transactions()
     assert res["refused"] is True
 
@@ -1546,7 +1471,6 @@ def test_accept_deletions_route_is_registered():
     assert ("/api/finance/sync/accept-deletions", ("POST",)) in paths
 
 
-@pytest.mark.asyncio
 async def test_sandbox_refusal_is_a_counted_error_and_leaves_degraded_state_alone(fdb, monkeypatch):
     """The real guard, through the real fetch path: an actualpy whose
     run_migrations no longer uses sqlite3.connect fails the sync before any
@@ -1559,33 +1483,24 @@ async def test_sandbox_refusal_is_a_counted_error_and_leaves_degraded_state_alon
     _configure(monkeypatch)
     monkeypatch.setattr(Actual, "run_migrations", lambda self, migration_files: None)
     record_budget_sync_degraded(["fun_money_missing"])  # state left by an earlier sync
-    error0 = _counter("bgw_budget_sync_total", result="error")
-    ok0 = _counter("bgw_budget_sync_total", result="ok")
-    deg0 = {r: _counter("bgw_budget_sync_degraded_total", reason=r) for r in ("fun_money_missing", "mass_delete")}
+    error0 = metric_value(BUDGET_SYNC_TOTAL, result="error")
+    ok0 = metric_value(BUDGET_SYNC_TOTAL, result="ok")
+    deg0 = {r: metric_value(BUDGET_SYNC_DEGRADED, reason=r) for r in ("fun_money_missing", "mass_delete")}
     try:
         res = await finance_manager.sync_budget_transactions()
         assert res["synced"] == 0 and "refused" not in res
         assert res["error"].startswith("ActualSandboxError:") and "cannot confine" in res["error"]
-        assert _counter("bgw_budget_sync_total", result="error") == error0 + 1
-        assert _counter("bgw_budget_sync_total", result="ok") == ok0
+        assert metric_value(BUDGET_SYNC_TOTAL, result="error") == error0 + 1
+        assert metric_value(BUDGET_SYNC_TOTAL, result="ok") == ok0
         st = finance_manager._status_sync()
         assert st["connected"] is False and "cannot confine" in st["last_error"]
         # Not a refusal, so accept-deletions can't be used to push past it.
         assert not st["last_error"].startswith(finance_manager.REFUSED_PREFIX)
         # No snapshot was judged: degraded counters and state unchanged.
-        assert {r: _counter("bgw_budget_sync_degraded_total", reason=r) for r in deg0} == deg0
+        assert {r: metric_value(BUDGET_SYNC_DEGRADED, reason=r) for r in deg0} == deg0
         assert _state("fun_money_missing") == 1 and _state("mass_delete") == 0
     finally:
         record_budget_sync_degraded([])
-
-
-def _finance_client():
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    app = FastAPI()
-    app.include_router(finance_manager.router)
-    return TestClient(app)
 
 
 def test_accept_deletions_route_is_400_when_unconfigured(fdb, monkeypatch):

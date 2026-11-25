@@ -1,7 +1,6 @@
 """GET /api/temperatures (dashboard temperature card) and its _numeric_state helper."""
 
 import logging
-import math
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -25,10 +24,12 @@ from orchestrator.api_routes import _numeric_state, get_temperatures
         ("0", 0.0),
         (" 68.0 ", 68.0),
         ("-1", -1.0),
+        ("1e3", 1000.0),
     ],
 )
 def test_numeric_state_numbers(state, expected):
-    assert _numeric_state(state) == expected
+    value = _numeric_state(state)
+    assert isinstance(value, float) and value == expected
 
 
 @pytest.mark.parametrize(
@@ -52,13 +53,6 @@ def test_numeric_state_numbers(state, expected):
 )
 def test_numeric_state_non_numeric_is_none(state):
     assert _numeric_state(state) is None
-
-
-def test_numeric_state_returns_finite_float():
-    value = _numeric_state("1e3")
-    assert isinstance(value, float)
-    assert math.isfinite(value)
-    assert value == 1000.0
 
 
 # ---------------------------------------------------------------------------
@@ -142,17 +136,15 @@ async def test_one_unavailable_no_delta(temp_profile, bad_state, caplog):
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
-async def test_zero_reading_still_produces_delta(temp_profile):
-    out = await _call({CLOSET: _resp(200, "0"), AMBIENT: _resp(200, "-2.5")})
+@pytest.mark.parametrize(
+    "closet, ambient, delta",
+    [pytest.param("0", "-2.5", 2.5, id="zero-closet"), pytest.param("5.0", 0, 5.0, id="zero-ambient")],
+)
+async def test_zero_reading_still_produces_delta(temp_profile, closet, ambient, delta):
+    out = await _call({CLOSET: _resp(200, closet), AMBIENT: _resp(200, ambient)})
 
-    assert out["sensors"]["closet"]["temperature"] == 0.0
-    assert out["delta"] == 2.5
-
-
-async def test_zero_ambient_reading_still_produces_delta(temp_profile):
-    out = await _call({CLOSET: _resp(200, "5.0"), AMBIENT: _resp(200, 0)})
-
-    assert out["delta"] == 5.0
+    assert out["sensors"]["closet"]["temperature"] == float(closet)
+    assert out["delta"] == delta
 
 
 async def test_negative_delta_has_no_cooling_cost(temp_profile):

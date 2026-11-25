@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
-import sys
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import pytest
 
 from orchestrator.jobs_training_corpus import (
     _fingerprint,
@@ -154,53 +152,25 @@ class TestDrainCcSessions:
 class TestSecretFilter:
     """Secrets must never reach the JSONL. Drop the whole record on match."""
 
-    def test_openai_key_dropped(self, tmp_path):
+    @pytest.mark.parametrize(
+        "secret",
+        [
+            pytest.param("here's the key: sk-abcdefghijklmnopqrstuvwxyz1234567890", id="openai-key"),
+            pytest.param("-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg...", id="private-key-block"),
+            pytest.param("gAAAAABp1isCb4iFivPOd1nFVdlQLPaDosUURSOvLOyf5OS1kkmOaTqsA0CauO35RzKAmntr", id="fernet-token"),
+        ],
+    )
+    def test_secret_dropped_from_cc_session(self, tmp_path, secret):
         cc = tmp_path / "cc"
         cc.mkdir()
         _make_cc_jsonl(
             cc / "s.jsonl",
             [
-                {
-                    "type": "user",
-                    "message": {"role": "user", "content": "here's the key: sk-abcdefghijklmnopqrstuvwxyz1234567890"},
-                },
+                {"type": "user", "message": {"role": "user", "content": secret}},
                 {"type": "user", "message": {"role": "user", "content": "clean question about the weather"}},
             ],
         )
-        records = list(drain_cc_sessions(cc))
-        assert len(records) == 1
-        assert "weather" in records[0].text
-
-    def test_private_key_block_dropped(self, tmp_path):
-        cc = tmp_path / "cc"
-        cc.mkdir()
-        _make_cc_jsonl(
-            cc / "s.jsonl",
-            [
-                {
-                    "type": "user",
-                    "message": {"role": "user", "content": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg..."},
-                },
-            ],
-        )
-        assert list(drain_cc_sessions(cc)) == []
-
-    def test_fernet_ciphertext_dropped(self, tmp_path):
-        cc = tmp_path / "cc"
-        cc.mkdir()
-        _make_cc_jsonl(
-            cc / "s.jsonl",
-            [
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": "gAAAAABp1isCb4iFivPOd1nFVdlQLPaDosUURSOvLOyf5OS1kkmOaTqsA0CauO35RzKAmntr",
-                    },
-                },
-            ],
-        )
-        assert list(drain_cc_sessions(cc)) == []
+        assert [r.text for r in drain_cc_sessions(cc)] == ["clean question about the weather"]
 
     def test_bearer_token_dropped_in_state_store(self, tmp_path):
         db = tmp_path / "state.db"
@@ -350,33 +320,24 @@ class TestFingerprint:
 
 
 class TestDefaultsAndMissingSources:
-    def test_cc_dir_derived_from_claude_projects_path(self, monkeypatch):
+    @pytest.mark.parametrize(
+        "setting,env,expected",
+        [
+            pytest.param("", "/mnt/cc-projects", "/mnt/cc-projects/-home-labadmin-gateway-nerves", id="from-env"),
+            pytest.param("", None, "/home/jess/.claude/projects/-home-labadmin-gateway-nerves", id="env-unset"),
+            pytest.param("", "", "/home/jess/.claude/projects/-home-labadmin-gateway-nerves", id="env-empty"),
+            pytest.param("/custom/cc", "/mnt/cc-projects", "/custom/cc", id="explicit-wins"),
+        ],
+    )
+    def test_default_cc_dir(self, monkeypatch, setting, env, expected):
         from orchestrator import jobs_training_corpus as tc
 
-        monkeypatch.setattr(tc.settings, "training_corpus_cc_dir", "")
-        monkeypatch.setenv("CLAUDE_PROJECTS_PATH", "/mnt/cc-projects")
-        assert tc.default_cc_dir() == Path("/mnt/cc-projects/-home-labadmin-gateway-nerves")
-
-    def test_cc_dir_falls_back_to_jess_home(self, monkeypatch):
-        from orchestrator import jobs_training_corpus as tc
-
-        monkeypatch.setattr(tc.settings, "training_corpus_cc_dir", "")
-        monkeypatch.delenv("CLAUDE_PROJECTS_PATH", raising=False)
-        assert tc.default_cc_dir() == Path("/home/jess/.claude/projects/-home-labadmin-gateway-nerves")
-
-    def test_empty_claude_projects_path_falls_back(self, monkeypatch):
-        from orchestrator import jobs_training_corpus as tc
-
-        monkeypatch.setattr(tc.settings, "training_corpus_cc_dir", "")
-        monkeypatch.setenv("CLAUDE_PROJECTS_PATH", "")
-        assert tc.default_cc_dir() == Path("/home/jess/.claude/projects/-home-labadmin-gateway-nerves")
-
-    def test_explicit_cc_dir_wins(self, monkeypatch):
-        from orchestrator import jobs_training_corpus as tc
-
-        monkeypatch.setattr(tc.settings, "training_corpus_cc_dir", "/custom/cc")
-        monkeypatch.setenv("CLAUDE_PROJECTS_PATH", "/mnt/cc-projects")
-        assert tc.default_cc_dir() == Path("/custom/cc")
+        monkeypatch.setattr(tc.settings, "training_corpus_cc_dir", setting)
+        if env is None:
+            monkeypatch.delenv("CLAUDE_PROJECTS_PATH", raising=False)
+        else:
+            monkeypatch.setenv("CLAUDE_PROJECTS_PATH", env)
+        assert tc.default_cc_dir() == Path(expected)
 
     def test_no_helios_era_slug_in_defaults(self):
         from orchestrator.config import Settings

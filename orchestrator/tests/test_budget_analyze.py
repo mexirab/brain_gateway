@@ -2,8 +2,8 @@
 Tests for the ``question_type="analyze"`` branch of ``budget_manager.query()``.
 
 Scope:
-  * Error guards (empty analysis_question, unknown dataset) short-circuit before
-    the expert model is called.
+  * A blank analysis_question falls back to a generic prompt; an unknown dataset
+    short-circuits before the expert model is called.
   * Happy path returns both the expert synthesis and the underlying overview
     data, and forwards the user question + JSON data block into ask_expert.
   * Expert failure prefixes ("Expert model ...") surface as ``expert_error`` +
@@ -14,8 +14,8 @@ Scope:
   * ``amount_sign`` controls the ranking basis of ``top_categories``/``top_payees``.
   * The ``query_budget`` tool handler forwards ``analysis_question`` through.
 
-External calls to ``handle_ask_expert`` are patched via ``unittest.mock.AsyncMock``
-so no real expert-model HTTP calls are made.
+External calls to ``handle_ask_expert`` are patched by the ``expert`` fixture
+(an AsyncMock), so no real expert-model HTTP calls are made.
 
 Fixtures: ``tmp_db`` from conftest.py provides a fresh SQLite schema per test.
 """
@@ -26,6 +26,15 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
+
+
+@pytest.fixture
+def expert(monkeypatch):
+    """handle_ask_expert replaced by an AsyncMock returning "ok" (set .return_value per test)."""
+    mock = AsyncMock(return_value="ok")
+    monkeypatch.setattr("orchestrator.expert_agent.handle_ask_expert", mock)
+    return mock
+
 
 # ---------------------------------------------------------------------------
 # Seed helpers
@@ -194,7 +203,7 @@ def _seed_mixed_sign_dataset(name: str = "test_signs") -> None:
 
 
 @pytest.mark.parametrize("blank", [None, "", "   ", "\n\t "])
-async def test_analyze_blank_question_falls_back_to_generic_prompt(tmp_db, monkeypatch, blank):
+async def test_analyze_blank_question_falls_back_to_generic_prompt(tmp_db, expert, blank):
     """A blank analysis_question is NOT rejected — analyze substitutes a
     generic pattern-finding prompt and still runs the expert synthesis."""
     from orchestrator import budget_manager
@@ -202,8 +211,7 @@ async def test_analyze_blank_question_falls_back_to_generic_prompt(tmp_db, monke
     _seed_small_dataset("test_small")
 
     synth = "Gaming dominated Q1 spending."
-    expert_mock = AsyncMock(return_value=synth)
-    monkeypatch.setattr("orchestrator.expert_agent.handle_ask_expert", expert_mock)
+    expert.return_value = synth
 
     result = await budget_manager.query(
         dataset="test_small",
@@ -217,7 +225,7 @@ async def test_analyze_blank_question_falls_back_to_generic_prompt(tmp_db, monke
     assert result["question_type"] == "analyze"
     assert result["user_question"].strip()
     assert result["expert_synthesis"] == synth
-    expert_mock.assert_awaited_once()
+    expert.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -225,11 +233,10 @@ async def test_analyze_blank_question_falls_back_to_generic_prompt(tmp_db, monke
 # ---------------------------------------------------------------------------
 
 
-async def test_analyze_unknown_dataset_short_circuits(tmp_db, monkeypatch):
+async def test_analyze_unknown_dataset_short_circuits(tmp_db, expert):
     from orchestrator import budget_manager
 
-    expert_mock = AsyncMock(return_value="should-not-be-called")
-    monkeypatch.setattr("orchestrator.expert_agent.handle_ask_expert", expert_mock)
+    expert.return_value = "should-not-be-called"
 
     result = await budget_manager.query(
         dataset="does-not-exist",
@@ -239,7 +246,7 @@ async def test_analyze_unknown_dataset_short_circuits(tmp_db, monkeypatch):
 
     assert "error" in result
     assert "Unknown dataset" in result["error"]
-    expert_mock.assert_not_called()
+    expert.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -247,14 +254,13 @@ async def test_analyze_unknown_dataset_short_circuits(tmp_db, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_analyze_happy_path_returns_synthesis_and_data(tmp_db, monkeypatch):
+async def test_analyze_happy_path_returns_synthesis_and_data(tmp_db, expert):
     from orchestrator import budget_manager
 
     _seed_small_dataset("test_small")
 
     synth = "Gaming was the biggest category in Q1 2025 at $450 across 3 transactions."
-    expert_mock = AsyncMock(return_value=synth)
-    monkeypatch.setattr("orchestrator.expert_agent.handle_ask_expert", expert_mock)
+    expert.return_value = synth
 
     user_q = "What did I spend most on?"
     result = await budget_manager.query(
@@ -290,8 +296,8 @@ async def test_analyze_happy_path_returns_synthesis_and_data(tmp_db, monkeypatch
 
     # Expert was called exactly once and the prompt carried both the user's
     # verbatim question and the JSON data block.
-    expert_mock.assert_awaited_once()
-    call_args = expert_mock.await_args
+    expert.assert_awaited_once()
+    call_args = expert.await_args
     # handle_ask_expert takes a dict {"question": ...}
     assert call_args is not None
     arg_dict = call_args.args[0] if call_args.args else call_args.kwargs.get("arguments")
@@ -323,13 +329,12 @@ async def test_analyze_happy_path_returns_synthesis_and_data(tmp_db, monkeypatch
         "Expert model circuit breaker is open after repeated failures — answering directly for the next couple of minutes.",
     ],
 )
-async def test_analyze_expert_failure_surfaces_as_error(tmp_db, monkeypatch, failure_msg):
+async def test_analyze_expert_failure_surfaces_as_error(tmp_db, expert, failure_msg):
     from orchestrator import budget_manager
 
     _seed_small_dataset("test_small")
 
-    expert_mock = AsyncMock(return_value=failure_msg)
-    monkeypatch.setattr("orchestrator.expert_agent.handle_ask_expert", expert_mock)
+    expert.return_value = failure_msg
 
     result = await budget_manager.query(
         dataset="test_small",
@@ -350,13 +355,10 @@ async def test_analyze_expert_failure_surfaces_as_error(tmp_db, monkeypatch, fai
 # ---------------------------------------------------------------------------
 
 
-async def test_analyze_filters_pass_through_and_restrict_aggregation(tmp_db, monkeypatch):
+async def test_analyze_filters_pass_through_and_restrict_aggregation(tmp_db, expert):
     from orchestrator import budget_manager
 
     _seed_filterable_dataset("test_filter")
-
-    expert_mock = AsyncMock(return_value="ok")
-    monkeypatch.setattr("orchestrator.expert_agent.handle_ask_expert", expert_mock)
 
     result = await budget_manager.query(
         dataset="test_filter",
@@ -386,13 +388,10 @@ async def test_analyze_filters_pass_through_and_restrict_aggregation(tmp_db, mon
 # ---------------------------------------------------------------------------
 
 
-async def test_analyze_by_month_capped_at_36(tmp_db, monkeypatch):
+async def test_analyze_by_month_capped_at_36(tmp_db, expert):
     from orchestrator import budget_manager
 
     _seed_50_months("test_50mo")
-
-    expert_mock = AsyncMock(return_value="ok")
-    monkeypatch.setattr("orchestrator.expert_agent.handle_ask_expert", expert_mock)
 
     result = await budget_manager.query(
         dataset="test_50mo",
@@ -408,49 +407,30 @@ async def test_analyze_by_month_capped_at_36(tmp_db, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_analyze_ranking_sign_defaults_to_outflow(tmp_db, monkeypatch):
+@pytest.mark.parametrize(
+    "kwargs,sign,top_category,top_payee",
+    [
+        pytest.param({"analysis_question": "where did I spend"}, "outflow", "Gaming", "Steam", id="default-outflow"),
+        pytest.param(
+            {"analysis_question": "where did my income come from", "amount_sign": "inflow"},
+            "inflow",
+            "Refunds",
+            "Amazon",
+            id="inflow",
+        ),
+    ],
+)
+async def test_analyze_ranking_sign(tmp_db, expert, kwargs, sign, top_category, top_payee):
     from orchestrator import budget_manager
 
     _seed_mixed_sign_dataset("test_signs")
 
-    expert_mock = AsyncMock(return_value="ok")
-    monkeypatch.setattr("orchestrator.expert_agent.handle_ask_expert", expert_mock)
-
-    result = await budget_manager.query(
-        dataset="test_signs",
-        question_type="analyze",
-        analysis_question="where did I spend",
-    )
+    result = await budget_manager.query(dataset="test_signs", question_type="analyze", **kwargs)
     data = result["data"]
-    assert data["ranking_sign"] == "outflow"
-    cat_keys = [c["key"] for c in data["top_categories"]]
-    payee_keys = [p["key"] for p in data["top_payees"]]
-    # Gaming / Steam (outflows) should dominate; Refunds / Amazon (inflows) should not be #1.
-    assert cat_keys[0] == "Gaming"
-    assert payee_keys[0] == "Steam"
-
-
-async def test_analyze_ranking_sign_inflow_flips_rankings(tmp_db, monkeypatch):
-    from orchestrator import budget_manager
-
-    _seed_mixed_sign_dataset("test_signs")
-
-    expert_mock = AsyncMock(return_value="ok")
-    monkeypatch.setattr("orchestrator.expert_agent.handle_ask_expert", expert_mock)
-
-    result = await budget_manager.query(
-        dataset="test_signs",
-        question_type="analyze",
-        analysis_question="where did my income come from",
-        amount_sign="inflow",
-    )
-    data = result["data"]
-    assert data["ranking_sign"] == "inflow"
-    cat_keys = [c["key"] for c in data["top_categories"]]
-    payee_keys = [p["key"] for p in data["top_payees"]]
-    # Inflow king: Refunds / Amazon
-    assert cat_keys[0] == "Refunds"
-    assert payee_keys[0] == "Amazon"
+    assert data["ranking_sign"] == sign
+    # Outflows: Gaming / Steam lead (inflows Refunds / Amazon must not be #1); inflow flips it.
+    assert data["top_categories"][0]["key"] == top_category
+    assert data["top_payees"][0]["key"] == top_payee
 
 
 # ---------------------------------------------------------------------------

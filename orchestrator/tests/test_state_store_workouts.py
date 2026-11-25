@@ -4,6 +4,13 @@ Tests for state_store workout and meal functions.
 Uses the tmp_db fixture from conftest to get a fresh isolated SQLite DB per test.
 """
 
+import sqlite3
+
+import pytest
+
+from orchestrator import state_store
+from orchestrator.exercises_seed import EQUIPMENT_TOKENS, EXERCISES, FALLBACK_VARIANTS, exercise_requires
+from orchestrator.tests.fixtures_pantry import workout_session
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -33,23 +40,8 @@ _BENCH_EX = {
 # ---------------------------------------------------------------------------
 
 
-def test_seed_exercises_inserts(tmp_db):
-    """seed_exercises inserts exercises that don't yet exist."""
-    from orchestrator import state_store
-
-    # Use novel names that the production seed definitely doesn't contain
-    novel = [
-        {**_SQUAT_EX, "name": "ZZZ_Test_Squat_Novel"},
-        {**_BENCH_EX, "name": "ZZZ_Test_Bench_Novel"},
-    ]
-    count = state_store.seed_exercises(novel)
-    assert count == 2
-
-
 def test_seed_exercises_idempotent(tmp_db):
     """Calling seed_exercises twice with the same data inserts each exercise once."""
-    from orchestrator import state_store
-
     novel = [
         {**_SQUAT_EX, "name": "ZZZ_Idempotent_Squat"},
         {**_BENCH_EX, "name": "ZZZ_Idempotent_Bench"},
@@ -73,8 +65,6 @@ def test_seed_exercises_idempotent(tmp_db):
 
 def test_get_exercises_by_pattern(tmp_db):
     """get_exercises(movement_pattern=...) filters correctly."""
-    from orchestrator import state_store
-
     # Use a novel pattern name that won't exist in the production seed
     novel = {**_SQUAT_EX, "name": "ZZZ_PatternFilter_Squat", "movement_pattern": "zzz_novel_pattern"}
     state_store.seed_exercises([novel])
@@ -85,22 +75,12 @@ def test_get_exercises_by_pattern(tmp_db):
     assert "glutes" in results[0]["secondary_muscles"]
 
 
-def test_get_exercises_catalog_is_seeded(tmp_db):
-    """init_db seeds the production catalog — catalog must be non-empty."""
-    from orchestrator import state_store
-
-    result = state_store.get_exercises()
-    assert len(result) > 0
-
-
 # ---------------------------------------------------------------------------
 # create_workout / get_workout / get_todays_workout
 # ---------------------------------------------------------------------------
 
 
 def test_create_and_get_workout(tmp_db):
-    from orchestrator import state_store
-
     wid = state_store.create_workout(
         workout_type="full_body",
         generated_by_jess=True,
@@ -117,8 +97,6 @@ def test_create_and_get_workout(tmp_db):
 
 
 def test_get_todays_workout(tmp_db):
-    from orchestrator import state_store
-
     assert state_store.get_todays_workout() is None
     wid = state_store.create_workout("full_body", True)
     today = state_store.get_todays_workout()
@@ -132,8 +110,6 @@ def test_get_todays_workout(tmp_db):
 
 
 def test_add_planned_set(tmp_db):
-    from orchestrator import state_store
-
     wid = state_store.create_workout("full_body", True)
     sid = state_store.add_planned_set(
         workout_id=wid,
@@ -154,8 +130,6 @@ def test_add_planned_set(tmp_db):
 
 
 def test_log_completed_set_updates_planned(tmp_db):
-    from orchestrator import state_store
-
     state_store.seed_exercises([_SQUAT_EX])
     wid = state_store.create_workout("full_body", True)
     sid = state_store.add_planned_set(wid, "Barbell Squat", ["quads"], 1, 8, 135.0)
@@ -175,8 +149,6 @@ def test_log_completed_set_updates_planned(tmp_db):
 
 def test_log_completed_set_insert_new(tmp_db):
     """Log a set without an existing planned set — should insert new row."""
-    from orchestrator import state_store
-
     state_store.seed_exercises([_SQUAT_EX])
     wid = state_store.create_workout("full_body", True)
     row = state_store.log_completed_set(
@@ -194,29 +166,15 @@ def test_log_completed_set_insert_new(tmp_db):
 # ---------------------------------------------------------------------------
 
 
-def test_count_workouts_in_window_zero(tmp_db):
-    from orchestrator import state_store
-
-    assert state_store.count_workouts_in_window(7) == 0
-
-
 def test_count_workouts_in_window(tmp_db):
-    from orchestrator import state_store
-
+    assert state_store.count_workouts_in_window(7) == 0
     state_store.create_workout("full_body", True)
     state_store.create_workout("push_day", True)
     assert state_store.count_workouts_in_window(7) == 2
 
 
-def test_days_since_last_workout_none_when_empty(tmp_db):
-    from orchestrator import state_store
-
-    assert state_store.days_since_last_workout() is None
-
-
 def test_days_since_last_workout_today(tmp_db):
-    from orchestrator import state_store
-
+    assert state_store.days_since_last_workout() is None
     state_store.create_workout("full_body", True)
     assert state_store.days_since_last_workout() == 0
 
@@ -226,16 +184,8 @@ def test_days_since_last_workout_today(tmp_db):
 # ---------------------------------------------------------------------------
 
 
-def test_get_recent_muscle_groups_empty(tmp_db):
-    from orchestrator import state_store
-
-    result = state_store.get_recent_muscle_groups(days=3)
-    assert result == {}
-
-
 def test_get_recent_muscle_groups_counts(tmp_db):
-    from orchestrator import state_store
-
+    assert state_store.get_recent_muscle_groups(days=3) == {}
     state_store.seed_exercises([_SQUAT_EX])
     wid = state_store.create_workout("full_body", True)
     state_store.log_completed_set(wid, "Barbell Squat", 135.0, 8)
@@ -250,15 +200,8 @@ def test_get_recent_muscle_groups_counts(tmp_db):
 # ---------------------------------------------------------------------------
 
 
-def test_get_exercise_prs_none_when_empty(tmp_db):
-    from orchestrator import state_store
-
-    assert state_store.get_exercise_prs("Barbell Squat") is None
-
-
 def test_get_exercise_prs_returns_best(tmp_db):
-    from orchestrator import state_store
-
+    assert state_store.get_exercise_prs("Barbell Squat") is None
     state_store.seed_exercises([_SQUAT_EX])
     wid = state_store.create_workout("full_body", True)
     state_store.log_completed_set(wid, "Barbell Squat", 100.0, 8)
@@ -276,8 +219,6 @@ def test_get_exercise_prs_returns_best(tmp_db):
 
 def test_update_meal_rejects_photo_path(tmp_db):
     """photo_path must NOT be in the update_meal allowlist."""
-    from orchestrator import state_store
-
     meal = state_store.add_meal(
         description="Salad",
         meal_type="lunch",
@@ -297,8 +238,6 @@ def test_update_meal_rejects_photo_path(tmp_db):
 
 def test_update_meal_allowed_fields(tmp_db):
     """description/meal_type/calories are allowed via update_meal."""
-    from orchestrator import state_store
-
     meal = state_store.add_meal(description="Oats", meal_type="breakfast", calories=350)
     ok = state_store.update_meal(meal["id"], {"calories": 400, "description": "Oats + banana"})
     assert ok is True
@@ -312,15 +251,8 @@ def test_update_meal_allowed_fields(tmp_db):
 # ---------------------------------------------------------------------------
 
 
-def test_get_meals_today_empty(tmp_db):
-    from orchestrator import state_store
-
-    assert state_store.get_meals_today() == []
-
-
 def test_get_meals_today_returns_todays_meals(tmp_db):
-    from orchestrator import state_store
-
+    assert state_store.get_meals_today() == []
     state_store.add_meal("Breakfast", "breakfast", 400)
     state_store.add_meal("Lunch", "lunch", 600)
     meals = state_store.get_meals_today()
@@ -337,15 +269,10 @@ def test_get_meals_today_returns_todays_meals(tmp_db):
 
 def test_seed_catalog_is_unchanged_on_reseed(tmp_db):
     """init_db already seeded the real catalog; seeding it again changes nothing."""
-    from orchestrator import state_store
-    from orchestrator.exercises_seed import EXERCISES
-
     assert state_store.seed_exercises(EXERCISES) == 0
 
 
 def test_seed_upsert_updates_requires(tmp_db):
-    from orchestrator import state_store
-
     ex = {**_BENCH_EX, "name": "ZZZ_Upsert_Bench", "requires": ["barbell"]}
     assert state_store.seed_exercises([ex]) == 1
     assert state_store.get_exercise("ZZZ_Upsert_Bench")["requires"] == ["barbell"]
@@ -357,8 +284,6 @@ def test_seed_upsert_updates_requires(tmp_db):
 
 
 def test_seed_derives_requires_from_equipment(tmp_db):
-    from orchestrator import state_store
-
     state_store.seed_exercises(
         [
             {**_BENCH_EX, "name": "ZZZ_Db", "equipment": "dumbbell"},
@@ -372,8 +297,6 @@ def test_seed_derives_requires_from_equipment(tmp_db):
 
 
 def test_catalog_requires_only_use_known_tokens():
-    from orchestrator.exercises_seed import EQUIPMENT_TOKENS, EXERCISES, FALLBACK_VARIANTS, exercise_requires
-
     names = {ex["name"] for ex in EXERCISES}
     assert len(names) == len(EXERCISES), "duplicate exercise names in seed"
     for ex in EXERCISES:
@@ -382,8 +305,6 @@ def test_catalog_requires_only_use_known_tokens():
 
 
 def test_get_exercises_available_equipment_filter(tmp_db):
-    from orchestrator import state_store
-
     everything = state_store.get_exercises()
     home = state_store.get_exercises(available_equipment={"dumbbells", "kettlebell"})
     bare = state_store.get_exercises(available_equipment=set())
@@ -394,8 +315,6 @@ def test_get_exercises_available_equipment_filter(tmp_db):
 
 
 def _old_schema_db(path):
-    import sqlite3
-
     conn = sqlite3.connect(path)
     conn.executescript(
         """
@@ -446,10 +365,6 @@ def _old_schema_db(path):
 
 
 def test_init_db_migrates_pre_program_schema(tmp_path, monkeypatch):
-    import sqlite3
-
-    from orchestrator import state_store
-
     path = str(tmp_path / "old.db")
     _old_schema_db(path)
     monkeypatch.setattr(state_store, "DB_PATH", path)
@@ -481,12 +396,6 @@ def test_init_db_migrates_pre_program_schema(tmp_path, monkeypatch):
 
 
 def test_location_crud_and_ordering(tmp_db):
-    import sqlite3
-
-    import pytest
-
-    from orchestrator import state_store
-
     a = state_store.create_workout_location("Home", ["dumbbells"], {"dumbbell_max_lbs": 50})
     b = state_store.create_workout_location("Big Gym", ["barbell"], {})
     c = state_store.create_workout_location("Hotel", [], {})
@@ -510,8 +419,6 @@ def test_location_crud_and_ordering(tmp_db):
 
 
 def test_location_bad_json_columns_deserialize_safely(tmp_db):
-    from orchestrator import state_store
-
     loc = state_store.create_workout_location("Home", [], {})
     with state_store.get_db() as conn:
         conn.execute("UPDATE workout_locations SET equipment='nope', limits='{' WHERE id=?", (loc["id"],))
@@ -520,8 +427,6 @@ def test_location_bad_json_columns_deserialize_safely(tmp_db):
 
 
 def test_active_program_lifecycle(tmp_db):
-    from orchestrator import state_store
-
     assert state_store.get_active_program() is None
     p1 = state_store.set_active_program("general", 3, 45)
     p2 = state_store.set_active_program("strength", 4, 60)
@@ -539,8 +444,6 @@ def test_active_program_lifecycle(tmp_db):
 
 
 def test_last_trained_program_day_requires_completed_set(tmp_db):
-    from orchestrator import state_store
-
     p = state_store.set_active_program("general", 3, 45)
     assert state_store.last_trained_program_day(p["id"]) is None
 
@@ -564,36 +467,17 @@ def test_last_trained_program_day_requires_completed_set(tmp_db):
 # ---------------------------------------------------------------------------
 
 
-def _past_session(exercise, reps, days_ago, location_id=None, is_deload=False, weight=100.0):
-    from datetime import datetime, timedelta
-
-    from orchestrator import state_store
-
-    wid = state_store.create_workout("full_body", True)
-    when = (datetime.now() - timedelta(days=days_ago)).isoformat()
-    with state_store.get_db() as conn:
-        conn.execute("UPDATE workouts SET started_at = ? WHERE id = ?", (when, wid))
-    state_store.set_workout_context(wid, location_id, None, None, is_deload=is_deload)
-    for i, r in enumerate(reps, start=1):
-        sid = state_store.add_planned_set(wid, exercise, [], i, 8, weight)
-        if r is not None:
-            state_store.log_completed_set(wid, exercise, weight, r, set_id=sid)
-    return wid
-
-
 def test_get_exercise_sessions_corrupt_location_limits(tmp_db):
-    from orchestrator import state_store
-
     bad = state_store.create_workout_location("Bad", [], {"dumbbell_max_lbs": 50})
     listy = state_store.create_workout_location("Listy", [], {})
     good = state_store.create_workout_location("Good", [], {"dumbbell_max_lbs": 40})
     with state_store.get_db() as conn:
         conn.execute("UPDATE workout_locations SET limits = '{oops' WHERE id = ?", (bad["id"],))
         conn.execute("UPDATE workout_locations SET limits = '[1, 2]' WHERE id = ?", (listy["id"],))
-    w_bad = _past_session("Bench Press", [8], 3, location_id=bad["id"])
-    w_list = _past_session("Bench Press", [8], 2, location_id=listy["id"])
-    w_good = _past_session("Bench Press", [8], 1, location_id=good["id"])
-    w_none = _past_session("Bench Press", [8], 4, location_id=9999)  # location row gone
+    w_bad = workout_session("Bench Press", 100.0, [8], days_ago=3, location_id=bad["id"])
+    w_list = workout_session("Bench Press", 100.0, [8], days_ago=2, location_id=listy["id"])
+    w_good = workout_session("Bench Press", 100.0, [8], days_ago=1, location_id=good["id"])
+    w_none = workout_session("Bench Press", 100.0, [8], days_ago=4, location_id=9999)  # location row gone
 
     sessions = state_store.get_exercise_sessions("Bench Press", limit=10)
     assert [s["workout_id"] for s in sessions] == [w_good, w_list, w_bad, w_none]
@@ -601,14 +485,12 @@ def test_get_exercise_sessions_corrupt_location_limits(tmp_db):
 
 
 def test_get_exercise_sessions_limit_exclusions_and_rows(tmp_db):
-    from orchestrator import state_store
-
-    oldest = _past_session("Bench Press", [8, 8], 6)
-    middle = _past_session("Bench Press", [8, None], 4)
-    newest = _past_session("Bench Press", [8, 8], 2)
-    _past_session("Bench Press", [8, 8], 1, is_deload=True)  # deload: excluded
-    _past_session("Bench Press", [None, None], 0)  # planned only: excluded
-    _past_session("Back Squat", [5], 1)  # other exercise
+    oldest = workout_session("Bench Press", 100.0, [8, 8], days_ago=6)
+    middle = workout_session("Bench Press", 100.0, [8, None], days_ago=4)
+    newest = workout_session("Bench Press", 100.0, [8, 8], days_ago=2)
+    workout_session("Bench Press", 100.0, [8, 8], days_ago=1, deload=True)  # deload: excluded
+    workout_session("Bench Press", 100.0, [None, None], days_ago=0)  # planned only: excluded
+    workout_session("Back Squat", 100.0, [5], days_ago=1)  # other exercise
 
     assert [s["workout_id"] for s in state_store.get_exercise_sessions("Bench Press", limit=2)] == [newest, middle]
     assert [s["workout_id"] for s in state_store.get_exercise_sessions("Bench Press", exclude_workout_id=newest)] == [
@@ -620,12 +502,10 @@ def test_get_exercise_sessions_limit_exclusions_and_rows(tmp_db):
 
 
 def test_last_exercise_completed_at_counts_deload_ignores_planned(tmp_db):
-    from orchestrator import state_store
-
     assert state_store.last_exercise_completed_at("Bench Press") is None
-    _past_session("Bench Press", [8], 5)
-    deload = _past_session("Bench Press", [8], 2, is_deload=True)
-    _past_session("Bench Press", [None], 0)
+    workout_session("Bench Press", 100.0, [8], days_ago=5)
+    deload = workout_session("Bench Press", 100.0, [8], days_ago=2, deload=True)
+    workout_session("Bench Press", 100.0, [None], days_ago=0)
     got = state_store.last_exercise_completed_at("Bench Press")
     assert got == state_store.get_workout(deload)["started_at"]
     assert state_store.last_exercise_completed_at("Bench Press", exclude_workout_id=deload) < got
@@ -633,10 +513,6 @@ def test_last_exercise_completed_at_counts_deload_ignores_planned(tmp_db):
 
 def test_init_db_adds_deload_columns_to_program_builder_schema(tmp_path, monkeypatch):
     """A DB from the program-builder phase (programs + locations, no deload columns)."""
-    import sqlite3
-
-    from orchestrator import state_store
-
     path = str(tmp_path / "phase1.db")
     _old_schema_db(path)
     conn = sqlite3.connect(path)

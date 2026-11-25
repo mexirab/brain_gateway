@@ -13,13 +13,14 @@ In the container, mount the repo so that layout holds (see report).
 
 from __future__ import annotations
 
-import importlib.util
 import tarfile
 from pathlib import Path
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "backup_state.py"
+from orchestrator.tests._helpers import REPO_ROOT, load_script
+
+_SCRIPT = REPO_ROOT / "scripts" / "backup_state.py"
 
 pytestmark = pytest.mark.skipif(not _SCRIPT.exists(), reason=f"{_SCRIPT} not present (mount scripts/)")
 
@@ -30,9 +31,7 @@ def bs(monkeypatch, tmp_path):
     monkeypatch.delenv("JESS_CHROMA_DIR", raising=False)
     monkeypatch.delenv("JESS_BACKUP_REMOTE", raising=False)
     monkeypatch.delenv("JESS_BACKUP_METRICS_PATH", raising=False)
-    spec = importlib.util.spec_from_file_location("backup_state_under_test", _SCRIPT)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    mod = load_script(_SCRIPT, "backup_state_under_test")  # fresh: it reads the env at import
     repo = tmp_path / "repo"
     repo.mkdir()
     monkeypatch.setattr(mod, "REPO_ROOT", repo)
@@ -58,38 +57,25 @@ def test_env_override_expands_tilde(bs, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "line",
-    ["CHROMA_HOST_PATH=/srv/chroma", 'CHROMA_HOST_PATH="/srv/chroma"', "CHROMA_HOST_PATH='/srv/chroma'"],
+    ("line", "expected"),
+    [
+        pytest.param("CHROMA_HOST_PATH=/srv/chroma", "/srv/chroma", id="absolute"),
+        pytest.param('CHROMA_HOST_PATH="/srv/chroma"', "/srv/chroma", id="double-quoted"),
+        pytest.param("CHROMA_HOST_PATH='/srv/chroma'", "/srv/chroma", id="single-quoted"),
+        pytest.param("CHROMA_HOST_PATH=~/.local/share/chroma", "~/.local/share/chroma", id="tilde"),
+        pytest.param("CHROMA_HOST_PATH=./vol/chroma", "<repo>/vol/chroma", id="relative-under-repo"),
+        pytest.param("CHROMA_HOST_PATH=", "<repo>/data/chroma", id="empty-falls-back"),
+        pytest.param("# CHROMA_HOST_PATH=/srv/chroma", "<repo>/data/chroma", id="commented-ignored"),
+        pytest.param(None, "<repo>/data/chroma", id="no-dotenv-falls-back"),
+    ],
 )
-def test_dotenv_absolute_quoted_and_unquoted(bs, line):
-    (bs.REPO_ROOT / ".env").write_text(f"FOO=bar\n{line}\nOTHER=x\n")
-    assert bs._chroma_dir() == Path("/srv/chroma")
-
-
-def test_dotenv_tilde_expanded(bs):
-    (bs.REPO_ROOT / ".env").write_text("CHROMA_HOST_PATH=~/.local/share/chroma\n")
-    assert bs._chroma_dir() == Path("~/.local/share/chroma").expanduser()
-
-
-def test_dotenv_relative_is_under_repo_root(bs):
-    (bs.REPO_ROOT / ".env").write_text("CHROMA_HOST_PATH=./vol/chroma\n")
+def test_dotenv_resolution(bs, line, expected):
+    if line is not None:
+        (bs.REPO_ROOT / ".env").write_text(f"FOO=bar\n{line}\nOTHER=x\n")
+    want = Path(expected.replace("<repo>", str(bs.REPO_ROOT))).expanduser()
     got = bs._chroma_dir()
     assert got.is_absolute()
-    assert got == bs.REPO_ROOT / "vol" / "chroma"
-
-
-def test_dotenv_empty_value_falls_back(bs):
-    (bs.REPO_ROOT / ".env").write_text("CHROMA_HOST_PATH=\n")
-    assert bs._chroma_dir() == bs.REPO_ROOT / "data" / "chroma"
-
-
-def test_dotenv_commented_key_ignored(bs):
-    (bs.REPO_ROOT / ".env").write_text("# CHROMA_HOST_PATH=/srv/chroma\n")
-    assert bs._chroma_dir() == bs.REPO_ROOT / "data" / "chroma"
-
-
-def test_missing_dotenv_falls_back(bs):
-    assert bs._chroma_dir() == bs.REPO_ROOT / "data" / "chroma"
+    assert got == want
 
 
 # ---------------------------------------------------------------------------

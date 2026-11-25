@@ -11,49 +11,21 @@ Covers:
 """
 
 import logging
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Real palace.yaml loading
-# ---------------------------------------------------------------------------
-
-_PALACE_CANDIDATES = [
-    Path(__file__).resolve().parents[2] / "data" / "palace.yaml",  # repo checkout / CI
-    Path("/app/data_repo/palace.yaml"),  # throwaway test container mount
-    Path("/app/config/palace.yaml"),  # orchestrator image layout
-]
+from orchestrator.tests.fixtures_memory import real_palace_yaml
 
 
-def _real_palace_yaml() -> Path:
-    for p in _PALACE_CANDIDATES:
-        if p.is_file():
-            return p
-    pytest.fail(f"repo data/palace.yaml not found in any of {_PALACE_CANDIDATES}")
+@pytest.fixture
+def real_palace(memory_palace):
+    """MemPalace from the REAL repo palace.yaml; Chroma + embedder faked."""
+    return memory_palace(yaml_path=real_palace_yaml())
 
 
-def _make_real_palace():
-    """Build a MemPalace from the real palace.yaml with ChromaDB + embeddings mocked."""
-    from orchestrator.mempalace import MemPalace
-
-    mock_shared = MagicMock()
-    mock_shared.PALACE_YAML_PATH = str(_real_palace_yaml())
-    mock_shared.PALACE_ENABLED = True
-    mock_shared.PALACE_WAKEUP_ENABLED = False
-    mock_shared.PALACE_DEDUP_THRESHOLD = 0.85
-    mock_shared.AUTO_LEARN_ENCRYPT = False
-    mock_shared.embedding_model = MagicMock()
-    mock_shared.embedding_model.encode.return_value = MagicMock(tolist=MagicMock(return_value=[0.1] * 384))
-
-    with patch("orchestrator.mempalace.shared", mock_shared):
-        palace = MemPalace()
-
-    mock_coll = MagicMock()
-    mock_coll.query.return_value = {"documents": [[]], "distances": [[]], "ids": [[]], "metadatas": [[]]}
-    mock_coll.add.return_value = None
-    return palace, mock_coll, mock_shared
+def _stored_meta(palace) -> dict:
+    return palace._collection.add.call_args.kwargs["metadatas"][0]
 
 
 # ---------------------------------------------------------------------------
@@ -62,26 +34,19 @@ def _make_real_palace():
 
 
 class TestSystemWingConfig:
-    def test_real_yaml_defines_system_audit(self):
-        palace, _, _ = _make_real_palace()
-        assert palace.is_known_wing("system")
-        rooms = palace._config["wings"]["system"]["rooms"]
+    def test_real_yaml_defines_system_audit_without_keywords(self, real_palace):
+        assert real_palace.is_known_wing("system")
+        rooms = real_palace._config["wings"]["system"]["rooms"]
         assert "audit" in rooms
-
-    def test_system_audit_has_no_keywords(self):
-        palace, _, _ = _make_real_palace()
-        rooms = palace._config["wings"]["system"]["rooms"]
         for room_name, room in rooms.items():
             assert not room.get("keywords"), f"system/{room_name} must have no routing keywords"
 
-    def test_no_routing_rule_targets_system(self):
-        palace, _, _ = _make_real_palace()
-        assert palace._routing_rules, "real palace.yaml should have routing rules"
-        assert all(r.get("wing") != "system" for r in palace._routing_rules)
+    def test_no_routing_rule_targets_system(self, real_palace):
+        assert real_palace._routing_rules, "real palace.yaml should have routing rules"
+        assert all(r.get("wing") != "system" for r in real_palace._routing_rules)
 
-    def test_existing_wings_still_present(self):
-        palace, _, _ = _make_real_palace()
-        assert {"personal", "jess", "brain_gateway", "infrastructure"} <= palace.known_wings()
+    def test_existing_wings_still_present(self, real_palace):
+        assert {"personal", "jess", "brain_gateway", "infrastructure"} <= real_palace.known_wings()
 
 
 # ---------------------------------------------------------------------------
@@ -90,14 +55,9 @@ class TestSystemWingConfig:
 
 
 class TestStoreSystemWing:
-    async def test_store_system_audit_keeps_wing_and_room(self):
-        palace, mock_coll, mock_shared = _make_real_palace()
-        with (
-            patch.object(palace, "_collection", mock_coll),
-            patch("orchestrator.mempalace.encrypt_text", side_effect=lambda x: x),
-            patch("orchestrator.mempalace.shared", mock_shared),
-        ):
-            doc_id = await palace.store(
+    async def test_store_system_audit_keeps_wing_and_room(self, real_palace, caplog):
+        with caplog.at_level(logging.WARNING, logger="orchestrator.mempalace"):
+            doc_id = await real_palace.store(
                 "Self-audit 2026-10-21: 3 clusters, 0 critical, services orchestrator",
                 wing="system",
                 room="audit",
@@ -106,48 +66,21 @@ class TestStoreSystemWing:
 
         assert doc_id is not None
         assert doc_id.startswith("palace_system_audit_")
-        mock_coll.add.assert_called_once()
-        meta = mock_coll.add.call_args.kwargs["metadatas"][0]
-        assert meta["wing"] == "system"
-        assert meta["room"] == "audit"
-
-    async def test_store_system_does_not_log_unknown_wing_fallback(self, caplog):
-        palace, mock_coll, mock_shared = _make_real_palace()
-        with (
-            caplog.at_level(logging.WARNING, logger="orchestrator.mempalace"),
-            patch.object(palace, "_collection", mock_coll),
-            patch("orchestrator.mempalace.encrypt_text", side_effect=lambda x: x),
-            patch("orchestrator.mempalace.shared", mock_shared),
-        ):
-            await palace.store("Self-audit facts line for the day", wing="system", room="audit")
-
+        real_palace._collection.add.assert_called_once()
+        meta = _stored_meta(real_palace)
+        assert (meta["wing"], meta["room"]) == ("system", "audit")
+        # No "unknown wing → personal" fallback warning for the reserved wing.
         assert not [r for r in caplog.records if "unknown wing" in r.getMessage()]
 
-    async def test_unknown_wing_still_falls_back_to_personal(self):
-        palace, mock_coll, mock_shared = _make_real_palace()
-        with (
-            patch.object(palace, "_collection", mock_coll),
-            patch("orchestrator.mempalace.encrypt_text", side_effect=lambda x: x),
-            patch("orchestrator.mempalace.shared", mock_shared),
-        ):
-            doc_id = await palace.store("Something filed under a bogus wing", wing="nonexistent_wing")
-
+    async def test_unknown_wing_still_falls_back_to_personal(self, real_palace):
+        doc_id = await real_palace.store("Something filed under a bogus wing", wing="nonexistent_wing")
         assert doc_id is not None
-        meta = mock_coll.add.call_args.kwargs["metadatas"][0]
-        assert meta["wing"] == "personal"
+        assert _stored_meta(real_palace)["wing"] == "personal"
 
-    async def test_store_system_unknown_room_dropped(self):
-        palace, mock_coll, mock_shared = _make_real_palace()
-        with (
-            patch.object(palace, "_collection", mock_coll),
-            patch("orchestrator.mempalace.encrypt_text", side_effect=lambda x: x),
-            patch("orchestrator.mempalace.shared", mock_shared),
-        ):
-            await palace.store("Some operational note text", wing="system", room="bogus")
-
-        meta = mock_coll.add.call_args.kwargs["metadatas"][0]
-        assert meta["wing"] == "system"
-        assert meta["room"] == ""
+    async def test_store_system_unknown_room_dropped(self, real_palace):
+        await real_palace.store("Some operational note text", wing="system", room="bogus")
+        meta = _stored_meta(real_palace)
+        assert (meta["wing"], meta["room"]) == ("system", "")
 
 
 # ---------------------------------------------------------------------------
@@ -168,39 +101,28 @@ class TestRoutingNeverPicksSystem:
             "Daily self-audit facts: date, counts, services",
         ],
     )
-    def test_ordinary_text_not_routed_to_system(self, text):
-        palace, _, _ = _make_real_palace()
-        wing, _room = palace.route_to_room(text)
+    def test_ordinary_text_not_routed_to_system(self, real_palace, text):
+        wing, _room = real_palace.route_to_room(text)
         assert wing != "system"
 
-    def test_unmatched_text_defaults_to_personal(self):
-        palace, _, _ = _make_real_palace()
-        assert palace.route_to_room("audit audit audit") == ("personal", "")
+    def test_unmatched_text_defaults_to_personal(self, real_palace):
+        assert real_palace.route_to_room("audit audit audit") == ("personal", "")
 
-    def test_every_configured_keyword_routes_outside_system(self):
-        palace, _, _ = _make_real_palace()
+    def test_every_configured_keyword_routes_outside_system(self, real_palace):
         keywords = {
             kw
-            for wing in palace._config["wings"].values()
+            for wing in real_palace._config["wings"].values()
             for room in wing.get("rooms", {}).values()
             for kw in room.get("keywords", [])
         }
         assert keywords
         for kw in keywords:
-            wing, _ = palace.route_to_room(f"audit system {kw} audit")
+            wing, _ = real_palace.route_to_room(f"audit system {kw} audit")
             assert wing != "system", kw
 
-    async def test_store_without_wing_never_lands_in_system(self):
-        palace, mock_coll, mock_shared = _make_real_palace()
-        with (
-            patch.object(palace, "_collection", mock_coll),
-            patch("orchestrator.mempalace.encrypt_text", side_effect=lambda x: x),
-            patch("orchestrator.mempalace.shared", mock_shared),
-        ):
-            await palace.store("audit system error audit facts summary")
-
-        meta = mock_coll.add.call_args.kwargs["metadatas"][0]
-        assert meta["wing"] != "system"
+    async def test_store_without_wing_never_lands_in_system(self, real_palace):
+        await real_palace.store("audit system error audit facts summary")
+        assert _stored_meta(real_palace)["wing"] != "system"
 
 
 # ---------------------------------------------------------------------------
@@ -317,12 +239,6 @@ class TestPalaceStoreBodyValidation:
         assert r.json()["ok"] is True
         fake_palace.store.assert_awaited_once()
 
-    def test_null_wing_auto_routes(self, palace_client):
-        client, fake_palace = palace_client
-        r = client.post("/api/palace/store", json={"text": "auto-routed memory", "wing": None})
-        assert r.status_code == 200
-        assert fake_palace.store.call_args.kwargs.get("wing") in (None, "")
-
     def test_string_fields_still_store(self, palace_client):
         client, fake_palace = palace_client
         body = {
@@ -338,12 +254,6 @@ class TestPalaceStoreBodyValidation:
         r = client.post("/api/palace/store", json=body)
         assert r.status_code == 200
         fake_palace.store.assert_awaited_once()
-
-    def test_reserved_wing_still_403_with_valid_types(self, palace_client):
-        client, fake_palace = palace_client
-        r = client.post("/api/palace/store", json={"text": "fake audit fact", "wing": "system", "room": "audit"})
-        assert r.status_code == 403
-        fake_palace.store.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +292,10 @@ def test_store_malformed_json_is_400(palace_client):
 
 def test_store_null_fields_get_defaults(palace_client):
     client, palace = palace_client
-    resp = client.post("/api/palace/store", json={"text": "a memory", "source": None, "category": None, "room": None})
+    resp = client.post(
+        "/api/palace/store", json={"text": "a memory", "source": None, "category": None, "room": None, "wing": None}
+    )
     assert resp.status_code == 200
     kwargs = palace.store.call_args.kwargs
     assert kwargs["source"] == "api" and kwargs["category"] == "general" and kwargs["room"] == ""
+    assert kwargs.get("wing") in (None, "")  # a null wing auto-routes

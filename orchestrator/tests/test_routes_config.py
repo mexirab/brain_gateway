@@ -26,14 +26,12 @@ AUTH = {"Authorization": f"Bearer {API_TOKEN}"}
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     """Build a TestClient over a fresh FastAPI app with the config router mounted
-    behind a bearer middleware. Isolates state DB + selfcare schedule + profile
+    behind the real BearerAuthMiddleware. Isolates state DB + selfcare schedule + profile
     overrides per test."""
     from unittest.mock import AsyncMock, MagicMock
 
-    from fastapi import FastAPI, Request
-    from fastapi.responses import JSONResponse
+    from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from starlette.middleware.base import BaseHTTPMiddleware
 
     # 1. Isolate persistence paths.
     from orchestrator import (
@@ -80,19 +78,12 @@ def client(tmp_path, monkeypatch):
 
     state_store.init_db()
 
-    # 2. Build an app with bearer auth identical to BearerAuthMiddleware shape.
+    # 2. The real bearer middleware in front of the real config router.
+    import orchestrator.orchestrator as orch
+
+    monkeypatch.setattr(orch, "API_TOKEN", API_TOKEN)
     app = FastAPI()
-
-    class TestBearerMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request: Request, call_next):
-            if request.method == "OPTIONS":
-                return await call_next(request)
-            auth = request.headers.get("authorization", "")
-            if auth == f"Bearer {API_TOKEN}":
-                return await call_next(request)
-            return JSONResponse({"error": "Unauthorized"}, status_code=401)
-
-    app.add_middleware(TestBearerMiddleware)
+    app.add_middleware(orch.BearerAuthMiddleware)
 
     from orchestrator.routes_config import router as config_router
 
@@ -105,8 +96,22 @@ def client(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_get_identity_without_bearer_returns_401(client):
-    r = client.get("/api/config/identity")
+def _config_routes() -> list:
+    from orchestrator.routes_config import router
+
+    found = [
+        pytest.param(method, route.path.replace("{rule_id}", "r1"), id=f"{method} {route.path}")
+        for route in router.routes
+        for method in sorted(route.methods - {"HEAD"})
+    ]
+    assert len(found) >= 20, "routes_config router lost its routes?"
+    return found
+
+
+@pytest.mark.parametrize(("method", "path"), _config_routes())
+def test_every_config_route_without_bearer_returns_401(client, method, path):
+    """The real BearerAuthMiddleware guards every /api/config/* route, reads and writes."""
+    r = client.request(method, path, json={})
     assert r.status_code == 401
 
 
@@ -115,19 +120,9 @@ def test_get_identity_with_bearer_returns_200(client):
     assert r.status_code == 200
 
 
-def test_put_selfcare_without_bearer_returns_401(client):
-    r = client.put("/api/config/selfcare", json={"categories": {"water": {"enabled": True}}})
-    assert r.status_code == 401
-
-
 # ---------------------------------------------------------------------------
 # Feature flags
 # ---------------------------------------------------------------------------
-
-
-def test_get_features_without_bearer_returns_401(client):
-    r = client.get("/api/config/features")
-    assert r.status_code == 401
 
 
 def test_get_features_reflects_settings(client, monkeypatch):
@@ -356,31 +351,19 @@ def test_delete_recurring_happy_then_second_delete_404(client):
 # ---------------------------------------------------------------------------
 
 
-def test_put_identity_malformed_json_returns_400(client):
-    r = client.put(
-        "/api/config/identity",
-        content=b"{not json at all",
-        headers={**AUTH, "Content-Type": "application/json"},
-    )
+@pytest.mark.parametrize(
+    "path,body",
+    [
+        ("/api/config/identity", b"{not json at all"),
+        ("/api/config/selfcare", b"{["),
+        ("/api/config/quiet_hours", b"not json"),
+        ("/api/config/routines", b"{not json"),
+        ("/api/config/speakers", b"{not json"),
+    ],
+)
+def test_put_malformed_json_returns_400(client, path, body):
+    r = client.put(path, content=body, headers={**AUTH, "Content-Type": "application/json"})
     assert r.status_code == 400, r.text
-
-
-def test_put_selfcare_malformed_json_returns_400(client):
-    r = client.put(
-        "/api/config/selfcare",
-        content=b"{[",
-        headers={**AUTH, "Content-Type": "application/json"},
-    )
-    assert r.status_code == 400
-
-
-def test_put_quiet_hours_malformed_json_returns_400(client):
-    r = client.put(
-        "/api/config/quiet_hours",
-        content=b"not json",
-        headers={**AUTH, "Content-Type": "application/json"},
-    )
-    assert r.status_code == 400
 
 
 # ---------------------------------------------------------------------------
@@ -490,11 +473,6 @@ def test_get_routines_returns_panel_shape(client):
     assert "ha_action" not in meds_step
 
 
-def test_get_routines_without_bearer_returns_401(client):
-    r = client.get("/api/config/routines")
-    assert r.status_code == 401
-
-
 def test_put_routines_happy_path_returns_reload_summary(client):
     """PUT happy path → 200 with response containing _reload.{loaded,rescheduled,removed}."""
     payload = {
@@ -546,15 +524,6 @@ def test_put_routines_empty_routines_returns_400(client):
     else:
         # Pydantic-formatted error list
         assert detail
-
-
-def test_put_routines_malformed_json_returns_400(client):
-    r = client.put(
-        "/api/config/routines",
-        content=b"{not json",
-        headers={**AUTH, "Content-Type": "application/json"},
-    )
-    assert r.status_code == 400, r.text
 
 
 def test_put_routines_preserves_ha_action_round_trip(client):
@@ -634,11 +603,6 @@ def test_get_speakers_returns_routes_and_categories(client):
     assert "default" in body["categories"]
 
 
-def test_get_speakers_without_bearer_returns_401(client):
-    r = client.get("/api/config/speakers")
-    assert r.status_code == 401
-
-
 def test_put_speakers_happy_path(client):
     r = client.put(
         "/api/config/speakers",
@@ -668,15 +632,6 @@ def test_put_speakers_bad_value_returns_400(client):
     )
     assert r.status_code == 400
     assert "must look like" in r.json()["detail"]
-
-
-def test_put_speakers_malformed_json_returns_400(client):
-    r = client.put(
-        "/api/config/speakers",
-        data=b"{not json",
-        headers={**AUTH, "Content-Type": "application/json"},
-    )
-    assert r.status_code == 400
 
 
 def test_put_speakers_empty_value_falls_back_to_legacy(client):

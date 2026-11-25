@@ -26,10 +26,11 @@ import pytest
 from fastapi import FastAPI
 
 from orchestrator.metrics import BACKGROUND_LLM_ERRORS
+from orchestrator.tests._helpers import metric_value
 
 
 def _err_count(caller: str, error_type: str) -> float:
-    return BACKGROUND_LLM_ERRORS.labels(caller=caller, error_type=error_type)._value.get()
+    return metric_value(BACKGROUND_LLM_ERRORS, caller=caller, error_type=error_type)
 
 
 def _model_resp(content: str) -> dict:
@@ -90,21 +91,18 @@ class TestTaskDecomposition:
             await td.decompose_task("Clean the desk")
         assert mock_call.await_args.kwargs["timeout"] == 120
 
-    async def test_model_exception_counts_and_apologises(self, td):
-        before = _err_count("task_decomp", "ReadTimeout")
+    @pytest.mark.parametrize(
+        "exc", [httpx.ReadTimeout("slow"), httpx.ConnectError("down")], ids=lambda e: type(e).__name__
+    )
+    async def test_model_exception_counts_by_class_and_apologises(self, td, exc):
+        error_type = type(exc).__name__
+        before = _err_count("task_decomp", error_type)
         with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
-            mock_call.side_effect = httpx.ReadTimeout("slow")
+            mock_call.side_effect = exc
             result = await td.decompose_task("Clean the desk")
         assert result.startswith("Sorry")
-        assert _err_count("task_decomp", "ReadTimeout") == before + 1
-        assert td._active_tasks == {} or not td._active_tasks
-
-    async def test_error_type_is_exception_class_name(self, td):
-        before = _err_count("task_decomp", "ConnectError")
-        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
-            mock_call.side_effect = httpx.ConnectError("down")
-            await td.decompose_task("Clean the desk")
-        assert _err_count("task_decomp", "ConnectError") == before + 1
+        assert _err_count("task_decomp", error_type) == before + 1
+        assert not td._active_tasks
 
     async def test_bad_json_is_not_a_background_llm_error(self, td):
         """Unparseable output falls back to one step; the model DID answer."""
@@ -306,14 +304,15 @@ def _client(app):
 
 
 class TestPalaceMineRoute:
-    async def test_happy_path(self, palace_app):
+    async def test_happy_path_and_sequential_requests(self, palace_app):
         app, _ = palace_app
         stats = {"total_sessions": 1, "extracted": 2, "stored": 2, "errors": 0}
         with patch("orchestrator.session_miner.mine_sessions", AsyncMock(return_value=stats)):
             async with _client(app) as c:
-                r = await c.post("/api/palace/mine", json={})
-        assert r.status_code == 200
-        assert r.json() == {"ok": True, **stats}
+                r1 = await c.post("/api/palace/mine", json={})
+                r2 = await c.post("/api/palace/mine", json={})
+        assert (r1.status_code, r2.status_code) == (200, 200)
+        assert r1.json() == {"ok": True, **stats}
 
     async def test_exception_returns_generic_500(self, palace_app):
         app, routes_palace = palace_app
@@ -350,12 +349,3 @@ class TestPalaceMineRoute:
         assert second.json()["ok"] is False
         assert first_resp.status_code == 200
         assert not routes_palace._MINE_LOCK.locked()
-
-    async def test_sequential_requests_both_succeed(self, palace_app):
-        app, _ = palace_app
-        stats = {"total_sessions": 0, "extracted": 0, "stored": 0, "errors": 0}
-        with patch("orchestrator.session_miner.mine_sessions", AsyncMock(return_value=stats)):
-            async with _client(app) as c:
-                r1 = await c.post("/api/palace/mine", json={})
-                r2 = await c.post("/api/palace/mine", json={})
-        assert (r1.status_code, r2.status_code) == (200, 200)

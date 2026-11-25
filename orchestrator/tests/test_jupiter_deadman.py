@@ -12,7 +12,6 @@ from __future__ import annotations
 import contextlib
 import http.client
 import http.server
-import importlib.util
 import json
 import logging
 import os
@@ -27,12 +26,13 @@ import threading
 import time
 import urllib.error
 import urllib.parse
-from pathlib import Path
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parents[2] / "monitoring" / "deadman" / "jupiter_deadman.py"
-_ALERT_RULES = Path(__file__).resolve().parents[2] / "monitoring" / "prometheus" / "alert-rules.yml"
+from orchestrator.tests._helpers import REPO_ROOT, load_script
+
+_SCRIPT = REPO_ROOT / "monitoring" / "deadman" / "jupiter_deadman.py"
+_ALERT_RULES = REPO_ROOT / "monitoring" / "prometheus" / "alert-rules.yml"
 
 pytestmark = pytest.mark.skipif(not _SCRIPT.is_file(), reason="needs monitoring/deadman/ (host-only test)")
 
@@ -60,11 +60,7 @@ def _ipv6_loopback() -> bool:
 
 @pytest.fixture(scope="module")
 def dm():
-    spec = importlib.util.spec_from_file_location("jupiter_deadman", _SCRIPT)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["jupiter_deadman"] = mod  # dataclasses need the module registered
-    spec.loader.exec_module(mod)
-    return mod
+    return load_script(_SCRIPT, "jupiter_deadman")
 
 
 def _cfg(dm, **overrides):
@@ -422,9 +418,20 @@ def test_allow_list_applied_at_accept(dm):
         assert srv.verify_request(None, ("10.0.0.248", 5000))
         assert srv.verify_request(None, ("::ffff:10.0.0.248", 5000, 0, 0))
         assert srv.verify_request(None, ("127.0.0.1", 5000))  # loopback: the owner's curl on Saturn
+        # A dual-stack "::" listener sees IPv4 loopback as ::ffff:127.0.0.1.
+        assert srv.verify_request(None, ("::ffff:127.0.0.1", 5000, 0, 0))
+        assert srv.verify_request(None, ("::1", 5000, 0, 0))
         assert not srv.verify_request(None, ("10.0.0.77", 5000))
         assert not srv.verify_request(None, ("192.0.2.1", 5000))
         assert app.heartbeats["forbidden"] == 2
+    finally:
+        srv.server_close()
+    app = dm.App(_cfg(dm, DEADMAN_ALLOW_FROM="fe80::1"))
+    srv = dm.DeadmanHTTPServer(("127.0.0.1", 0), app)
+    try:
+        assert srv.verify_request(None, ("fe80::1%eth0", 5000, 0, 2))  # scope id ignored
+        assert not srv.verify_request(None, ("fe80::2%eth0", 5000, 0, 2))
+        assert app.heartbeats["forbidden"] == 1
     finally:
         srv.server_close()
 
@@ -444,14 +451,15 @@ def test_deeply_nested_body_is_a_bad_request(server):
 
 
 def test_connection_deadline_frees_trickling_slots(server, dm, monkeypatch):
-    monkeypatch.setattr(dm, "CONNECTION_DEADLINE_SECONDS", 0.5)
+    monkeypatch.setattr(dm, "CONNECTION_DEADLINE_SECONDS", 0.2)
     app, port = server()
     hogs = [socket.create_connection(("127.0.0.1", port), timeout=5) for _ in range(dm.MAX_CONNECTIONS)]
     try:
         for h in hogs:
             h.sendall(b"POST /heartbeat HTTP/1.1\r\n")  # and then nothing more
-        time.sleep(1.5)  # past the per-connection deadline
-        assert _post(port, WATCHDOG) == 200
+        # The slots free up at the 0.2 s deadline, long before the per-read timeout would free them.
+        assert dm.SOCKET_TIMEOUT_SECONDS > 3
+        assert _post_eventually(port, WATCHDOG, within=3) == 200
     finally:
         for h in hogs:
             h.close()
@@ -569,20 +577,6 @@ def test_handle_error_logs_once_a_minute(dm, caplog):
         srv.server_close()
     lines = [r.getMessage() for r in caplog.records]
     assert lines == ["connection from 10.0.0.248 failed: ConnectionResetError (logged at most once a minute)"] * 2
-
-
-def test_allow_list_mapped_and_scoped_addresses(dm):
-    app = dm.App(_cfg(dm, DEADMAN_ALLOW_FROM="fe80::1"))
-    srv = dm.DeadmanHTTPServer(("127.0.0.1", 0), app)
-    try:
-        # A dual-stack "::" listener sees IPv4 loopback as ::ffff:127.0.0.1.
-        assert srv.verify_request(None, ("::ffff:127.0.0.1", 5000, 0, 0))
-        assert srv.verify_request(None, ("::1", 5000, 0, 0))
-        assert srv.verify_request(None, ("fe80::1%eth0", 5000, 0, 2))  # scope id ignored
-        assert not srv.verify_request(None, ("fe80::2%eth0", 5000, 0, 2))
-        assert app.heartbeats["forbidden"] == 1
-    finally:
-        srv.server_close()
 
 
 @pytest.mark.skipif(not _ipv6_loopback(), reason="no IPv6 loopback here")
@@ -765,16 +759,10 @@ def test_restart_after_long_stop_waits_for_a_heartbeat(ticking, tmp_path, dm):
     assert len(sent) == 1
 
 
-def test_unreadable_state_is_ignored(ticking, tmp_path):
-    make, *_ = ticking
-    (tmp_path / "state.json").write_text("{not json")
-    app = make(DEADMAN_STATE_DIR=str(tmp_path))
-    assert app.state.last_heartbeat_mono is None and not app.state.alerting
-
-
 @pytest.mark.parametrize(
     "content",
     [
+        "{not json",
         "[]",
         '"just a string"',
         '{"last_heartbeat_wall": "1799999000", "alerting": "yes"}',  # wrong types
@@ -947,9 +935,7 @@ def test_http_probe_status(dm, web, code, ok):
 
 
 def test_probes_refused(dm):
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]  # closed again when the block exits
+    port = _closed_port()
     for probe in (
         dm.Probe(name="t", kind="tcp", host="127.0.0.1", port=port),
         dm.Probe(name="h", kind="http", url=f"http://127.0.0.1:{port}/health"),
@@ -998,16 +984,16 @@ def test_non_http_answer_is_down_not_an_exception(dm, raw_server):
 def test_trickling_server_hits_the_total_deadline(dm, raw_server):
     def trickle(conn):
         with contextlib.suppress(OSError):
-            for byte in b"HTTP/1.0 200 OK\r\n":
+            for byte in b"HTTP/1.0 200 OK\r\n":  # 1.7 s in all, each byte well within the timeout
                 conn.sendall(bytes([byte]))
-                time.sleep(0.3)
+                time.sleep(0.1)
         conn.close()
 
     port = raw_server(trickle)
     started = time.monotonic()
-    result = dm.run_probe(dm.Probe(name="p", kind="http", url=f"http://127.0.0.1:{port}/"), timeout=1)
+    result = dm.run_probe(dm.Probe(name="p", kind="http", url=f"http://127.0.0.1:{port}/"), timeout=0.4)
     assert (result.ok, result.detail) == (False, "timeout")
-    assert time.monotonic() - started < 2
+    assert time.monotonic() - started < 1.4
 
 
 def test_status_line_split_across_reads(dm, raw_server):
@@ -1107,10 +1093,7 @@ def test_send_pushover_against_a_stub(dm, monkeypatch, reply, ok):
 
 
 def test_send_pushover_unreachable(dm, monkeypatch):
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    monkeypatch.setattr(dm, "PUSHOVER_URL", f"http://127.0.0.1:{port}/")
+    monkeypatch.setattr(dm, "PUSHOVER_URL", f"http://127.0.0.1:{_closed_port()}/")
     cfg = _cfg(dm, DEADMAN_DRY_RUN="false", PUSHOVER_USER_KEY="u", PUSHOVER_APP_TOKEN="a")
     assert dm.send_pushover(cfg, "T", "M", 1) is False
 
@@ -1163,14 +1146,14 @@ def _run_script(*args, **env):
     )
 
 
-def test_main_exit_codes(web):
+def test_main_exit_codes():
+    """The real entry point: serve needs the token; probe needs neither token nor Pushover keys
+    (exit 0 for "all up" is covered in-process by test_cmd_probe_exit_codes)."""
     gone = f"gone=tcp://127.0.0.1:{_closed_port()}"
     r = _run_script("serve", DEADMAN_PROBES=gone)  # no token
     assert r.returncode == 2 and r.stderr.startswith("ERROR config error: DEADMAN_WEBHOOK_TOKEN"), r.stderr
     r = _run_script("probe", DEADMAN_PROBES=gone)
     assert r.returncode == 1 and "DOWN" in r.stdout, r.stdout + r.stderr
-    r = _run_script("probe", DEADMAN_PROBES=f"web=http://127.0.0.1:{web}/200")
-    assert r.returncode == 0 and "All probes answered." in r.stdout, r.stdout + r.stderr
 
 
 def _wait_healthy(port, proc, within=10.0):

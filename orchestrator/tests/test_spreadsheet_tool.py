@@ -11,7 +11,7 @@ Covers:
 
 Metric invariant: every grist_client entry point bumps
 bgw_spreadsheet_total{action,result} exactly once — asserted via
-REGISTRY.get_sample_value deltas.
+metric_value deltas.
 """
 
 from __future__ import annotations
@@ -19,14 +19,11 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
-import os
-from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
 from httpx import Response
-from prometheus_client import REGISTRY
 
 from orchestrator import (
     grist_client,
@@ -34,6 +31,9 @@ from orchestrator import (
     tool_definitions,
     tool_handlers,  # noqa: F401 — registers the spreadsheet handler
 )
+from orchestrator.metrics import SPREADSHEET_TOTAL
+from orchestrator.tests._helpers import metric_value
+from orchestrator.tests.fixtures_memory import make_settings
 from orchestrator.tool_registry import execute_tool
 
 BASE = "http://grist.test"
@@ -53,18 +53,11 @@ def grist_on(monkeypatch):
 
 
 def _metric(action: str, result: str) -> float:
-    return REGISTRY.get_sample_value("bgw_spreadsheet_total", {"action": action, "result": result}) or 0.0
+    return metric_value(SPREADSHEET_TOTAL, action=action, result=result)
 
 
 def _total(action: str) -> float:
-    total = 0.0
-    for fam in REGISTRY.collect():
-        if fam.name != "bgw_spreadsheet":
-            continue
-        for s in fam.samples:
-            if s.name == "bgw_spreadsheet_total" and s.labels.get("action") == action:
-                total += s.value
-    return total
+    return metric_value(SPREADSHEET_TOTAL, action=action)
 
 
 class _Count:
@@ -150,16 +143,8 @@ class TestParseGristDocs:
         assert parse_grist_docs(f"bad,gym={GYM},x=1") == {"gym": GYM}
 
 
-_BASE_ENV = {"HA_TOKEN": "x", "API_TOKEN": "x", "PIHOLE_PASSWORD": "x"}
-
-
 class TestValidateGristConfig:
-    def _settings(self, **env):
-        from orchestrator.config import Settings
-
-        full = {**_BASE_ENV, **env}
-        with patch.dict(os.environ, full, clear=False):
-            return Settings()
+    _settings = staticmethod(make_settings)
 
     def test_valid_stays_enabled(self):
         s = self._settings(

@@ -5,10 +5,11 @@ PREVIOUS user turn, so sending a photo after "turn off the kitchen lights"
 re-ran that Home Assistant command via the fast-path and never answered the
 photo. Also: vision text appended to a photo turn is not the user's words, so
 it must not drive the selfcare auto-log.
-"""
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+The end-to-end half (cloud_brain skips the HA fast path on a photo turn, and
+still runs it on the same text without a photo) is in
+test_image_parts_never_forwarded.py.
+"""
 
 from orchestrator.unified_loop import _detect_selfcare_action, _last_user_text
 
@@ -49,62 +50,3 @@ def test_vision_analysis_text_is_stripped():
     text = _last_user_text(processed)
     assert text == "what does this say?"
     assert _detect_selfcare_action(text) is None
-
-
-def _make_brain(loop_mock, fast_path_mock, vision_images=1):
-    from orchestrator.cloud_brain import CloudBrain
-
-    async def fake_vision(messages, routing_info):
-        routing_info["vision_images"] = vision_images
-        return messages
-
-    brain = CloudBrain.__new__(CloudBrain)
-    brain._process_vision = fake_vision
-    brain._mode_router = SimpleNamespace(route=lambda text: SimpleNamespace(mode="baseline", intensity="low", tags=[]))
-    brain._is_greeting = lambda text: True  # skip RAG prefetch
-    brain._get_unified_system_prompt = lambda *a, **k: "sys"
-    brain._check_model_health = AsyncMock(return_value=True)
-    brain._model_url = "http://fake:8080/v1"
-    brain._model_name = "fake"
-    brain._fallback_model_url = ""
-    brain._get_all_tools = lambda: []
-    brain._run_unified_loop = loop_mock
-    brain._schedule_auto_learn = lambda messages: None
-    brain._try_fast_path = fast_path_mock
-    return brain
-
-
-async def test_fast_path_skipped_on_photo_turn():
-    loop_mock = AsyncMock(return_value="That's a red mug.")
-    fast_path = AsyncMock(return_value=SimpleNamespace(handled=True, action="turn_off", entity_name="kitchen"))
-    brain = _make_brain(loop_mock, fast_path, vision_images=1)
-    messages = [
-        {"role": "user", "content": "turn off the kitchen lights"},
-        {"role": "assistant", "content": "Done!"},
-        {"role": "user", "content": [_IMG]},
-    ]
-
-    with patch("orchestrator.cloud_brain.is_first_chat", return_value=False):
-        await brain._chat_unified_inner(
-            messages, False, None, object(), _last_user_text(messages), {"tool_calls": []}, False
-        )
-
-    fast_path.assert_not_awaited()
-    loop_mock.assert_awaited_once()
-
-
-async def test_fast_path_still_runs_on_text_turn():
-    loop_mock = AsyncMock(return_value="unused")
-    fast_path = AsyncMock(
-        return_value=SimpleNamespace(handled=True, action="turn_off", entity_name="kitchen", response_text="Done!")
-    )
-    brain = _make_brain(loop_mock, fast_path, vision_images=0)
-    messages = [{"role": "user", "content": "turn off the kitchen lights"}]
-
-    with patch("orchestrator.cloud_brain.is_first_chat", return_value=False):
-        await brain._chat_unified_inner(
-            messages, False, None, object(), "turn off the kitchen lights", {"tool_calls": []}, False
-        )
-
-    fast_path.assert_awaited_once()
-    loop_mock.assert_not_awaited()

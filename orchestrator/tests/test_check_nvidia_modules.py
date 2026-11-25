@@ -12,27 +12,16 @@ CI and in the throwaway test container (which mounts scripts/).
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import stat
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "check_nvidia_modules.py"
+from orchestrator.tests._helpers import REPO_ROOT, load_script
 
-
-def _load():
-    spec = importlib.util.spec_from_file_location("check_nvidia_modules_under_test", _SCRIPT)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-cnm = _load()
+cnm = load_script(REPO_ROOT / "scripts" / "check_nvidia_modules.py", "check_nvidia_modules_under_test")
 
 PROM = "jess_nvidia_modules.prom"
 NOW = 1_800_000_000.7
@@ -107,15 +96,10 @@ def _rows(text: str) -> dict[tuple[str, str], int]:
 # --------------------------------------------------------------------------
 
 
-def test_kernels_sort_numerically_not_as_strings(host):
+def test_kernels_sort_numerically_and_the_newest_is_the_next_boot_row(host):
     for release in (K151, K1015, K99, K149):  # deliberately out of order
         host.kernel(release)
     assert cnm.installed_kernels(host.boot) == [K99, K149, K151, K1015]
-
-
-def test_newest_kernel_is_the_next_boot_row(host):
-    for release in (K151, K1015, K99, K149):
-        host.kernel(release)
     rows = cnm.check(host.boot, host.modules, K149)
     assert rows == [(K149, "running", True), (K1015, "next", True)]
 
@@ -305,21 +289,18 @@ def test_exit_1_lists_both_kernels_when_both_miss(host, capsys):
     [
         pytest.param([], id="empty"),
         pytest.param(["vmlinuz", "vmlinuz.old", "vmlinuz-6.8.0-151-generic.efi.signed"], id="only-decoys"),
+        pytest.param(None, id="boot-dir-missing"),
     ],
 )
 def test_exit_2_when_no_kernel_is_installed(host, capsys, decoys):
-    for name in decoys:
+    argv = host.args(K151)
+    if decoys is None:
+        argv[argv.index("--boot-dir") + 1] = str(host.root / "no-such-boot")
+    for name in decoys or ():
         (host.boot / name).write_bytes(b"not a kernel")
-    assert cnm.main(host.args(K151)) == 2
+    assert cnm.main(argv) == 2
     assert "check failed: no kernel images found" in capsys.readouterr().err
     assert not (host.metrics / PROM).exists()
-
-
-def test_exit_2_when_boot_dir_is_missing(host, capsys):
-    argv = host.args(K151)
-    argv[argv.index("--boot-dir") + 1] = str(host.root / "no-such-boot")
-    assert cnm.main(argv) == 2
-    assert "check failed" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("kind", ["missing", "is-a-file"])
@@ -380,21 +361,6 @@ def test_default_running_kernel_is_uname_release(host, capsys):
 # --------------------------------------------------------------------------
 
 
-def test_metrics_file_exact_text(host):
-    host.kernel(K149)
-    host.kernel(K151, module=None)
-    cnm.main(host.args(K149))
-    assert host.prom() == (
-        "# HELP jess_nvidia_module_present 1 if an NVIDIA kernel module is installed for this kernel.\n"
-        "# TYPE jess_nvidia_module_present gauge\n"
-        f'jess_nvidia_module_present{{kernel="{K149}",boot="running"}} 1\n'
-        f'jess_nvidia_module_present{{kernel="{K151}",boot="next"}} 0\n'
-        "# HELP jess_nvidia_module_check_timestamp_seconds When check_nvidia_modules last ran.\n"
-        "# TYPE jess_nvidia_module_check_timestamp_seconds gauge\n"
-        "jess_nvidia_module_check_timestamp_seconds 1800000000\n"
-    )
-
-
 def test_metrics_file_parses_as_prometheus_exposition(host):
     parser = pytest.importorskip("prometheus_client.parser")
     host.kernel(K149)
@@ -405,28 +371,24 @@ def test_metrics_file_parses_as_prometheus_exposition(host):
     assert present == {(K149, "running"): 1.0, (K151, "next"): 0.0}
     (stamp,) = families["jess_nvidia_module_check_timestamp_seconds"].samples
     assert stamp.value == 1_800_000_000
+    assert "jess_nvidia_module_check_timestamp_seconds 1800000000\n" in host.prom()  # whole seconds, no exponent
+    assert {f.type for f in families.values()} == {"gauge"}
 
 
-def test_metrics_write_is_atomic_and_world_readable(host):
+def test_metrics_write_replaces_atomically_and_is_world_readable(host):
     host.kernel(K151)
+    (host.metrics / PROM).write_text('jess_nvidia_module_present{kernel="stale",boot="next"} 0\n')
+    (host.metrics / PROM).chmod(0o600)
+    (host.metrics / "other_collector.prom").write_text("other 1\n")
     old_umask = os.umask(0o077)  # a strict umask must not leave node_exporter unable to read it
     try:
         assert cnm.main(host.args(K151)) == 0
     finally:
         os.umask(old_umask)
-    assert sorted(p.name for p in host.metrics.iterdir()) == [PROM]  # no temp file left behind
-    assert stat.S_IMODE((host.metrics / PROM).stat().st_mode) == 0o644
-
-
-def test_existing_metrics_file_is_replaced(host):
-    host.kernel(K151)
-    (host.metrics / PROM).write_text('jess_nvidia_module_present{kernel="stale",boot="next"} 0\n')
-    (host.metrics / PROM).chmod(0o600)
-    (host.metrics / "other_collector.prom").write_text("other 1\n")
-    assert cnm.main(host.args(K151)) == 0
     assert "stale" not in host.prom()
     assert _rows(host.prom()) == {(K151, "running"): 1, (K151, "next"): 1}
     assert stat.S_IMODE((host.metrics / PROM).stat().st_mode) == 0o644
+    # no temp file left behind, the other collector's file untouched
     assert sorted(p.name for p in host.metrics.iterdir()) == sorted(["other_collector.prom", PROM])
 
 

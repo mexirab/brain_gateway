@@ -2,17 +2,13 @@
 
 import pytest
 
+from orchestrator.routes_tasks import router
+from orchestrator.tests.fixtures_selfcare import router_client
+
 
 @pytest.fixture
 def client():
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    from orchestrator.routes_tasks import router
-
-    app = FastAPI()
-    app.include_router(router)
-    return TestClient(app)
+    return router_client(router)
 
 
 def test_add_list_complete_flow(client, tmp_db):

@@ -14,29 +14,15 @@ These tests pin two things a silent refactor could break:
      cron:<id>.
   2. _on_job_missed() increments the counter under the right family label and
      survives a missing/None scheduled_run_time.
-
-Runs inside the brain-orchestrator container (full deps available). Skips
-gracefully when orchestrator dependencies are unavailable locally.
 """
 
 from datetime import datetime
 
 import pytest
 
-
-def _can_import():
-    try:
-        from orchestrator import metrics  # noqa: F401
-
-        return True
-    except (ImportError, ModuleNotFoundError):
-        return False
-
-
-_skip_no_deps = pytest.mark.skipif(
-    not _can_import(),
-    reason="orchestrator.metrics requires prometheus_client (container-only)",
-)
+from orchestrator.metrics import SCHEDULER_JOBS_MISSED, scheduler_job_family
+from orchestrator.orchestrator import _on_job_missed
+from orchestrator.tests._helpers import metric_value
 
 
 class _FakeEvent:
@@ -49,9 +35,7 @@ class _FakeEvent:
 
 
 def _missed_count(family):
-    from orchestrator.metrics import SCHEDULER_JOBS_MISSED
-
-    return SCHEDULER_JOBS_MISSED.labels(job_family=family)._value.get()
+    return metric_value(SCHEDULER_JOBS_MISSED, job_family=family)
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +43,6 @@ def _missed_count(family):
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
 @pytest.mark.parametrize(
     "job_id,expected",
     [
@@ -80,22 +63,14 @@ def _missed_count(family):
         ("evening_briefing", "cron:evening_briefing"),
         ("dnd_auto_unmute", "cron:dnd_auto_unmute"),
         ("wind_down_dim", "cron:wind_down_dim"),
+        # The whole point of the family collapse: a reminder id built from
+        # user-influenced content still maps to the fixed 'reminder' family,
+        # never to a per-value cron:<id> series that would explode cardinality.
+        pytest.param("reminder_" + "x" * 200, "reminder", id="user-influenced-long-reminder-id"),
     ],
 )
 def test_job_family_classification(job_id, expected):
-    from orchestrator.metrics import scheduler_job_family
-
     assert scheduler_job_family(job_id) == expected
-
-
-@_skip_no_deps
-def test_user_influenced_id_cannot_reach_unbounded_label():
-    """The whole point of the family collapse: a reminder id built from
-    user-influenced content still maps to the fixed 'reminder' family, never to
-    a per-value cron:<id> series that would explode cardinality."""
-    from orchestrator.metrics import scheduler_job_family
-
-    assert scheduler_job_family("reminder_" + "x" * 200) == "reminder"
 
 
 # ---------------------------------------------------------------------------
@@ -103,32 +78,18 @@ def test_user_influenced_id_cannot_reach_unbounded_label():
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
-def test_on_job_missed_increments_family_counter():
-    from orchestrator.orchestrator import _on_job_missed
-
-    before = _missed_count("reminder")
-    _on_job_missed(_FakeEvent("reminder_abc-uuid", datetime(2026, 7, 7, 9, 30)))
-    assert _missed_count("reminder") == before + 1
-
-
-@_skip_no_deps
 def test_on_job_missed_labels_by_family_not_raw_id():
-    """Two distinct dynamic reminder ids must land on the SAME series."""
-    from orchestrator.orchestrator import _on_job_missed
-
+    """Each missed job bumps the counter once, and two distinct dynamic
+    reminder ids land on the SAME series."""
     before = _missed_count("reminder")
     _on_job_missed(_FakeEvent("reminder_one", datetime(2026, 7, 7, 9, 30)))
     _on_job_missed(_FakeEvent("reminder_two_retry", datetime(2026, 7, 7, 9, 31)))
     assert _missed_count("reminder") == before + 2
 
 
-@_skip_no_deps
 def test_on_job_missed_survives_missing_scheduled_time():
     """A malformed event with no scheduled_run_time must not raise (isoformat
     guard) — the counter still increments."""
-    from orchestrator.orchestrator import _on_job_missed
-
     before = _missed_count("cron:calendar_poll")
     _on_job_missed(_FakeEvent("calendar_poll", None))
     assert _missed_count("cron:calendar_poll") == before + 1

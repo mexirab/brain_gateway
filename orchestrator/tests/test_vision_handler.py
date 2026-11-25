@@ -33,26 +33,17 @@ def _mock_shared():
         yield mock
 
 
-class TestParseDataUri:
-    def test_full_data_uri_jpeg(self):
-        mime, data = _parse_data_uri("data:image/jpeg;base64,/9j/4AAQ")
-        assert mime == "image/jpeg"
-        assert data == "/9j/4AAQ"
-
-    def test_full_data_uri_png(self):
-        mime, data = _parse_data_uri("data:image/png;base64,iVBORw0K")
-        assert mime == "image/png"
-        assert data == "iVBORw0K"
-
-    def test_raw_base64_assumes_jpeg(self):
-        mime, data = _parse_data_uri("/9j/4AAQSkZJRg==")
-        assert mime == "image/jpeg"
-        assert data == "/9j/4AAQSkZJRg=="
-
-    def test_webp_data_uri(self):
-        mime, data = _parse_data_uri("data:image/webp;base64,UklGR")
-        assert mime == "image/webp"
-        assert data == "UklGR"
+@pytest.mark.parametrize(
+    "uri, mime, data",
+    [
+        pytest.param("data:image/jpeg;base64,/9j/4AAQ", "image/jpeg", "/9j/4AAQ", id="jpeg"),
+        pytest.param("data:image/png;base64,iVBORw0K", "image/png", "iVBORw0K", id="png"),
+        pytest.param("data:image/webp;base64,UklGR", "image/webp", "UklGR", id="webp"),
+        pytest.param("/9j/4AAQSkZJRg==", "image/jpeg", "/9j/4AAQSkZJRg==", id="raw-base64-assumes-jpeg"),
+    ],
+)
+def test_parse_data_uri(uri, mime, data):
+    assert _parse_data_uri(uri) == (mime, data)
 
 
 class TestEstimateImageSize:
@@ -131,10 +122,6 @@ class TestExtractImages:
         ]
         assert extract_images_from_messages(messages) == []
 
-    def test_string_content_ignored(self):
-        messages = [{"role": "user", "content": "Just text, no images"}]
-        assert extract_images_from_messages(messages) == []
-
     def test_image_without_text(self):
         messages = [
             {
@@ -150,13 +137,11 @@ class TestExtractImages:
 
 
 class TestAnalyzeImage:
-    @pytest.mark.asyncio
     async def test_vision_disabled(self, _mock_shared):
         _mock_shared.VISION_ENABLED = False
         result = await analyze_image("data:image/jpeg;base64,test", "describe")
         assert "disabled" in result.lower()
 
-    @pytest.mark.asyncio
     async def test_unsupported_mime_type(self):
         result = await analyze_image(
             "data:application/pdf;base64,test",
@@ -165,7 +150,6 @@ class TestAnalyzeImage:
         )
         assert "Unsupported" in result
 
-    @pytest.mark.asyncio
     async def test_image_too_large(self, _mock_shared):
         _mock_shared.VISION_MAX_IMAGE_SIZE = 100
         large_b64 = base64.b64encode(b"x" * 200).decode()
@@ -176,7 +160,6 @@ class TestAnalyzeImage:
         )
         assert "too large" in result.lower()
 
-    @pytest.mark.asyncio
     async def test_successful_analysis(self):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -205,42 +188,6 @@ class TestAnalyzeImage:
         assert any(p["type"] == "text" for p in content)
         assert any(p["type"] == "image_url" for p in content)
 
-    @pytest.mark.asyncio
-    async def test_timeout_handling(self):
-        import httpx
-
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
-
-        result = await analyze_image(
-            "data:image/jpeg;base64,/9j/4AAQ",
-            "describe",
-            http_client=mock_client,
-        )
-        assert "timed out" in result.lower()
-
-    @pytest.mark.asyncio
-    async def test_http_error_handling(self):
-        import httpx
-
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_response.text = "Internal Server Error"
-        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "500", request=MagicMock(), response=mock_response
-        )
-
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_response)
-
-        result = await analyze_image(
-            "data:image/jpeg;base64,/9j/4AAQ",
-            "describe",
-            http_client=mock_client,
-        )
-        assert "error" in result.lower()
-
-    @pytest.mark.asyncio
     async def test_no_http_client(self, _mock_shared):
         _mock_shared._http = None
         result = await analyze_image("data:image/jpeg;base64,test", "describe")
@@ -248,12 +195,10 @@ class TestAnalyzeImage:
 
 
 class TestCheckVisionHealth:
-    @pytest.mark.asyncio
     async def test_disabled(self, _mock_shared):
         _mock_shared.VISION_ENABLED = False
         assert await check_vision_health() is False
 
-    @pytest.mark.asyncio
     async def test_healthy(self):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -262,7 +207,6 @@ class TestCheckVisionHealth:
 
         assert await check_vision_health(http_client=mock_client) is True
 
-    @pytest.mark.asyncio
     async def test_unhealthy(self):
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(side_effect=Exception("connection refused"))

@@ -9,16 +9,16 @@ Web search observability + voice budget.
 - unified_loop: shared.voice_turn_var is True only while a voice turn's tool
   runs (also across asyncio.gather), never after; the voice deadline reaches
   the SearXNG request end to end.
-- cloud_brain: real-streamed voice turns record bgw_voice_pipeline_seconds
-  when the stream ends, not when the StreamingResponse is returned — exactly
-  once, including the fallback-model path and a client hang-up.
+
+When real-streamed voice turns record bgw_voice_pipeline_seconds (at the end
+of the stream, once, fallback and hang-up included) is pinned in
+test_streamed_request_latency.py.
 
 No real SearXNG traffic: respx and stubs only (a burst of real searches got
 the upstream engines suspended on 2026-10-25).
 """
 
 import asyncio
-import json
 import logging
 import time
 from unittest.mock import AsyncMock, patch
@@ -28,9 +28,11 @@ import pytest
 import respx
 from prometheus_client import REGISTRY
 
+from orchestrator import shared
+from orchestrator.tests.fixtures_loop import reply, run_loop, tool_call, tools_named
+from orchestrator.unified_loop import run_unified_tool_loop
+
 SX = "http://searxng-test:8080"
-STREAMED = {"path": "streamed"}
-BUFFERED = {"path": "buffered"}
 QUERY = "zebra crossing opening hours"  # a sentinel that must never reach logs
 
 
@@ -40,16 +42,6 @@ def _fresh_engine_labels(monkeypatch):
     from orchestrator import web_search
 
     monkeypatch.setattr(web_search, "_seen_engine_labels", set())
-
-
-@pytest.fixture
-def web_search_registered(monkeypatch):
-    """Tests that go through execute_tool need the real registry entry:
-    test_tool_registry_module clears the global registry without restoring
-    it, so in a full run every test file sorted after it starts empty."""
-    from orchestrator import tool_handlers, tool_registry
-
-    monkeypatch.setitem(tool_registry._registry, "web_search", tool_handlers._reg_web_search)
 
 
 def _sample(name, labels=None):
@@ -73,9 +65,6 @@ def _assert_no_query_in_logs(caplog):
 # ---------------------------------------------------------------------------
 # SearXNG client
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
 @respx.mock
 async def test_client_ok_with_partial_engine_failures():
     respx.get(f"{SX}/search").mock(
@@ -93,7 +82,6 @@ async def test_client_ok_with_partial_engine_failures():
     assert r.unresponsive_engines == [("duckduckgo", "timeout")]
 
 
-@pytest.mark.asyncio
 @respx.mock
 async def test_client_empty_with_suspended_engines():
     respx.get(f"{SX}/search").mock(
@@ -125,7 +113,6 @@ async def test_client_empty_with_suspended_engines():
     }
 
 
-@pytest.mark.asyncio
 @respx.mock
 async def test_client_no_results_when_every_engine_answered():
     respx.get(f"{SX}/search").mock(return_value=httpx.Response(200, json={"results": [], "unresponsive_engines": []}))
@@ -133,7 +120,6 @@ async def test_client_no_results_when_every_engine_answered():
     assert r.success and r.outcome == "no_results"
 
 
-@pytest.mark.asyncio
 @respx.mock
 async def test_client_http_error_is_error_and_logs_no_url(caplog):
     respx.get(f"{SX}/search").mock(return_value=httpx.Response(503))
@@ -144,7 +130,6 @@ async def test_client_http_error_is_error_and_logs_no_url(caplog):
     _assert_no_query_in_logs(caplog)
 
 
-@pytest.mark.asyncio
 @respx.mock
 async def test_client_read_timeout_is_timeout(caplog):
     respx.get(f"{SX}/search").mock(side_effect=httpx.ReadTimeout(""))
@@ -157,7 +142,6 @@ async def test_client_read_timeout_is_timeout(caplog):
     _assert_no_query_in_logs(caplog)
 
 
-@pytest.mark.asyncio
 @respx.mock
 async def test_client_transport_error_message_never_leaks(caplog):
     leaky = f"connect failed for {SX}/search?q={QUERY}"
@@ -170,7 +154,6 @@ async def test_client_transport_error_message_never_leaks(caplog):
     _assert_no_query_in_logs(caplog)
 
 
-@pytest.mark.asyncio
 @respx.mock
 async def test_client_bad_json_is_error():
     respx.get(f"{SX}/search").mock(return_value=httpx.Response(200, content=b"<html>not json</html>"))
@@ -178,7 +161,6 @@ async def test_client_bad_json_is_error():
     assert not r.success and r.outcome == "error"
 
 
-@pytest.mark.asyncio
 @respx.mock
 async def test_client_deadline_bounds_whole_request():
     async def slow(request):
@@ -192,7 +174,6 @@ async def test_client_deadline_bounds_whole_request():
     assert r.outcome == "timeout"
 
 
-@pytest.mark.asyncio
 @respx.mock
 async def test_client_passes_timeout_to_shared_http_client():
     from orchestrator.web_search import DEFAULT_TIMEOUT_SECONDS, SearXNGClient
@@ -263,7 +244,6 @@ def _resp(**kw):
     return SearchResponse(query=QUERY, **kw)
 
 
-@pytest.mark.asyncio
 async def test_tool_counts_ok_typed_turn_with_default_timeout():
     from orchestrator import tool_handlers
     from orchestrator.web_search import DEFAULT_TIMEOUT_SECONDS, SearchResult
@@ -279,9 +259,8 @@ async def test_tool_counts_ok_typed_turn_with_default_timeout():
     assert _sample("bgw_web_search_total", {"result": "ok", "voice": "false"}) == before + 1
 
 
-@pytest.mark.asyncio
 async def test_tool_voice_turn_uses_voice_deadline_and_counts_timeout():
-    from orchestrator import shared, tool_handlers
+    from orchestrator import tool_handlers
     from orchestrator.web_search import VOICE_TIMEOUT_SECONDS
 
     fake = _fake_client(_resp(success=False, outcome="timeout", error="Search timed out after 5 seconds"))
@@ -297,7 +276,6 @@ async def test_tool_voice_turn_uses_voice_deadline_and_counts_timeout():
     assert _sample("bgw_web_search_total", {"result": "timeout", "voice": "true"}) == before + 1
 
 
-@pytest.mark.asyncio
 async def test_tool_empty_counts_zero_results_and_engines(caplog):
     from orchestrator import tool_handlers
 
@@ -318,7 +296,6 @@ async def test_tool_empty_counts_zero_results_and_engines(caplog):
     _assert_no_query_in_logs(caplog)
 
 
-@pytest.mark.asyncio
 async def test_tool_no_results_is_not_a_failure(caplog):
     from orchestrator import tool_handlers
 
@@ -334,7 +311,6 @@ async def test_tool_no_results_is_not_a_failure(caplog):
     assert not [r for r in caplog.records if r.name.startswith("orchestrator") and r.levelno >= logging.WARNING]
 
 
-@pytest.mark.asyncio
 async def test_tool_ok_still_counts_unresponsive_engines(caplog):
     """Results came back but some engines are down: still "ok", yet the engines
     are counted — the early sign of a suspension before searches go empty."""
@@ -356,7 +332,6 @@ async def test_tool_ok_still_counts_unresponsive_engines(caplog):
     assert not [r for r in caplog.records if r.name.startswith("orchestrator") and r.levelno >= logging.WARNING]
 
 
-@pytest.mark.asyncio
 async def test_tool_empty_query_is_not_a_search():
     from orchestrator import tool_handlers
 
@@ -367,7 +342,6 @@ async def test_tool_empty_query_is_not_a_search():
     fake.search.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "args, expected",
     [
@@ -376,7 +350,7 @@ async def test_tool_empty_query_is_not_a_search():
         ({"query": "q", "category": "free text from the model", "time_range": "since 1999"}, ("q", "general", None)),
     ],
 )
-async def test_registered_tool_clamps_category_and_time_range(web_search_registered, args, expected):
+async def test_registered_tool_clamps_category_and_time_range(args, expected):
     from orchestrator import tool_handlers
 
     inner = AsyncMock(return_value="ok")
@@ -401,27 +375,14 @@ def test_web_search_total_is_preseeded():
 # unified_loop: voice flag reaches the tool, then is cleared
 # ---------------------------------------------------------------------------
 
-_TOOLS = [
-    {"type": "function", "function": {"name": n, "description": n, "parameters": {"type": "object"}}}
-    for n in ("web_search", "search_memory")
-]
+_TOOLS = tools_named("web_search", "search_memory")
 
 
 def _llm(content="", tool_calls=None):
-    message = {"content": content}
-    if tool_calls:
-        message["tool_calls"] = tool_calls
-    return {"choices": [{"message": message, "finish_reason": "tool_calls" if tool_calls else "stop"}]}
+    return reply(content, tool_calls, finish_reason="tool_calls" if tool_calls else "stop")
 
 
-def _call(name, args, call_id):
-    return {"id": call_id, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
-
-
-async def _run_loop(is_voice, tool_calls):
-    from orchestrator import shared
-    from orchestrator.unified_loop import run_unified_tool_loop
-
+async def test_loop_voice_flag_reaches_parallel_tool_calls():
     seen = []
 
     async def fake_execute(name, args):
@@ -429,59 +390,35 @@ async def _run_loop(is_voice, tool_calls):
         seen.append((name, shared.voice_turn_var.get()))
         return "result"
 
-    call_model = AsyncMock(side_effect=[_llm(tool_calls=tool_calls), _llm("done")])
-    with (
-        patch("orchestrator.orchestrator.call_model", call_model),
-        patch("orchestrator.tool_handlers.execute_tool", fake_execute),
-    ):
-        out = await run_unified_tool_loop(
-            messages=[{"role": "user", "content": "look it up"}],
-            system_prompt="sys",
-            tools=_TOOLS,
-            model_url="http://fake:8080/v1",
-            model_name="m",
-            http_client=None,
-            max_rounds=3,
-            is_voice=is_voice,
-        )
-    return out, seen
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("is_voice", [True, False])
-async def test_loop_sets_voice_flag_for_the_tool_only(is_voice):
-    from orchestrator import shared
-
-    out, seen = await _run_loop(is_voice, [_call("web_search", {"query": "x"}, "c1")])
+    calls = [tool_call("web_search", {"query": "a"}, "c1"), tool_call("search_memory", {"query": "b"}, "c2")]
+    call_model = AsyncMock(side_effect=[_llm(tool_calls=calls), _llm("done")])
+    out = await run_loop(
+        call_model,
+        fake_execute,
+        messages=[{"role": "user", "content": "look it up"}],
+        tools=_TOOLS,
+        max_rounds=3,
+        is_voice=True,
+    )
     assert out == "done"
-    assert seen == [("web_search", is_voice)]
-    assert shared.voice_turn_var.get() is False
-
-
-@pytest.mark.asyncio
-async def test_loop_voice_flag_reaches_parallel_tool_calls():
-    from orchestrator import shared
-
-    calls = [_call("web_search", {"query": "a"}, "c1"), _call("search_memory", {"query": "b"}, "c2")]
-    _, seen = await _run_loop(True, calls)
     assert sorted(seen) == [("search_memory", True), ("web_search", True)]
     assert shared.voice_turn_var.get() is False
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("is_voice, deadline", [(True, 5.0), (False, 15.0)])
-async def test_voice_deadline_reaches_searxng_through_the_loop(web_search_registered, monkeypatch, is_voice, deadline):
+async def test_voice_deadline_reaches_searxng_through_the_loop(monkeypatch, is_voice, deadline):
     """End to end, nothing stubbed between the loop and httpx: unified loop →
     voice_turn_var → execute_tool("web_search") → SearXNGClient → the request
     to (mocked) SearXNG carries the voice or the default timeout."""
-    from orchestrator import shared, web_search
-    from orchestrator.unified_loop import run_unified_tool_loop
+    from orchestrator import web_search
 
     monkeypatch.setattr(shared, "_http", None)
     monkeypatch.setattr(web_search, "_search_client", _client())
     voice = "true" if is_voice else "false"
     before = _sample("bgw_web_search_total", {"result": "ok", "voice": voice})
-    call_model = AsyncMock(side_effect=[_llm(tool_calls=[_call("web_search", {"query": QUERY}, "c1")]), _llm("done")])
+    call_model = AsyncMock(
+        side_effect=[_llm(tool_calls=[tool_call("web_search", {"query": QUERY}, "c1")]), _llm("done")]
+    )
     # assert_all_mocked (the default): any other request fails, never leaves the box.
     with respx.mock(assert_all_called=True) as sx, patch("orchestrator.orchestrator.call_model", call_model):
         route = sx.get(f"{SX}/search").mock(
@@ -502,160 +439,3 @@ async def test_voice_deadline_reaches_searxng_through_the_loop(web_search_regist
     assert route.calls.last.request.extensions["timeout"]["read"] == deadline
     assert _sample("bgw_web_search_total", {"result": "ok", "voice": voice}) == before + 1
     assert shared.voice_turn_var.get() is False
-
-
-# ---------------------------------------------------------------------------
-# cloud_brain: streamed voice latency is recorded when the stream ends
-# ---------------------------------------------------------------------------
-
-
-def _make_brain(loop_fn):
-    from orchestrator.cloud_brain import CloudBrain
-
-    brain = CloudBrain.__new__(CloudBrain)
-    brain._run_unified_loop = loop_fn
-    brain._fallback_model_url = ""
-    brain._fallback_model_name = "fb"
-    brain._get_all_tools = lambda: []
-    brain._schedule_auto_learn = lambda messages: None
-    brain._last_user_text = lambda messages: "hi"
-    return brain
-
-
-async def _drain(response):
-    async for _ in response.body_iterator:
-        pass
-
-
-def _stream(brain, is_voice, started_at=None):
-    return brain._stream_loop_response(
-        messages=[{"role": "user", "content": "hi"}],
-        system_prompt="s",
-        tools=[],
-        model_url="u",
-        model_name="m",
-        is_voice=is_voice,
-        started_at=started_at,
-    )
-
-
-@pytest.mark.asyncio
-async def test_streamed_voice_turn_records_latency_at_stream_end():
-    async def loop_fn(**kw):
-        await kw["on_delta"]("Hello")
-        await asyncio.sleep(0.05)  # the tool rounds
-        return "Hello"
-
-    count0 = _sample("bgw_voice_pipeline_seconds_count", STREAMED)
-    sum0 = _sample("bgw_voice_pipeline_seconds_sum", STREAMED)
-    ttft0 = _sample("bgw_chat_ttft_seconds_count", {"voice": "true"})
-    resp = _stream(_make_brain(loop_fn), True, started_at=time.time() - 2.0)
-    # Building the response records nothing — the loop hasn't run yet.
-    assert _sample("bgw_voice_pipeline_seconds_count", STREAMED) == count0
-    await _drain(resp)
-    assert _sample("bgw_voice_pipeline_seconds_count", STREAMED) == count0 + 1
-    assert _sample("bgw_voice_pipeline_seconds_sum", STREAMED) - sum0 >= 2.0
-    assert _sample("bgw_chat_ttft_seconds_count", {"voice": "true"}) == ttft0 + 1
-
-
-@pytest.mark.asyncio
-async def test_streamed_voice_turn_records_latency_when_loop_fails():
-    async def loop_fn(**kw):
-        raise RuntimeError("boom")
-
-    count0 = _sample("bgw_voice_pipeline_seconds_count", STREAMED)
-    await _drain(_stream(_make_brain(loop_fn), True, started_at=time.time()))
-    assert _sample("bgw_voice_pipeline_seconds_count", STREAMED) == count0 + 1
-
-
-@pytest.mark.asyncio
-async def test_streamed_typed_turn_records_no_voice_latency():
-    async def loop_fn(**kw):
-        await kw["on_delta"]("Hello")
-        return "Hello"
-
-    count0 = _sample("bgw_voice_pipeline_seconds_count", STREAMED)
-    ttft0 = _sample("bgw_chat_ttft_seconds_count", {"voice": "false"})
-    await _drain(_stream(_make_brain(loop_fn), False))
-    assert _sample("bgw_voice_pipeline_seconds_count", STREAMED) == count0
-    assert _sample("bgw_chat_ttft_seconds_count", {"voice": "false"}) == ttft0 + 1
-
-
-@pytest.mark.asyncio
-async def test_streamed_voice_fallback_model_records_latency_once():
-    """Primary loop dies before emitting, the fallback model answers inside the
-    same producer: one voice-latency sample and one TTFT, not one per model."""
-
-    async def loop_fn(**kw):
-        if kw.get("on_delta") is not None:
-            raise RuntimeError("primary died")
-        return "Fallback answer"
-
-    brain = _make_brain(loop_fn)
-    brain._fallback_model_url = "http://fb"
-    count0 = _sample("bgw_voice_pipeline_seconds_count", STREAMED)
-    ttft0 = _sample("bgw_chat_ttft_seconds_count", {"voice": "true"})
-    chunks = [c async for c in _stream(brain, True, started_at=time.time()).body_iterator]
-    assert "Fallback answer" in "".join(chunks)
-    assert _sample("bgw_voice_pipeline_seconds_count", STREAMED) == count0 + 1
-    assert _sample("bgw_chat_ttft_seconds_count", {"voice": "true"}) == ttft0 + 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("hang_up", ["aclose", "cancel"])
-async def test_streamed_voice_hang_up_cancels_tool_and_records_once(hang_up):
-    """Call hung up mid-reply while a tool is still running — the generator is
-    closed after the first chunk ("aclose"), or the response task is cancelled
-    while waiting on the next one, as Starlette does on disconnect ("cancel").
-    The producer is cancelled and the turn still records one sample."""
-    tool_cancelled = asyncio.Event()
-
-    async def loop_fn(**kw):
-        await kw["on_delta"]("Hello")
-        try:
-            await asyncio.Event().wait()  # a web_search that never returns
-        except asyncio.CancelledError:
-            tool_cancelled.set()
-            raise
-
-    count0 = _sample("bgw_voice_pipeline_seconds_count", STREAMED)
-    body = _stream(_make_brain(loop_fn), True, started_at=time.time()).body_iterator
-    if hang_up == "aclose":
-        assert "Hello" in await body.__anext__()
-        await body.aclose()
-    else:
-        got_first = asyncio.Event()
-
-        async def consume():
-            async for _ in body:
-                got_first.set()
-
-        consumer = asyncio.create_task(consume())
-        await asyncio.wait_for(got_first.wait(), timeout=2)
-        consumer.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await consumer
-    assert tool_cancelled.is_set()
-    assert _sample("bgw_voice_pipeline_seconds_count", STREAMED) == count0 + 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("streaming, expected", [("real", 0), (True, 1), (False, 1)])
-async def test_chat_unified_defers_voice_latency_only_for_real_streams(streaming, expected):
-    brain = _make_brain(None)
-    seen = {}
-
-    async def fake_inner(
-        messages, stream, external_tools, ha_client, user_text, routing_info, is_voice, started_at=None
-    ):
-        seen["started_at"] = started_at
-        routing_info["streaming"] = streaming
-        return "response"
-
-    brain._chat_unified_inner = fake_inner
-    count0 = _sample("bgw_voice_pipeline_seconds_count", BUFFERED)
-    t0 = time.time()
-    out = await brain._chat_unified([{"role": "user", "content": "hi"}], stream=True, is_voice=True)
-    assert out == "response"
-    assert seen["started_at"] is not None and abs(seen["started_at"] - t0) < 5
-    assert _sample("bgw_voice_pipeline_seconds_count", BUFFERED) == count0 + expected

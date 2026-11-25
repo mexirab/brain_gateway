@@ -15,12 +15,23 @@ from __future__ import annotations
 import pytest
 import yaml
 
+from orchestrator import selfcare_schedule
+from orchestrator.selfcare_schedule import (
+    _validate,
+    category_active_hours,
+    category_enabled,
+    category_interval_minutes,
+    category_times,
+    is_quiet_day,
+    load_schedule,
+    reload_schedule,
+    save_schedule,
+)
+
 
 @pytest.fixture
 def isolated_schedule(tmp_path, monkeypatch):
     """Point SCHEDULE_PATH at a tmp file and clear the module cache."""
-    from orchestrator import selfcare_schedule
-
     sched_path = tmp_path / "selfcare_schedule.yaml"
     monkeypatch.setattr(selfcare_schedule, "SCHEDULE_PATH", str(sched_path))
     # Wipe any cached load from a prior test in the session.
@@ -34,8 +45,6 @@ def isolated_schedule(tmp_path, monkeypatch):
 
 
 def test_load_schedule_returns_defaults_when_file_missing(isolated_schedule):
-    from orchestrator.selfcare_schedule import load_schedule
-
     assert not isolated_schedule.exists()
     sched = load_schedule()
 
@@ -51,8 +60,6 @@ def test_load_schedule_returns_defaults_when_file_missing(isolated_schedule):
 
 def test_save_schedule_round_trip_merges_with_defaults(isolated_schedule):
     """Writing a partial schedule still has untouched keys filled in by defaults."""
-    from orchestrator.selfcare_schedule import save_schedule
-
     partial = {
         "categories": {
             "water": {
@@ -80,92 +87,32 @@ def test_save_schedule_round_trip_merges_with_defaults(isolated_schedule):
 # ---------------------------------------------------------------------------
 
 
-def test_validate_rejects_bad_hhmm():
-    from orchestrator.selfcare_schedule import _validate
-
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param(
+            {"categories": {"water": {"enabled": True, "active_hours": {"start": "25:00", "end": "21:00"}}}},
+            id="hour-25",
+        ),
+        pytest.param(
+            {"categories": {"water": {"enabled": True, "active_hours": {"start": "abc", "end": "21:00"}}}},
+            id="not-hhmm",
+        ),
+        pytest.param(
+            {"categories": {"water": {"enabled": True}}, "quiet_hours": {"days": ["mon", "funday"]}}, id="bad-day"
+        ),
+        pytest.param({"categories": {"water": {"enabled": True, "interval_minutes": -10}}}, id="negative-interval"),
+        pytest.param(
+            {"categories": {"water": {"enabled": True}}, "quiet_hours": {"days": "mon,tue"}}, id="days-not-list"
+        ),
+        pytest.param(["not", "a", "dict"], id="root-not-dict"),
+        pytest.param({"categories": {}}, id="no-categories"),
+        pytest.param({"categories": {"meds": {"enabled": True, "times": ["08:00", "30:99"]}}}, id="bad-times-entry"),
+    ],
+)
+def test_validate_rejects(bad):
     with pytest.raises(ValueError):
-        _validate(
-            {
-                "categories": {
-                    "water": {
-                        "enabled": True,
-                        "active_hours": {"start": "25:00", "end": "21:00"},
-                    },
-                },
-            }
-        )
-
-    with pytest.raises(ValueError):
-        _validate(
-            {
-                "categories": {
-                    "water": {
-                        "enabled": True,
-                        "active_hours": {"start": "abc", "end": "21:00"},
-                    },
-                },
-            }
-        )
-
-
-def test_validate_rejects_bad_day_name():
-    from orchestrator.selfcare_schedule import _validate
-
-    with pytest.raises(ValueError):
-        _validate(
-            {
-                "categories": {"water": {"enabled": True}},
-                "quiet_hours": {"days": ["mon", "funday"]},
-            }
-        )
-
-
-def test_validate_rejects_negative_interval():
-    from orchestrator.selfcare_schedule import _validate
-
-    with pytest.raises(ValueError):
-        _validate(
-            {
-                "categories": {"water": {"enabled": True, "interval_minutes": -10}},
-            }
-        )
-
-
-def test_validate_rejects_non_list_days():
-    from orchestrator.selfcare_schedule import _validate
-
-    with pytest.raises(ValueError):
-        _validate(
-            {
-                "categories": {"water": {"enabled": True}},
-                "quiet_hours": {"days": "mon,tue"},  # string, not list
-            }
-        )
-
-
-def test_validate_rejects_non_dict_root():
-    from orchestrator.selfcare_schedule import _validate
-
-    with pytest.raises(ValueError):
-        _validate(["not", "a", "dict"])  # type: ignore[arg-type]
-
-
-def test_validate_rejects_empty_categories():
-    from orchestrator.selfcare_schedule import _validate
-
-    with pytest.raises(ValueError):
-        _validate({"categories": {}})
-
-
-def test_validate_rejects_bad_times_entry():
-    from orchestrator.selfcare_schedule import _validate
-
-    with pytest.raises(ValueError):
-        _validate(
-            {
-                "categories": {"meds": {"enabled": True, "times": ["08:00", "30:99"]}},
-            }
-        )
+        _validate(bad)
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +121,6 @@ def test_validate_rejects_bad_times_entry():
 
 
 def test_category_enabled(isolated_schedule):
-    from orchestrator.selfcare_schedule import category_enabled, save_schedule
-
     save_schedule(
         {
             "categories": {
@@ -191,8 +136,6 @@ def test_category_enabled(isolated_schedule):
 
 
 def test_category_interval_minutes_with_interval_minutes(isolated_schedule):
-    from orchestrator.selfcare_schedule import category_interval_minutes, save_schedule
-
     save_schedule(
         {
             "categories": {"water": {"enabled": True, "interval_minutes": 75}},
@@ -202,8 +145,6 @@ def test_category_interval_minutes_with_interval_minutes(isolated_schedule):
 
 
 def test_category_interval_minutes_converts_hours_to_minutes(isolated_schedule):
-    from orchestrator.selfcare_schedule import category_interval_minutes, save_schedule
-
     save_schedule(
         {
             "categories": {"meals": {"enabled": True, "interval_hours": 3}},
@@ -219,8 +160,6 @@ def test_category_interval_minutes_falls_back(isolated_schedule):
     default-merge in load_schedule doesn't quietly fill in `interval_minutes=90`
     from the `water` default.
     """
-    from orchestrator.selfcare_schedule import category_interval_minutes, save_schedule
-
     save_schedule(
         {
             "categories": {
@@ -234,8 +173,6 @@ def test_category_interval_minutes_falls_back(isolated_schedule):
 
 
 def test_category_active_hours(isolated_schedule):
-    from orchestrator.selfcare_schedule import category_active_hours, save_schedule
-
     save_schedule(
         {
             "categories": {
@@ -252,8 +189,6 @@ def test_category_active_hours(isolated_schedule):
 
 
 def test_category_times(isolated_schedule):
-    from orchestrator.selfcare_schedule import category_times, save_schedule
-
     save_schedule(
         {
             "categories": {"meds": {"enabled": True, "times": ["08:00", "20:00"]}},
@@ -271,8 +206,6 @@ def test_category_times(isolated_schedule):
 
 def test_is_quiet_day_only_listed_days_match(isolated_schedule):
     """is_quiet_day returns True when the weekday IS in the configured days list."""
-    from orchestrator.selfcare_schedule import is_quiet_day, save_schedule
-
     save_schedule(
         {
             "categories": {"water": {"enabled": True}},
@@ -289,8 +222,6 @@ def test_is_quiet_day_only_listed_days_match(isolated_schedule):
 
 def test_is_quiet_day_handles_mixed_case(isolated_schedule):
     """The accessor lowercases configured days for the comparison."""
-    from orchestrator.selfcare_schedule import is_quiet_day, save_schedule
-
     # _validate accepts mixed case as long as lowercased value is valid.
     save_schedule(
         {
@@ -310,8 +241,6 @@ def test_is_quiet_day_handles_mixed_case(isolated_schedule):
 
 def test_reload_schedule_invalidates_cache(isolated_schedule):
     """Mutating the file directly must NOT be visible until reload_schedule()."""
-    from orchestrator.selfcare_schedule import load_schedule, reload_schedule, save_schedule
-
     save_schedule(
         {
             "categories": {"water": {"enabled": True, "interval_minutes": 60}},

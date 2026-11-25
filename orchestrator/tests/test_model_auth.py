@@ -24,6 +24,7 @@ from orchestrator import model_auth, shared
 from orchestrator.llm_backend import LLMConfig
 from orchestrator.metrics import MODEL_AUTH_REJECTED
 from orchestrator.model_auth import MODEL_SERVER_AUTH, ModelServerAuth, key_for_url
+from orchestrator.tests._helpers import metric_value
 
 KEY = "local-brain-key-6f1c2e9d"
 FB_KEY = "fallback-key-a91b07"
@@ -90,7 +91,7 @@ def _recording_client(handler=None, *, sync: bool = False, **kw):
 
 
 def _rejected(status: int) -> float:
-    return MODEL_AUTH_REJECTED.labels(status=str(status))._value.get()
+    return metric_value(MODEL_AUTH_REJECTED, status=status)
 
 
 def _auth_warnings(caplog) -> list[logging.LogRecord]:

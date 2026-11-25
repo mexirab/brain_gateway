@@ -7,7 +7,8 @@ Covers:
   - pushover_manager.deliver_via_pushover (network-mocked via respx)
   - pushover_manager.deliver_pushover_confirm (network-mocked via respx)
   - config.validate_pushover_config model_validator (auto-disable + clamp)
-  - api_routes: /ack + /snooze Pushover-confirm wiring + widened feature gate
+  - api_routes: widened /ack + /snooze feature gate (the confirm wiring both
+    routes fire is in test_ntfy_feedback.TestConfirmWiring)
   - tool_handlers.deliver_reminder_job: unconditional dispatch via asyncio.create_task
 
 Mocks settings via monkeypatch on the live module-level singleton (same pattern
@@ -21,241 +22,158 @@ branch below via before/after delta reads on the 3-label counter.
 
 from __future__ import annotations
 
-import contextlib
+import logging
 import os
 import time
 from unittest.mock import AsyncMock, patch
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
 import respx
 from httpx import Response
 
-# ---------------------------------------------------------------------------
-# Settings fixtures — flip the live singleton; restore via monkeypatch undo.
-# ---------------------------------------------------------------------------
+from orchestrator import state_store
+from orchestrator.config import Settings, settings
+from orchestrator.metrics import PUSHOVER_PUSH_TOTAL
+from orchestrator.pushover_manager import (
+    _sanitize_body,
+    _strip_credentials,
+    deliver_pushover_confirm,
+    deliver_via_pushover,
+)
+from orchestrator.tests._helpers import metric_value
+from orchestrator.tests.fixtures_delivery import NTFY_SECRET, drain_tasks
 
-_NTFY_SECRET = "x" * 40  # satisfies the >=32 model_validator guard
 _USER_KEY = "u" * 30
 _APP_TOKEN = "a" * 30
+PUSHOVER_BASE = "http://pushover.test"
 
 
 @pytest.fixture
 def pushover_on(monkeypatch):
     """Enable Pushover on the live settings singleton with known creds."""
-    from orchestrator.config import settings
-
     monkeypatch.setattr(settings, "pushover_enabled", True, raising=False)
     monkeypatch.setattr(settings, "pushover_user_key", _USER_KEY, raising=False)
     monkeypatch.setattr(settings, "pushover_app_token", _APP_TOKEN, raising=False)
     monkeypatch.setattr(settings, "pushover_default_priority", 0, raising=False)
-    monkeypatch.setattr(
-        settings,
-        "pushover_api_url",
-        "http://pushover.test/1/messages.json",
-        raising=False,
-    )
+    monkeypatch.setattr(settings, "pushover_api_url", f"{PUSHOVER_BASE}/1/messages.json", raising=False)
     monkeypatch.setattr(settings, "pushover_upload_timeout_seconds", 10, raising=False)
     # _build_callback_url needs these even when the actual ntfy push is off.
-    monkeypatch.setattr(settings, "ntfy_hmac_secret", _NTFY_SECRET, raising=False)
+    monkeypatch.setattr(settings, "ntfy_hmac_secret", NTFY_SECRET, raising=False)
     monkeypatch.setattr(settings, "ntfy_callback_base_url", "http://helios.test:8888", raising=False)
     monkeypatch.setattr(settings, "ntfy_ack_exp_seconds", 1800, raising=False)
     return settings
 
 
-@pytest.fixture
-def pushover_off(monkeypatch):
-    """Disabled — for feature-flag-gate tests."""
-    from orchestrator.config import settings
-
-    monkeypatch.setattr(settings, "pushover_enabled", False, raising=False)
-    return settings
+def _pushes(result: str, kind: str, reason: str) -> float:
+    return metric_value(PUSHOVER_PUSH_TOTAL, result=result, kind=kind, reason=reason)
 
 
-@pytest.fixture
-def ntfy_off(monkeypatch):
-    """Disable ntfy; used to verify the widened ack/snooze route gate."""
-    from orchestrator.config import settings
-
-    monkeypatch.setattr(settings, "ntfy_enabled", False, raising=False)
-    # Secret must still be present so the sig-verify path doesn't blow up
-    # before the feature-flag check when that matters.
-    monkeypatch.setattr(settings, "ntfy_hmac_secret", _NTFY_SECRET, raising=False)
-    return settings
+async def _send(kind: str, **kw):
+    if kind == "reminder":
+        return await deliver_via_pushover("r1", "t", **kw)
+    return await deliver_pushover_confirm("t", "m", reminder_id="abc-123")
 
 
-@pytest.fixture
-def ntfy_on(monkeypatch):
-    from orchestrator.config import settings
-
-    monkeypatch.setattr(settings, "ntfy_enabled", True, raising=False)
-    monkeypatch.setattr(settings, "ntfy_hmac_secret", _NTFY_SECRET, raising=False)
-    monkeypatch.setattr(settings, "ntfy_url", "http://ntfy.test:8889", raising=False)
-    monkeypatch.setattr(settings, "ntfy_topic", "jess-reminders", raising=False)
-    monkeypatch.setattr(settings, "ntfy_callback_base_url", "http://helios.test:8888", raising=False)
-    monkeypatch.setattr(settings, "ntfy_ack_exp_seconds", 1800, raising=False)
-    monkeypatch.setattr(settings, "ntfy_max_snooze_count", 5, raising=False)
-    monkeypatch.setattr(settings, "ntfy_default_priority", 3, raising=False)
-    return settings
-
-
-def _counter_value(result: str, kind: str, reason: str) -> float:
-    """Read current PUSHOVER_PUSH_TOTAL{result, kind, reason} — 0 if never emitted."""
-    from orchestrator.metrics import PUSHOVER_PUSH_TOTAL
-
-    return PUSHOVER_PUSH_TOTAL.labels(result=result, kind=kind, reason=reason)._value.get()
+def _form(route) -> dict:
+    """The form-encoded body of the first call, decoded to {field: value}."""
+    body = route.calls[0].request.content.decode("utf-8")
+    return {k: v[0] for k, v in parse_qs(body, keep_blank_values=True).items()}
 
 
 # ===========================================================================
-# _sanitize_body (pure unit)
+# _sanitize_body / _strip_credentials (pure unit)
 # ===========================================================================
 
 
-class TestSanitizeBody:
-    def test_empty_string_returns_empty(self):
-        from orchestrator.pushover_manager import _sanitize_body
-
-        assert _sanitize_body("") == ""
-
-    def test_none_returns_empty(self):
-        from orchestrator.pushover_manager import _sanitize_body
-
-        assert _sanitize_body(None) == ""  # type: ignore[arg-type]
-
-    def test_plain_text_preserved(self):
-        from orchestrator.pushover_manager import _sanitize_body
-
-        assert _sanitize_body("hello world") == "hello world"
-
-    def test_strips_control_chars(self):
-        from orchestrator.pushover_manager import _sanitize_body
-
-        # \x01 (SOH) and \x1f (US) are below 0x20 → stripped
-        # \x7f (DEL) is >=0x7F → stripped
-        # \t (0x09) and \n (0x0a) are whitelisted → kept
-        dirty = "ok\x01bad\x1fstuff\x7fend\ttab\nline"
-        assert _sanitize_body(dirty) == "okbadstuffend\ttab\nline"
-
-    def test_caps_at_default_limit(self):
-        from orchestrator.pushover_manager import _sanitize_body
-
-        # Default limit is 300
-        assert _sanitize_body("x" * 500) == "x" * 300
-
-    def test_custom_limit_respected(self):
-        from orchestrator.pushover_manager import _sanitize_body
-
-        assert _sanitize_body("x" * 50, limit=10) == "x" * 10
+@pytest.mark.parametrize(
+    "text,kwargs,expected",
+    [
+        pytest.param("", {}, "", id="empty"),
+        pytest.param(None, {}, "", id="none"),
+        pytest.param("hello world", {}, "hello world", id="plain"),
+        # \x01 (SOH) and \x1f (US) are below 0x20, \x7f (DEL) is >=0x7F →
+        # stripped; \t and \n are whitelisted → kept.
+        pytest.param("ok\x01bad\x1fstuff\x7fend\ttab\nline", {}, "okbadstuffend\ttab\nline", id="control-chars"),
+        pytest.param("x" * 500, {}, "x" * 300, id="default-cap-300"),
+        pytest.param("x" * 50, {"limit": 10}, "x" * 10, id="custom-limit"),
+    ],
+)
+def test_sanitize_body(text, kwargs, expected):
+    assert _sanitize_body(text, **kwargs) == expected
 
 
-# ===========================================================================
-# _strip_credentials (pure unit)
-# ===========================================================================
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("", id="empty"),
+        pytest.param(None, id="none"),
+        # <8 char values aren't matched — avoids eating real English.
+        pytest.param("token=abc1234", id="short-token-kept"),
+        # The \b word boundary keeps 'user=' inside bigger words safe.
+        pytest.param("the username field is fine", id="english-word-kept"),
+    ],
+)
+def test_strip_credentials_leaves_non_credentials(text):
+    assert _strip_credentials(text) == text
 
 
-class TestStripCredentials:
-    def test_empty_returns_empty(self):
-        from orchestrator.pushover_manager import _strip_credentials
-
-        assert _strip_credentials("") == ""
-
-    def test_none_returns_none(self):
-        from orchestrator.pushover_manager import _strip_credentials
-
-        assert _strip_credentials(None) is None  # type: ignore[arg-type]
-
-    def test_redacts_token(self):
-        from orchestrator.pushover_manager import _strip_credentials
-
-        # 16 hex chars → must match \b(?:token|user)=[A-Za-z0-9]{8,}
-        out = _strip_credentials("error token=abcdef1234567890 body")
-        assert "abcdef1234567890" not in out
-        assert "token=<redacted>" in out
-        # Surrounding context preserved
-        assert "error" in out
-        assert "body" in out
-
-    def test_redacts_user(self):
-        from orchestrator.pushover_manager import _strip_credentials
-
-        out = _strip_credentials("user=abc12345XYZ in response")
-        assert "abc12345XYZ" not in out
-        assert "user=<redacted>" in out
-
-    def test_redacts_both_in_same_string(self):
-        from orchestrator.pushover_manager import _strip_credentials
-
-        out = _strip_credentials("debug: token=1234567890abcdef and user=abcdef1234567890 end")
-        assert "1234567890abcdef" not in out
-        assert "abcdef1234567890" not in out
-        assert out.count("<redacted>") == 2
-
-    def test_short_token_not_redacted(self):
-        """<8 char values aren't matched — avoids eating real English."""
-        from orchestrator.pushover_manager import _strip_credentials
-
-        # 7-char value — below the {8,} threshold
-        out = _strip_credentials("token=abc1234")
-        assert out == "token=abc1234"
-
-    def test_english_word_not_matched(self):
-        """The \\b word boundary keeps 'user=' inside bigger words safe."""
-        from orchestrator.pushover_manager import _strip_credentials
-
-        # Not a credential — this shouldn't get nuked
-        out = _strip_credentials("the username field is fine")
-        assert out == "the username field is fine"
+@pytest.mark.parametrize(
+    "text,secrets,kept",
+    [
+        pytest.param(
+            "error token=abcdef1234567890 body",
+            ["abcdef1234567890"],
+            ["token=<redacted>", "error", "body"],
+            id="token",
+        ),
+        pytest.param("user=abc12345XYZ in response", ["abc12345XYZ"], ["user=<redacted>"], id="user"),
+        pytest.param(
+            "debug: token=1234567890abcdef and user=abcdef1234567890 end",
+            ["1234567890abcdef", "abcdef1234567890"],
+            [],
+            id="both",
+        ),
+    ],
+)
+def test_strip_credentials_redacts(text, secrets, kept):
+    out = _strip_credentials(text)
+    assert not any(s in out for s in secrets)
+    assert all(k in out for k in kept)
+    assert out.count("<redacted>") == len(secrets)
 
 
 # ===========================================================================
-# deliver_via_pushover — respx-mocked HTTP
+# deliver_via_pushover / deliver_pushover_confirm — respx-mocked HTTP
 # ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "kind,enabled,blank,reason",
+    [
+        pytest.param("reminder", False, None, "disabled", id="reminder-disabled"),
+        pytest.param("reminder", True, "pushover_user_key", "missing_user_key", id="reminder-no-user-key"),
+        pytest.param("reminder", True, "pushover_app_token", "missing_app_token", id="reminder-no-app-token"),
+        pytest.param("confirm", False, None, "disabled", id="confirm-disabled"),
+        pytest.param("confirm", True, "pushover_user_key", "missing_credentials", id="confirm-no-creds"),
+    ],
+)
+async def test_skipped_without_http(pushover_on, monkeypatch, kind, enabled, blank, reason):
+    monkeypatch.setattr(settings, "pushover_enabled", enabled, raising=False)
+    if blank:
+        monkeypatch.setattr(settings, blank, "", raising=False)
+    before = _pushes("skipped", kind, reason)
+    with respx.mock:  # no routes registered — any HTTP would blow up
+        result = await _send(kind)
+    assert result == {"success": False, "skipped": True, "reason": reason}
+    assert _pushes("skipped", kind, reason) == before + 1
 
 
 class TestDeliverViaPushover:
-    @pytest.mark.asyncio
-    async def test_disabled_returns_skipped_no_http(self, pushover_off):
-        from orchestrator.pushover_manager import deliver_via_pushover
-
-        before = _counter_value("skipped", "reminder", "disabled")
-        with respx.mock:  # no routes registered — any HTTP would blow up
-            result = await deliver_via_pushover("r1", "hi")
-        assert result == {"success": False, "skipped": True, "reason": "disabled"}
-        assert _counter_value("skipped", "reminder", "disabled") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_missing_user_key_skipped(self, pushover_on, monkeypatch):
-        from orchestrator.config import settings
-        from orchestrator.pushover_manager import deliver_via_pushover
-
-        monkeypatch.setattr(settings, "pushover_user_key", "", raising=False)
-        before = _counter_value("skipped", "reminder", "missing_user_key")
-        with respx.mock:
-            result = await deliver_via_pushover("r1", "hi")
-        assert result["success"] is False
-        assert result["skipped"] is True
-        assert result["reason"] == "missing_user_key"
-        assert _counter_value("skipped", "reminder", "missing_user_key") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_missing_app_token_skipped(self, pushover_on, monkeypatch):
-        from orchestrator.config import settings
-        from orchestrator.pushover_manager import deliver_via_pushover
-
-        monkeypatch.setattr(settings, "pushover_app_token", "", raising=False)
-        before = _counter_value("skipped", "reminder", "missing_app_token")
-        with respx.mock:
-            result = await deliver_via_pushover("r1", "hi")
-        assert result["success"] is False
-        assert result["reason"] == "missing_app_token"
-        assert _counter_value("skipped", "reminder", "missing_app_token") == before + 1
-
-    @pytest.mark.asyncio
     async def test_success_200_shape_and_body(self, pushover_on):
-        from orchestrator.pushover_manager import deliver_via_pushover
-
-        before = _counter_value("ok", "reminder", "ok")
-        with respx.mock(base_url="http://pushover.test") as mock:
+        before = _pushes("ok", "reminder", "ok")
+        with respx.mock(base_url=PUSHOVER_BASE) as mock:
             route = mock.post("/1/messages.json").mock(
                 return_value=Response(200, json={"status": 1, "request": "req-xyz-42"})
             )
@@ -264,74 +182,46 @@ class TestDeliverViaPushover:
         assert result["success"] is True
         assert result["request_id"] == "req-xyz-42"
         assert isinstance(result["latency_ms"], int)
-        assert _counter_value("ok", "reminder", "ok") == before + 1
+        assert _pushes("ok", "reminder", "ok") == before + 1
 
-        req = route.calls[0].request
-        body = req.content.decode("utf-8", errors="replace")
-        # Form-encoded — assert each required field is present
-        assert f"token={_APP_TOKEN}" in body
-        assert f"user={_USER_KEY}" in body
-        assert "title=Jess+reminder" in body or "title=Jess%20reminder" in body
-        assert "html=1" in body
-        # Snooze anchor embedded in message body (URL-encoded)
-        assert "Snooze+10+min" in body or "Snooze%2010%20min" in body
-        # url / url_title fields for the Done tap action
-        assert "url=" in body
-        # url_title is "✓ Done" (U+2713) — URL-encoded form
-        assert "url_title=%E2%9C%93+Done" in body or "url_title=%E2%9C%93%20Done" in body
+        form = _form(route)
+        assert form["token"] == _APP_TOKEN
+        assert form["user"] == _USER_KEY
+        assert form["title"] == "Jess reminder"
+        assert form["html"] == "1"
+        # Snooze anchor embedded in the message body; Done is the tap url.
+        assert "Snooze 10 min" in form["message"]
+        assert form["url"]
+        assert form["url_title"] == "✓ Done"
 
-    @pytest.mark.asyncio
     async def test_html_escape_prevents_injection(self, pushover_on):
         """Prompt-injected <a> / <script> in reminder text must be HTML-escaped
         before embedding, otherwise the attacker's anchor would render as a
         tappable link in Pushover's html=1 notification."""
-        from orchestrator.pushover_manager import deliver_via_pushover
-
         evil = '<a href="http://attacker/">click</a> <script>x()</script>'
-        with respx.mock(base_url="http://pushover.test") as mock:
+        with respx.mock(base_url=PUSHOVER_BASE) as mock:
             route = mock.post("/1/messages.json").mock(return_value=Response(200, json={"status": 1, "request": "r"}))
             await deliver_via_pushover("r1", evil)
-        body = route.calls[0].request.content.decode("utf-8", errors="replace")
-        # The raw "<a " from the attacker must NOT appear (only the trusted
-        # snooze anchor we emit ourselves does). Form-encoding of '<' is %3C.
-        assert "%3Ca+href%3D%22http%3A%2F%2Fattacker" in body or (
-            "<a href=" not in body  # fallback: make sure raw <a isn't in plaintext
-        )
-        # The '<script>' tag must be escaped — raw '<script>' absent
-        assert "<script>" not in body
-        # Our trusted snooze anchor IS present (form-encoded)
-        assert "Snooze+10+min" in body or "Snooze%2010%20min" in body
+        message = _form(route)["message"]
+        # Decoded form field: the attacker's tags arrive as entities...
+        assert '&lt;a href="http://attacker/"&gt;click&lt;/a&gt; &lt;script&gt;x()&lt;/script&gt;' in message
+        assert "<script>" not in message
+        # ...and the only live anchor is the trusted snooze link we build.
+        assert message.count("<a ") == 1
+        assert "Snooze 10 min</a>" in message
 
-    @pytest.mark.asyncio
-    async def test_priority_clamped_low(self, pushover_on):
-        from orchestrator.pushover_manager import deliver_via_pushover
-
-        with respx.mock(base_url="http://pushover.test") as mock:
+    @pytest.mark.parametrize("given,sent", [(-999, "-2"), (999, "2")], ids=["low", "high"])
+    async def test_priority_clamped(self, pushover_on, given, sent):
+        with respx.mock(base_url=PUSHOVER_BASE) as mock:
             route = mock.post("/1/messages.json").mock(return_value=Response(200, json={"status": 1, "request": "r"}))
-            await deliver_via_pushover("r1", "t", priority=-999)
-        body = route.calls[0].request.content.decode("utf-8", errors="replace")
-        assert "priority=-2" in body
-        assert "priority=-999" not in body
+            await deliver_via_pushover("r1", "t", priority=given)
+        assert _form(route)["priority"] == sent
 
-    @pytest.mark.asyncio
-    async def test_priority_clamped_high(self, pushover_on):
-        from orchestrator.pushover_manager import deliver_via_pushover
-
-        with respx.mock(base_url="http://pushover.test") as mock:
-            route = mock.post("/1/messages.json").mock(return_value=Response(200, json={"status": 1, "request": "r"}))
-            await deliver_via_pushover("r1", "t", priority=999)
-        body = route.calls[0].request.content.decode("utf-8", errors="replace")
-        assert "priority=2" in body
-        assert "priority=999" not in body
-
-    @pytest.mark.asyncio
     async def test_4xx_bumps_http_4xx_and_sanitizes_body(self, pushover_on):
         """400 response with leaking 'token=...' must be scrubbed from the result body."""
-        from orchestrator.pushover_manager import deliver_via_pushover
-
-        before = _counter_value("fail", "reminder", "http_4xx")
+        before = _pushes("fail", "reminder", "http_4xx")
         leaky_body = "error: token=abcdef1234567890 rejected\x01bad"
-        with respx.mock(base_url="http://pushover.test") as mock:
+        with respx.mock(base_url=PUSHOVER_BASE) as mock:
             mock.post("/1/messages.json").mock(return_value=Response(400, text=leaky_body))
             result = await deliver_via_pushover("r1", "t")
         assert result["success"] is False
@@ -340,176 +230,60 @@ class TestDeliverViaPushover:
         assert "abcdef1234567890" not in result["body"]
         assert "token=<redacted>" in result["body"]
         assert "\x01" not in result["body"]
-        assert _counter_value("fail", "reminder", "http_4xx") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_5xx_bumps_http_5xx(self, pushover_on):
-        from orchestrator.pushover_manager import deliver_via_pushover
-
-        before = _counter_value("fail", "reminder", "http_5xx")
-        with respx.mock(base_url="http://pushover.test") as mock:
-            mock.post("/1/messages.json").mock(return_value=Response(503, text="overloaded"))
-            result = await deliver_via_pushover("r1", "t")
-        assert result["success"] is False
-        assert result["status_code"] == 503
-        assert _counter_value("fail", "reminder", "http_5xx") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_timeout_swallowed_and_bumps_timeout(self, pushover_on):
-        from orchestrator.pushover_manager import deliver_via_pushover
-
-        before = _counter_value("fail", "reminder", "timeout")
-        with respx.mock(base_url="http://pushover.test") as mock:
-            mock.post("/1/messages.json").mock(side_effect=httpx.TimeoutException("slow"))
-            result = await deliver_via_pushover("r1", "t")
-        assert result["success"] is False
-        assert "TimeoutException" in result["error"]
-        assert _counter_value("fail", "reminder", "timeout") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_connect_error_swallowed_and_bumps_connect_error(self, pushover_on):
-        from orchestrator.pushover_manager import deliver_via_pushover
-
-        before = _counter_value("fail", "reminder", "connect_error")
-        with respx.mock(base_url="http://pushover.test") as mock:
-            mock.post("/1/messages.json").mock(side_effect=httpx.ConnectError("dns"))
-            result = await deliver_via_pushover("r1", "t")
-        assert result["success"] is False
-        assert "ConnectError" in result["error"]
-        assert _counter_value("fail", "reminder", "connect_error") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_generic_exception_swallowed_and_bumps_other(self, pushover_on):
-        from orchestrator.pushover_manager import deliver_via_pushover
-
-        before = _counter_value("fail", "reminder", "other")
-        with respx.mock(base_url="http://pushover.test") as mock:
-            mock.post("/1/messages.json").mock(side_effect=ValueError("weird"))
-            result = await deliver_via_pushover("r1", "t")
-        assert result["success"] is False
-        assert "ValueError" in result["error"]
-        assert _counter_value("fail", "reminder", "other") == before + 1
+        assert _pushes("fail", "reminder", "http_4xx") == before + 1
 
 
-# ===========================================================================
-# deliver_pushover_confirm — respx-mocked HTTP
-# ===========================================================================
+@pytest.mark.parametrize(
+    "kind,mock_kwargs,reason,expect",
+    [
+        pytest.param("reminder", {"return_value": Response(503, text="overloaded")}, "http_5xx", 503, id="r-5xx"),
+        pytest.param("reminder", {"side_effect": httpx.TimeoutException("slow")}, "timeout", "Timeout", id="r-timeout"),
+        pytest.param(
+            "reminder", {"side_effect": httpx.ConnectError("dns")}, "connect_error", "Connect", id="r-connect"
+        ),
+        pytest.param("reminder", {"side_effect": ValueError("weird")}, "other", "ValueError", id="r-other"),
+        pytest.param("confirm", {"return_value": Response(400, text="rejected")}, "http_4xx", 400, id="c-4xx"),
+        pytest.param("confirm", {"return_value": Response(503, text="boom")}, "http_5xx", 503, id="c-5xx"),
+        pytest.param("confirm", {"side_effect": httpx.TimeoutException("slow")}, "timeout", "Timeout", id="c-timeout"),
+        pytest.param("confirm", {"side_effect": httpx.ConnectError("dns")}, "connect_error", "Connect", id="c-connect"),
+    ],
+)
+async def test_send_failure_is_returned_not_raised_and_counted(pushover_on, caplog, kind, mock_kwargs, reason, expect):
+    """Every failure path returns a result (never raises) and bumps
+    fail/<reason> once; confirm failures log rid=<id> for Loki correlation."""
+    before = _pushes("fail", kind, reason)
+    with (
+        respx.mock(base_url=PUSHOVER_BASE) as mock,
+        caplog.at_level(logging.WARNING, logger="orchestrator.pushover_manager"),
+    ):
+        mock.post("/1/messages.json").mock(**mock_kwargs)
+        result = await _send(kind)
+    assert result["success"] is False
+    if isinstance(expect, int):
+        assert result["status_code"] == expect
+    else:
+        assert expect in result["error"]
+    assert _pushes("fail", kind, reason) == before + 1
+    if kind == "confirm":
+        assert any("rid=abc-123" in r.getMessage() for r in caplog.records)
 
 
-class TestDeliverPushoverConfirm:
-    @pytest.mark.asyncio
-    async def test_disabled_returns_skipped_no_http(self, pushover_off):
-        from orchestrator.pushover_manager import deliver_pushover_confirm
+async def test_confirm_happy_path_200_priority_and_no_url(pushover_on):
+    """Confirm: priority=-1 (quiet), NO url field, NO html=1, generic title."""
+    before = _pushes("ok", "confirm", "ok")
+    with respx.mock(base_url=PUSHOVER_BASE) as mock:
+        route = mock.post("/1/messages.json").mock(return_value=Response(200, json={"status": 1}))
+        result = await deliver_pushover_confirm("✓ Logged", "drink water\n(water logged)", "r1")
+    assert result == {"success": True}
+    assert _pushes("ok", "confirm", "ok") == before + 1
 
-        before = _counter_value("skipped", "confirm", "disabled")
-        with respx.mock:
-            result = await deliver_pushover_confirm("t", "m")
-        assert result == {"success": False, "skipped": True, "reason": "disabled"}
-        assert _counter_value("skipped", "confirm", "disabled") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_missing_creds_skipped(self, pushover_on, monkeypatch):
-        from orchestrator.config import settings
-        from orchestrator.pushover_manager import deliver_pushover_confirm
-
-        monkeypatch.setattr(settings, "pushover_user_key", "", raising=False)
-        before = _counter_value("skipped", "confirm", "missing_credentials")
-        with respx.mock:
-            result = await deliver_pushover_confirm("t", "m")
-        assert result["success"] is False
-        assert result["reason"] == "missing_credentials"
-        assert _counter_value("skipped", "confirm", "missing_credentials") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_happy_path_200_priority_and_no_url(self, pushover_on):
-        """Confirm: priority=-1 (quiet), NO url field, NO html=1, generic title."""
-        from orchestrator.pushover_manager import deliver_pushover_confirm
-
-        before = _counter_value("ok", "confirm", "ok")
-        with respx.mock(base_url="http://pushover.test") as mock:
-            route = mock.post("/1/messages.json").mock(return_value=Response(200, json={"status": 1}))
-            result = await deliver_pushover_confirm("\u2713 Logged", "drink water\n(water logged)", "r1")
-        assert result == {"success": True}
-        assert _counter_value("ok", "confirm", "ok") == before + 1
-
-        body = route.calls[0].request.content.decode("utf-8", errors="replace")
-        assert "priority=-1" in body
-        # No `url=` query param (form-encoded, so key is `url=` with separator)
-        assert "&url=" not in body
-        assert not body.startswith("url=")
-        # No html field at all
-        assert "html=1" not in body
-        # Title is generic — action name must NOT be in title
-        # (title contains just "Logged" + check-mark glyph, URL-encoded)
-        assert "title=%E2%9C%93+Logged" in body or "title=%E2%9C%93%20Logged" in body
-        # Action name "water" IS in the body message (body allowed; title not)
-        assert "water" in body.lower()
-
-    @pytest.mark.asyncio
-    async def test_4xx_surfaces_status_and_bumps_metric(self, pushover_on):
-        from orchestrator.pushover_manager import deliver_pushover_confirm
-
-        before = _counter_value("fail", "confirm", "http_4xx")
-        with respx.mock(base_url="http://pushover.test") as mock:
-            mock.post("/1/messages.json").mock(return_value=Response(400, text="rejected"))
-            result = await deliver_pushover_confirm("t", "m", reminder_id="r1")
-        assert result["success"] is False
-        assert result["status_code"] == 400
-        assert _counter_value("fail", "confirm", "http_4xx") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_5xx_surfaces_status_and_bumps_metric(self, pushover_on):
-        from orchestrator.pushover_manager import deliver_pushover_confirm
-
-        before = _counter_value("fail", "confirm", "http_5xx")
-        with respx.mock(base_url="http://pushover.test") as mock:
-            mock.post("/1/messages.json").mock(return_value=Response(503, text="boom"))
-            result = await deliver_pushover_confirm("t", "m")
-        assert result["success"] is False
-        assert result["status_code"] == 503
-        assert _counter_value("fail", "confirm", "http_5xx") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_timeout_swallowed(self, pushover_on):
-        from orchestrator.pushover_manager import deliver_pushover_confirm
-
-        before = _counter_value("fail", "confirm", "timeout")
-        with respx.mock(base_url="http://pushover.test") as mock:
-            mock.post("/1/messages.json").mock(side_effect=httpx.TimeoutException("slow"))
-            result = await deliver_pushover_confirm("t", "m")
-        assert result["success"] is False
-        assert "TimeoutException" in result["error"]
-        assert _counter_value("fail", "confirm", "timeout") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_connect_error_swallowed(self, pushover_on):
-        from orchestrator.pushover_manager import deliver_pushover_confirm
-
-        before = _counter_value("fail", "confirm", "connect_error")
-        with respx.mock(base_url="http://pushover.test") as mock:
-            mock.post("/1/messages.json").mock(side_effect=httpx.ConnectError("dns"))
-            result = await deliver_pushover_confirm("t", "m")
-        assert result["success"] is False
-        assert "ConnectError" in result["error"]
-        assert _counter_value("fail", "confirm", "connect_error") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_reminder_id_in_failure_log(self, pushover_on, caplog):
-        """Failure log lines must include `rid=<id>` for Loki correlation."""
-        import logging
-
-        from orchestrator.pushover_manager import deliver_pushover_confirm
-
-        with (
-            respx.mock(base_url="http://pushover.test") as mock,
-            caplog.at_level(logging.WARNING, logger="orchestrator.pushover_manager"),
-        ):
-            mock.post("/1/messages.json").mock(return_value=Response(500))
-            await deliver_pushover_confirm("t", "m", reminder_id="abc-123")
-
-        assert any("rid=abc-123" in r.getMessage() for r in caplog.records), (
-            f"Expected 'rid=abc-123' in WARNING log, got: {[r.getMessage() for r in caplog.records]}"
-        )
+    form = _form(route)
+    assert form["priority"] == "-1"
+    assert "url" not in form
+    assert "html" not in form
+    # Title is generic — the action name must NOT be in it; the body may carry it.
+    assert form["title"] == "✓ Logged"
+    assert "water" in form["message"].lower()
 
 
 # ===========================================================================
@@ -517,305 +291,92 @@ class TestDeliverPushoverConfirm:
 # ===========================================================================
 
 
-class TestConfigValidator:
-    def test_enabled_with_short_user_key_disables(self, caplog):
-        """PUSHOVER_ENABLED=true + user_key <8 chars → auto-disabled, ERROR, NO raise."""
-        import logging
-
-        from orchestrator.config import Settings
-
-        env = {
-            "PUSHOVER_ENABLED": "true",
-            "PUSHOVER_USER_KEY": "short",  # 5 chars, <8
-            "PUSHOVER_APP_TOKEN": "valid-long-token-here",
-            "HA_TOKEN": "x",
-            "API_TOKEN": "x",
-            "PIHOLE_PASSWORD": "x",
-        }
-        with patch.dict(os.environ, env, clear=False), caplog.at_level(logging.ERROR, logger="orchestrator.config"):
-            s = Settings()
-        assert s.pushover_enabled is False
+@pytest.mark.parametrize(
+    "env,attr,expected,logged",
+    [
+        pytest.param(
+            {"PUSHOVER_ENABLED": "true", "PUSHOVER_USER_KEY": "short", "PUSHOVER_APP_TOKEN": "valid-long-token-here"},
+            "pushover_enabled",
+            False,
+            True,
+            id="short-user-key-disables",
+        ),
+        pytest.param(
+            {"PUSHOVER_ENABLED": "true", "PUSHOVER_USER_KEY": "valid-long-user-key", "PUSHOVER_APP_TOKEN": "short"},
+            "pushover_enabled",
+            False,
+            None,
+            id="short-app-token-disables",
+        ),
+        pytest.param(
+            {
+                "PUSHOVER_ENABLED": "true",
+                "PUSHOVER_USER_KEY": "valid-long-user-key",
+                "PUSHOVER_APP_TOKEN": "valid-long-token-here",
+            },
+            "pushover_enabled",
+            True,
+            None,
+            id="valid-creds-stay-on",
+        ),
+        pytest.param(
+            {"PUSHOVER_ENABLED": "false", "PUSHOVER_DEFAULT_PRIORITY": "-999"},
+            "pushover_default_priority",
+            -2,
+            None,
+            id="priority-clamped-low",
+        ),
+        pytest.param(
+            {"PUSHOVER_ENABLED": "false", "PUSHOVER_DEFAULT_PRIORITY": "999"},
+            "pushover_default_priority",
+            2,
+            None,
+            id="priority-clamped-high",
+        ),
+        # Feature off: missing creds must not matter (and never raise).
+        pytest.param(
+            {"PUSHOVER_ENABLED": "false", "PUSHOVER_USER_KEY": "", "PUSHOVER_APP_TOKEN": ""},
+            "pushover_enabled",
+            False,
+            None,
+            id="disabled-missing-creds",
+        ),
+    ],
+)
+def test_config_validator(caplog, env, attr, expected, logged):
+    """Auto-disable logs an ERROR, never raises. A fresh Settings() with the
+    process env cleared and no env file, so the host can't change the outcome."""
+    env = {**env, "HA_TOKEN": "x", "API_TOKEN": "x", "PIHOLE_PASSWORD": "x"}
+    with (
+        patch.dict(os.environ, env, clear=True),
+        caplog.at_level(logging.ERROR, logger="orchestrator.config"),
+    ):
+        s = Settings(_env_file=None)
+    assert getattr(s, attr) == expected
+    if logged:
         assert any("PUSHOVER_ENABLED=true" in r.getMessage() for r in caplog.records)
 
-    def test_enabled_with_short_app_token_disables(self, caplog):
-        import logging
-
-        from orchestrator.config import Settings
-
-        env = {
-            "PUSHOVER_ENABLED": "true",
-            "PUSHOVER_USER_KEY": "valid-long-user-key",
-            "PUSHOVER_APP_TOKEN": "short",
-            "HA_TOKEN": "x",
-            "API_TOKEN": "x",
-            "PIHOLE_PASSWORD": "x",
-        }
-        with patch.dict(os.environ, env, clear=False), caplog.at_level(logging.ERROR, logger="orchestrator.config"):
-            s = Settings()
-        assert s.pushover_enabled is False
-
-    def test_enabled_with_valid_creds_stays_enabled(self):
-        from orchestrator.config import Settings
-
-        env = {
-            "PUSHOVER_ENABLED": "true",
-            "PUSHOVER_USER_KEY": "valid-long-user-key",
-            "PUSHOVER_APP_TOKEN": "valid-long-token-here",
-            "HA_TOKEN": "x",
-            "API_TOKEN": "x",
-            "PIHOLE_PASSWORD": "x",
-        }
-        with patch.dict(os.environ, env, clear=False):
-            s = Settings()
-        assert s.pushover_enabled is True
-
-    def test_priority_clamped_low(self):
-        from orchestrator.config import Settings
-
-        env = {
-            "PUSHOVER_ENABLED": "false",
-            "PUSHOVER_DEFAULT_PRIORITY": "-999",
-            "HA_TOKEN": "x",
-            "API_TOKEN": "x",
-            "PIHOLE_PASSWORD": "x",
-        }
-        with patch.dict(os.environ, env, clear=False):
-            s = Settings()
-        assert s.pushover_default_priority == -2
-
-    def test_priority_clamped_high(self):
-        from orchestrator.config import Settings
-
-        env = {
-            "PUSHOVER_ENABLED": "false",
-            "PUSHOVER_DEFAULT_PRIORITY": "999",
-            "HA_TOKEN": "x",
-            "API_TOKEN": "x",
-            "PIHOLE_PASSWORD": "x",
-        }
-        with patch.dict(os.environ, env, clear=False):
-            s = Settings()
-        assert s.pushover_default_priority == 2
-
-    def test_disabled_feature_never_raises_on_missing_creds(self):
-        """If the feature flag is off, missing creds shouldn't matter."""
-        from orchestrator.config import Settings
-
-        env = {
-            "PUSHOVER_ENABLED": "false",
-            "PUSHOVER_USER_KEY": "",
-            "PUSHOVER_APP_TOKEN": "",
-            "HA_TOKEN": "x",
-            "API_TOKEN": "x",
-            "PIHOLE_PASSWORD": "x",
-        }
-        with patch.dict(os.environ, env, clear=False):
-            s = Settings()
-        assert s.pushover_enabled is False
-
 
 # ===========================================================================
-# api_routes — /ack + /snooze confirm wiring + widened feature gate
+# api_routes — widened /ack + /snooze feature gate
 # ===========================================================================
 
 
-@pytest.fixture
-def client():
-    """FastAPI TestClient over the api_routes router."""
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    from orchestrator.api_routes import router
-
-    app = FastAPI()
-    app.include_router(router)
-    return TestClient(app)
-
-
-@pytest.fixture
-def clean_scheduler():
-    """Purge any reminder_* jobs before and after the test (shared singleton)."""
-    from orchestrator.shared import scheduler
-
-    def _purge():
-        for job in list(scheduler.get_jobs()):
-            if job.id.startswith("reminder_"):
-                with contextlib.suppress(Exception):
-                    scheduler.remove_job(job.id)
-
-    _purge()
-    yield scheduler
-    _purge()
-
-
-def _make_sig(reminder_id: str, action: str, exp: int, extra: str = "") -> str:
-    from orchestrator.reminder_manager import _sign_callback
-
-    return _sign_callback(reminder_id, action, exp, extra)
-
-
-class TestFeatureGateWidening:
-    """Both ack and snooze routes must stay reachable if EITHER ntfy or
-    pushover is enabled. 404 only when both are off."""
-
-    def test_ack_404s_when_both_channels_off(self, client, ntfy_off, pushover_off):
-        r = client.post("/api/reminder/ack/abc")
-        assert r.status_code == 404
-        assert r.json()["error"] == "disabled"
-
-    def test_snooze_404s_when_both_channels_off(self, client, ntfy_off, pushover_off):
-        r = client.post("/api/reminder/snooze/abc?minutes=10")
-        assert r.status_code == 404
-        assert r.json()["error"] == "disabled"
-
-    def test_ack_processes_when_only_pushover_on(self, client, ntfy_off, pushover_on, tmp_db):
-        """ntfy off, pushover on → the feature gate must let the request
-        through. Bad sig here just means we get 403, not 404."""
-        r = client.post(f"/api/reminder/ack/abc?sig={'0' * 32}&exp={int(time.time()) + 300}")
-        assert r.status_code == 403
-        assert r.json()["error"] == "bad_signature"
-
-    def test_snooze_processes_when_only_pushover_on(self, client, ntfy_off, pushover_on, tmp_db, clean_scheduler):
-        r = client.post(f"/api/reminder/snooze/abc?sig={'0' * 32}&exp={int(time.time()) + 300}&minutes=10")
-        assert r.status_code == 403
-        assert r.json()["error"] == "bad_signature"
-
-
-class TestAckPushoverConfirmWiring:
-    """The ack route must fire-and-forget deliver_pushover_confirm alongside
-    ntfy's deliver_ack_confirm. Replays short-circuit before dispatch."""
-
-    def _patch_confirms(self):
-        """Patch BOTH confirm functions so we can assert exact call patterns
-        without either one hitting real HTTP."""
-        return (
-            patch(
-                "orchestrator.pushover_manager.deliver_pushover_confirm",
-                new_callable=AsyncMock,
-            ),
-            patch(
-                "orchestrator.reminder_manager.deliver_ack_confirm",
-                new_callable=AsyncMock,
-            ),
-        )
-
-    def _drain_tasks(self):
-        import asyncio
-
-        loop = asyncio.get_event_loop()
-        pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
-        if pending:
-            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-
-    def test_ack_fires_pushover_confirm(self, client, ntfy_on, pushover_on, tmp_db):
-        from orchestrator import state_store
-
-        state_store.save_reminder("r1", "take meds now", "2026-04-20T09:00:00")
-        exp = int(time.time()) + 300
-        sig = _make_sig("r1", "ack", exp)
-
-        pushover_patch, ntfy_patch = self._patch_confirms()
-        with (
-            patch("orchestrator.selfcare_manager.record_medication_logged"),
-            pushover_patch as mock_pushover,
-            ntfy_patch,
-        ):
-            r = client.post(f"/api/reminder/ack/r1?sig={sig}&exp={exp}")
-            self._drain_tasks()
-
-        assert r.status_code == 200
-        mock_pushover.assert_called_once()
-        args, _ = mock_pushover.call_args
-        title, message, rid = args[0], args[1], args[2]
-        assert title == "\u2713 Logged"
-        # Action category must NOT be in the title (security invariant)
-        assert "medication" not in title.lower()
-        # Body carries the reminder text
-        assert "take meds now" in message
-        assert rid == "r1"
-
-    def test_ack_replay_does_not_fire_pushover_confirm(self, client, ntfy_on, pushover_on, tmp_db):
-        """already_acked must short-circuit before BOTH confirm dispatches."""
-        from orchestrator import state_store
-
-        state_store.save_reminder("r1", "walk outside", "2026-04-20T09:00:00")
-        exp = int(time.time()) + 300
-        sig = _make_sig("r1", "ack", exp)
-
-        pushover_patch, ntfy_patch = self._patch_confirms()
-        with patch("orchestrator.selfcare_manager.record_movement_logged"), pushover_patch as mock_pushover, ntfy_patch:
-            r1 = client.post(f"/api/reminder/ack/r1?sig={sig}&exp={exp}")
-            self._drain_tasks()
-            assert r1.status_code == 200
-            assert mock_pushover.call_count == 1
-
-            r2 = client.post(f"/api/reminder/ack/r1?sig={sig}&exp={exp}")
-            self._drain_tasks()
-            assert r2.status_code == 200
-            assert r2.json().get("already_acked") is True
-            # No second dispatch — replay short-circuits before fire-and-forget
-            assert mock_pushover.call_count == 1
-
-    def test_ack_fires_pushover_even_when_pushover_enabled_false_at_caller(self, client, ntfy_on, pushover_off, tmp_db):
-        """Same fire-and-forget contract as ntfy: the route dispatches
-        unconditionally. The pushover_manager function itself is the gate."""
-        from orchestrator import state_store
-
-        state_store.save_reminder("r1", "whatever", "2026-04-20T09:00:00")
-        exp = int(time.time()) + 300
-        sig = _make_sig("r1", "ack", exp)
-
-        pushover_patch, ntfy_patch = self._patch_confirms()
-        with pushover_patch as mock_pushover, ntfy_patch:
-            r = client.post(f"/api/reminder/ack/r1?sig={sig}&exp={exp}")
-            self._drain_tasks()
-
-        assert r.status_code == 200
-        mock_pushover.assert_called_once()
-
-
-class TestSnoozePushoverConfirmWiring:
-    def _patch_confirms(self):
-        return (
-            patch(
-                "orchestrator.pushover_manager.deliver_pushover_confirm",
-                new_callable=AsyncMock,
-            ),
-            patch(
-                "orchestrator.reminder_manager.deliver_ack_confirm",
-                new_callable=AsyncMock,
-            ),
-        )
-
-    def _drain_tasks(self):
-        import asyncio
-
-        loop = asyncio.get_event_loop()
-        pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
-        if pending:
-            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-
-    def test_snooze_fires_pushover_confirm_with_sleep_title(
-        self, client, ntfy_on, pushover_on, tmp_db, clean_scheduler
-    ):
-        from orchestrator import state_store
-
-        state_store.save_reminder("r1", "tick", "2026-04-20T09:00:00")
-        exp = int(time.time()) + 300
-        sig = _make_sig("r1", "snooze", exp, extra="10")
-
-        pushover_patch, ntfy_patch = self._patch_confirms()
-        with pushover_patch as mock_pushover, ntfy_patch:
-            r = client.post(f"/api/reminder/snooze/r1?sig={sig}&exp={exp}&minutes=10")
-            self._drain_tasks()
-
-        assert r.status_code == 200
-        mock_pushover.assert_called_once()
-        args, _ = mock_pushover.call_args
-        title, message, rid = args[0], args[1], args[2]
-        assert title.startswith("\U0001f4a4 Snoozed until")
-        assert "1/5 snoozes used" in message
-        assert rid == "r1"
+@pytest.mark.parametrize(
+    "path",
+    [
+        pytest.param("/api/reminder/ack/abc?sig={sig}&exp={exp}", id="ack"),
+        pytest.param("/api/reminder/snooze/abc?sig={sig}&exp={exp}&minutes=10", id="snooze"),
+    ],
+)
+def test_routes_process_when_only_pushover_on(
+    delivery_api_client, delivery_ntfy_off, pushover_on, tmp_db, delivery_clean_scheduler, path
+):
+    """ntfy off, pushover on → the feature gate (404 only when BOTH are off,
+    see test_ntfy_feedback) lets the request through: a bad sig is 403, not 404."""
+    r = delivery_api_client.post(path.format(sig="0" * 32, exp=int(time.time()) + 300))
+    assert r.status_code == 403
+    assert r.json()["error"] == "bad_signature"
 
 
 # ===========================================================================
@@ -823,79 +384,24 @@ class TestSnoozePushoverConfirmWiring:
 # ===========================================================================
 
 
-class TestDeliverReminderJobDispatch:
-    @pytest.mark.asyncio
-    async def test_phone_target_dispatches_pushover(self, pushover_on, tmp_db, monkeypatch):
-        """target='phone' → deliver_via_pushover fired via asyncio.create_task.
-        We patch the symbol in the pushover_manager module (which is what the
-        inner helper imports at call time)."""
-        from orchestrator import state_store
-        from orchestrator.tool_handlers import deliver_reminder_job
+@pytest.mark.parametrize(
+    "enabled,rid,text",
+    [pytest.param(True, "r1", "take meds", id="enabled"), pytest.param(False, "r2", "water time", id="disabled")],
+)
+async def test_deliver_reminder_job_dispatches_pushover(tmp_db, delivery_quiet, monkeypatch, enabled, rid, text):
+    """target='phone' → deliver_via_pushover is fired via asyncio.create_task,
+    even with pushover disabled: the gate is inside deliver_via_pushover, so a
+    runtime config flip can't strand a call. Patched where the inner helper
+    imports it at call time."""
+    from orchestrator.tool_handlers import deliver_reminder_job
 
-        state_store.save_reminder("r1", "take meds", "2026-04-20T09:00:00", target="phone")
+    monkeypatch.setattr(settings, "pushover_enabled", enabled, raising=False)
+    state_store.save_reminder(rid, text, "2026-04-20T09:00:00", target="phone")
 
-        # Inhibit TTS and HA Companion push paths — they're not under test here
-        async def _noop_voice(*a, **kw):
-            return {"success": True}
+    mock_push = AsyncMock(return_value={"success": True, "request_id": "r"})
+    with patch("orchestrator.pushover_manager.deliver_via_pushover", mock_push):
+        await deliver_reminder_job(rid)
+        await drain_tasks()
 
-        async def _noop_notify(*a, **kw):
-            return {"success": True}
-
-        monkeypatch.setattr("orchestrator.tool_handlers._announce_voice", _noop_voice)
-        monkeypatch.setattr("orchestrator.tool_handlers._send_notification", _noop_notify)
-
-        mock_push = AsyncMock(return_value={"success": True, "request_id": "r"})
-        # Also silence the parallel ntfy dispatch so we're only asserting on pushover
-        mock_ntfy = AsyncMock(return_value={"success": True})
-        with (
-            patch("orchestrator.pushover_manager.deliver_via_pushover", mock_push),
-            patch("orchestrator.reminder_manager.deliver_via_ntfy", mock_ntfy),
-        ):
-            await deliver_reminder_job("r1")
-            # Let the detached task run
-            import asyncio
-
-            pending = [t for t in asyncio.all_tasks() if not t.done() and t is not asyncio.current_task()]
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-
-        mock_push.assert_called_once()
-        call_args, _ = mock_push.call_args
-        assert call_args[0] == "r1"
-        assert call_args[1] == "take meds"
-
-    @pytest.mark.asyncio
-    async def test_dispatch_happens_even_when_pushover_disabled(self, pushover_off, tmp_db, monkeypatch):
-        """The gate is inside deliver_via_pushover itself — the caller always
-        dispatches. This matters for runtime config flips: a fresh read after
-        disabling would still see the create_task fire."""
-        from orchestrator import state_store
-        from orchestrator.tool_handlers import deliver_reminder_job
-
-        state_store.save_reminder("r2", "water time", "2026-04-20T09:00:00", target="phone")
-
-        async def _noop_voice(*a, **kw):
-            return {"success": True}
-
-        async def _noop_notify(*a, **kw):
-            return {"success": True}
-
-        monkeypatch.setattr("orchestrator.tool_handlers._announce_voice", _noop_voice)
-        monkeypatch.setattr("orchestrator.tool_handlers._send_notification", _noop_notify)
-
-        mock_push = AsyncMock(return_value={"success": False, "skipped": True, "reason": "disabled"})
-        mock_ntfy = AsyncMock(return_value={"success": True})
-        with (
-            patch("orchestrator.pushover_manager.deliver_via_pushover", mock_push),
-            patch("orchestrator.reminder_manager.deliver_via_ntfy", mock_ntfy),
-        ):
-            await deliver_reminder_job("r2")
-            import asyncio
-
-            pending = [t for t in asyncio.all_tasks() if not t.done() and t is not asyncio.current_task()]
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-
-        # Still dispatched: the "pushover_enabled=False" check is inside the
-        # function, not the caller. This prevents stranded calls if flags flip.
-        mock_push.assert_called_once()
+    mock_push.assert_called_once()
+    assert mock_push.call_args.args[:2] == (rid, text)

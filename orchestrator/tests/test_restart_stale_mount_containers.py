@@ -25,34 +25,22 @@ from __future__ import annotations
 import copy
 import fcntl
 import hashlib
-import importlib.util
 import itertools
 import json
 import os
 import signal
 import stat
 import subprocess
-import sys
 import threading
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "restart_stale_mount_containers.py"
+from orchestrator.tests._helpers import REPO_ROOT, load_script
 
-
-def _load():
-    spec = importlib.util.spec_from_file_location("restart_stale_mount_containers_under_test", _SCRIPT)
-    mod = importlib.util.module_from_spec(spec)
-    # Must be registered BEFORE exec: @dataclass resolves the string annotations
-    # (from __future__ import annotations) via sys.modules[cls.__module__].
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-rsm = _load()
+rsm = load_script(
+    REPO_ROOT / "scripts" / "restart_stale_mount_containers.py", "restart_stale_mount_containers_under_test"
+)
 Mount = rsm.Mount
 
 ROOT = "/mnt"
@@ -803,23 +791,14 @@ def test_fix_timeout_from_real_docker_call_does_not_stop_the_queue(world, two_st
     assert run.restarted_ok == 1
 
 
-def test_fix_abort_stops_the_queue(world, two_stale, monkeypatch):
-    a, b = two_stale
-    seen = _recording_restart(world, monkeypatch, lambda cid: "abort")
-    run = _run(world)
-    rsm.fix(run)
-    assert seen == [a]
-    assert run.failed == {a: "a-first"}
-    assert run.restarted_ok == 0
-
-
 def test_fix_abort_from_a_disk_vanishing_mid_run(world, two_stale):
     a, b = two_stale
     world.hooks[("stop", a)] = lambda c: world.unplug(LOG)
     run = _run(world)
     rsm.fix(run)
-    assert world.actions == [("stop", a)]
+    assert world.actions == [("stop", a)]  # the queue stops: b is never touched
     assert run.failed == {a: "a-first"}
+    assert run.restarted_ok == 0
 
 
 def test_fix_skipped_is_neither_ok_nor_failed(world, two_stale, monkeypatch):
@@ -1079,7 +1058,11 @@ def test_main_final_recheck_failure_reports_last_known_state(world, two_stale, m
     assert read_prom(mdir / RESTART_PROM)["jess_stale_mount_restarted_containers"] == 2
 
 
-def test_main_sigterm_mid_fix_still_writes_metrics_and_state(world, two_stale, mdir, state_file):
+# Regression: a SIGTERM between `docker stop` and `docker start` must leave the
+# stopped container in the state file and jess_stale_mount_restart_failures.
+def test_main_sigterm_mid_fix_writes_metrics_and_keeps_the_stopped_container_reported(
+    world, two_stale, mdir, state_file
+):
     a, b = two_stale
 
     def sigterm(c):
@@ -1089,6 +1072,7 @@ def test_main_sigterm_mid_fix_still_writes_metrics_and_state(world, two_stale, m
     with pytest.raises(SystemExit) as ei:
         main("--fix", "--metrics-dir", mdir, "--state-file", state_file)
     assert ei.value.code == 143
+    assert world.containers[b]["State"]["Running"] is False  # left stopped
     assert read_prom(mdir / CHECK_PROM)["jess_stale_mount_containers"] == 1  # b, a was fixed
     assert read_prom(mdir / RESTART_PROM)["jess_stale_mount_restarted_containers"] == 1
     assert isinstance(json.loads(state_file.read_text())["failed"], dict)
@@ -1096,19 +1080,6 @@ def test_main_sigterm_mid_fix_still_writes_metrics_and_state(world, two_stale, m
     with os.scandir(mdir) as it:
         assert sorted(e.name for e in it) == [CHECK_PROM, RESTART_PROM]
 
-
-# Regression: a SIGTERM between `docker stop` and `docker start` must leave the
-# stopped container in the state file and jess_stale_mount_restart_failures.
-def test_main_sigterm_between_stop_and_start_records_the_stopped_container(world, two_stale, mdir, state_file):
-    a, b = two_stale
-
-    def sigterm(c):
-        raise SystemExit(143)
-
-    world.hooks[("stop", b)] = sigterm
-    with pytest.raises(SystemExit):
-        main("--fix", "--metrics-dir", mdir, "--state-file", state_file)
-    assert world.containers[b]["State"]["Running"] is False  # left stopped
     del world.hooks[("stop", b)]
     # 10 minutes later the check timer runs: b must still be reported somewhere
     rc = main("--metrics-dir", mdir, "--state-file", state_file)
@@ -1138,26 +1109,10 @@ def test_main_releases_the_lock(world, mdir):
         os.close(fd)
 
 
-def test_main_exit_codes(world, mdir, monkeypatch):
-    world.add("healthy", [(LOG + "/a", "/a")])
-    assert main("--metrics-dir", mdir) == 0
-    world.add("stale-one", [(LOG + "/b", "/b")])
-    replug_log(world)
-    assert main("--metrics-dir", mdir) == 1
-
-
-def test_main_exit_2_when_containers_cannot_be_listed(world, mdir, monkeypatch):
-    def broken():
-        raise RuntimeError("docker ps failed: permission denied")
-
-    monkeypatch.setattr(rsm, "running_containers", broken)
-    assert main("--metrics-dir", mdir) == 2
-    assert not (mdir / CHECK_PROM).exists()
-
-
 def test_main_exit_2_when_docker_ps_fails(world, mdir):
     world.fail[("ps", "")] = "permission denied while trying to connect"
     assert main("--metrics-dir", mdir) == 2
+    assert not (mdir / CHECK_PROM).exists()
 
 
 # --------------------------------------------------------------------------

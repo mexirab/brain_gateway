@@ -17,48 +17,20 @@ from unittest.mock import patch
 
 import pytest
 
-
-def _can_import():
-    try:
-        from orchestrator import (
-            api_routes,  # noqa: F401
-            state_store,  # noqa: F401
-        )
-
-        return True
-    except (ImportError, ModuleNotFoundError):
-        return False
-
-
-_skip_no_deps = pytest.mark.skipif(
-    not _can_import(),
-    reason="api_routes / state_store require full orchestrator dependencies",
-)
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+from orchestrator import state_store
+from orchestrator.api_routes import router
+from orchestrator.tests.fixtures_selfcare import router_client
 
 
 @pytest.fixture
 def client():
     """TestClient over the api_routes router (no middleware → no auth)."""
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    from orchestrator.api_routes import router
-
-    app = FastAPI()
-    app.include_router(router)
-    return TestClient(app)
+    return router_client(router)
 
 
 @pytest.fixture
 def clean_selfcare():
     """Truncate selfcare_log before and after each test for isolation."""
-    from orchestrator import state_store
-
     with state_store.get_db() as conn:
         conn.execute("DELETE FROM selfcare_log")
     yield
@@ -70,8 +42,6 @@ def _insert_raw(action: str, detail, logged_at: str) -> None:
     """Insert a selfcare_log row directly, bypassing the 5-min dedup in
     save_selfcare_log so we can backdate / batch entries deterministically.
     """
-    from orchestrator import state_store
-
     with state_store.get_db() as conn:
         conn.execute(
             "INSERT INTO selfcare_log (action, detail, logged_at) VALUES (?, ?, ?)",
@@ -84,7 +54,6 @@ def _insert_raw(action: str, detail, logged_at: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
 class TestSelfcareToday:
     def test_empty_database_returns_zeros_for_all_actions(self, client, clean_selfcare):
         r = client.get("/api/selfcare/today")
@@ -111,8 +80,6 @@ class TestSelfcareToday:
         Validates that logged_today is False for water (no entry today) but
         last_ever still reflects the historical row.
         """
-        from orchestrator import state_store
-
         # Today: one medication entry.
         state_store.save_selfcare_log("medication", "Adderall")
 

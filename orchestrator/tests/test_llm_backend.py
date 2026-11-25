@@ -119,9 +119,6 @@ def test_stream_chat_completion_signature_matches_call_site(backend_cls):
 # ---------------------------------------------------------------------------
 # End-to-end (mocked) chat_completion per backend, invoked like call_model
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
 async def test_openai_compatible_passes_extra_body_through():
     url = "http://vllm.test/v1"
     async with httpx.AsyncClient() as http:
@@ -138,7 +135,6 @@ async def test_openai_compatible_passes_extra_body_through():
     assert resp["choices"][0]["message"]["content"] == "hi"
 
 
-@pytest.mark.asyncio
 async def test_anthropic_accepts_call_model_invocation():
     """Regression: this exact call raised TypeError (unexpected 'extra_body')."""
     url = "https://api.anthropic.test/v1"
@@ -161,7 +157,6 @@ async def test_anthropic_accepts_call_model_invocation():
     assert resp["choices"][0]["finish_reason"] == "stop"
 
 
-@pytest.mark.asyncio
 async def test_anthropic_maps_stop_and_ignores_none_extra_body():
     url = "https://api.anthropic.test/v1"
     async with httpx.AsyncClient() as http:
@@ -178,7 +173,6 @@ async def test_anthropic_maps_stop_and_ignores_none_extra_body():
     assert "stop_sequences" not in second
 
 
-@pytest.mark.asyncio
 async def test_anthropic_tool_use_normalized_to_tool_calls():
     url = "https://api.anthropic.test/v1"
     async with httpx.AsyncClient() as http:
@@ -194,7 +188,6 @@ async def test_anthropic_tool_use_normalized_to_tool_calls():
     assert json.loads(tc["function"]["arguments"]) == {"tz": "utc"}
 
 
-@pytest.mark.asyncio
 async def test_openai_accepts_call_model_invocation_and_drops_vllm_keys():
     """Regression: this exact call raised TypeError (unexpected 'extra_body')."""
     url = "https://api.openai.test/v1"
@@ -213,7 +206,6 @@ async def test_openai_accepts_call_model_invocation_and_drops_vllm_keys():
     assert resp["choices"][0]["message"]["content"] == "hi"
 
 
-@pytest.mark.asyncio
 async def test_unknown_kwargs_warn_but_do_not_raise(caplog):
     import logging
 
@@ -230,7 +222,6 @@ async def test_unknown_kwargs_warn_but_do_not_raise(caplog):
     assert any("brand_new_flag" in r.getMessage() for r in caplog.records)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "backend_cls, backend_name, url, path",
     [
@@ -333,7 +324,6 @@ async def _direct_request(backend, *, stream: bool, extra_body) -> None:
         await backend.chat_completion([dict(m) for m in _MESSAGES], **kwargs)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["buffered", "streaming"])
 async def test_voice_switch_off_wire_body_byte_identical_to_old_literal(monkeypatch, stream):
     from orchestrator import shared
@@ -355,7 +345,6 @@ async def test_voice_switch_off_wire_body_byte_identical_to_old_literal(monkeypa
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["buffered", "streaming"])
 async def test_voice_switch_on_wire_body_has_2048_and_no_template_kwargs(monkeypatch, stream):
     from orchestrator import shared
@@ -378,7 +367,6 @@ async def test_voice_switch_on_wire_body_has_2048_and_no_template_kwargs(monkeyp
     assert payload.get("stream", False) is stream
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["buffered", "streaming"])
 async def test_non_voice_wire_body_ignores_voice_switch(monkeypatch, stream):
     """Typed turns keep the backend's own max_tokens and never get a

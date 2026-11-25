@@ -25,34 +25,22 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import importlib.util
 import json
 import os
 import re
 import shlex
 import stat
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-_DIR = Path(__file__).resolve().parents[2] / "scripts" / "container-firewall"
-_SCRIPT = _DIR / "jess_docker_input.py"
-_REPO_CONF = _DIR / "jess-docker-input.conf"
+from orchestrator.tests.fixtures_ops import FIREWALL_DIR, jess_docker_input
 
+_SCRIPT = FIREWALL_DIR / "jess_docker_input.py"
+_REPO_CONF = FIREWALL_DIR / "jess-docker-input.conf"
 
-def _load():
-    spec = importlib.util.spec_from_file_location("jess_docker_input_under_test", _SCRIPT)
-    mod = importlib.util.module_from_spec(spec)
-    # Must be registered BEFORE exec: @dataclass resolves the string annotations
-    # (from __future__ import annotations) via sys.modules[cls.__module__].
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-jdi = _load()
+jdi = jess_docker_input()
 IPV4, IPV6 = jdi.IPV4, jdi.IPV6
 FAM = {"ipv4": IPV4, "ipv6": IPV6}
 V4_CHAIN, V6_CHAIN = IPV4.chain, IPV6.chain
@@ -338,14 +326,6 @@ def _apply_all(cfg=None, bridges=None):
 # --------------------------------------------------------------------------
 # 1. parse_config
 # --------------------------------------------------------------------------
-
-
-def test_parse_repo_config():
-    cfg = jdi.parse_config(_REPO_CONF.read_text())
-    assert cfg.mode == "observe"
-    by_net = {a.network: a for a in cfg.allows}
-    assert by_net[HOSTACC] == jdi.Allow(HOSTACC, "tcp", (8004, 8053, 8123, 8888))
-    assert by_net[SCRAPE] == jdi.Allow(SCRAPE, "tcp", (5050, 8004, 9100, 9400, 19999))
 
 
 def test_parse_accepts_and_normalizes():

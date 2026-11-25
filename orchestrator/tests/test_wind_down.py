@@ -1,71 +1,34 @@
 """
-Tests for the sleep wind-down ladder (jobs_winddown) and its morning half
-(sleep_mode stamp -> morning_briefing short-night adaptation).
+Tests for the sleep wind-down ladder (jobs_winddown) and the goodnight stamp
+its morning half reads.
 
 Covers:
 - T-60 lights rung: scene fan-out, no-scene no-op, DND skip, per-scene error
-  isolation.
+  isolation, and the dim heartbeat stamped on every path (early returns too).
 - T-30 nudge: screens-away text + tomorrow anchor, no-events wording, DND and
   active-routine silent skips, calendar-failure resilience.
-- sleep_mode("on") stamps app_state.sleep_started_at; "off" does not.
-- morning_briefing: short night -> gentle greeting + weather skipped + stamp
-  cleared; stale stamp (>16h) -> normal; no stamp -> normal.
+- sleep_mode("on") stamps app_state.sleep_started_at (goodnight intent only).
 
-Runs inside the brain-orchestrator container (full deps available). Skips
-gracefully when orchestrator dependencies are unavailable locally.
+The morning short-night adaptation that reads the stamp is in
+test_morning_briefing.
 """
 
 import logging
+from contextlib import ExitStack
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
-
-def _can_import():
-    try:
-        from orchestrator import jobs_winddown  # noqa: F401
-
-        return True
-    except (ImportError, ModuleNotFoundError):
-        return False
-
-
-_skip_no_deps = pytest.mark.skipif(
-    not _can_import(),
-    reason="jobs_winddown requires full orchestrator dependencies",
-)
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _skip_without_deps():
-    if not _can_import():
-        pytest.skip("jobs_winddown deps unavailable")
+from orchestrator import jobs_winddown, routine_manager, tool_handlers
+from orchestrator.shared import TIMEZONE
 
 
 @pytest.fixture
-def reset_shared():
-    """Reset the shared state the ladder reads: DND, phone cache, focus."""
-    from orchestrator import shared
-
-    orig_dnd = shared.DND_ACTIVE
-    orig_events = shared._phone_calendar_events
-    orig_time = shared._phone_calendar_sync_time
-    orig_focus = shared.current_focus_session.to_dict()
-    shared.DND_ACTIVE = False
-    shared._phone_calendar_events = []
-    shared._phone_calendar_sync_time = 0.0
-    shared.current_focus_session.reset()
-    yield shared
-    shared.DND_ACTIVE = orig_dnd
-    shared._phone_calendar_events = orig_events
-    shared._phone_calendar_sync_time = orig_time
-    shared.current_focus_session.update(orig_focus)
+def reset_shared(delivery_reset_shared):
+    """DND off, empty phone cache, no focus session (restored afterwards)."""
+    return delivery_reset_shared
 
 
 def _ha_result(success=True, message=""):
@@ -76,10 +39,6 @@ def _ha_result(success=True, message=""):
 
 
 def _tomorrow_event(title, hour=9, minute=0, all_day=False):
-    from zoneinfo import ZoneInfo
-
-    from orchestrator.shared import TIMEZONE
-
     tz = ZoneInfo(TIMEZONE)
     day = datetime.now(tz).date() + timedelta(days=1)
     return {
@@ -92,181 +51,73 @@ def _tomorrow_event(title, hour=9, minute=0, all_day=False):
 
 # ---------------------------------------------------------------------------
 # T-60: lights rung
+#
+# The heartbeat is stamped at the TOP of wind_down_dim, before every early
+# return, so it proves the job FIRED independent of whether it did any work.
+# Without that, a scheduler that drops only the dim job leaves the Sleep
+# Wind-Down panels green/empty (the scene counter stays silent on the no-op
+# nights). Every dim test below therefore also pins the stamp, including the
+# no-scene and DND early-return paths.
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_dim_activates_each_configured_scene(reset_shared):
-    shared = reset_shared
+async def _run_dim(shared, scene, *, side_effect=None, result=None):
+    """Run wind_down_dim with WIND_DOWN_SCENE=scene; returns (ha, heartbeat)."""
     ha = MagicMock()
-    ha.call_service = AsyncMock(return_value=_ha_result())
-
-    from orchestrator import jobs_winddown
-
+    ha.call_service = AsyncMock(return_value=result, side_effect=side_effect)
     with (
-        patch.object(shared, "WIND_DOWN_SCENE", "scene.living_room_relax, scene.bedroom_dimmed"),
+        patch.object(shared, "WIND_DOWN_SCENE", scene),
         patch.object(shared, "ha_client", ha),
+        patch.object(jobs_winddown, "WIND_DOWN_DIM_LAST_RUN") as dim_hb,
     ):
         await jobs_winddown.wind_down_dim()
+    return ha, dim_hb
+
+
+async def test_dim_activates_each_configured_scene(reset_shared):
+    ha, dim_hb = await _run_dim(reset_shared, "scene.living_room_relax, scene.bedroom_dimmed", result=_ha_result())
 
     assert ha.call_service.await_count == 2
     called = [c.args for c in ha.call_service.await_args_list]
     assert ("scene.living_room_relax", "turn_on") in called
     assert ("scene.bedroom_dimmed", "turn_on") in called
+    dim_hb.set.assert_called_once()
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_dim_noop_without_scene(reset_shared, caplog):
-    shared = reset_shared
-    ha = MagicMock()
-    ha.call_service = AsyncMock()
-
-    from orchestrator import jobs_winddown
-
-    with (
-        patch.object(shared, "WIND_DOWN_SCENE", ""),
-        patch.object(shared, "ha_client", ha),
-        caplog.at_level(logging.INFO, logger="orchestrator.jobs_winddown"),
-    ):
-        await jobs_winddown.wind_down_dim()
+    """No WIND_DOWN_SCENE -> no scene attempted, but the job still fired."""
+    with caplog.at_level(logging.INFO, logger="orchestrator.jobs_winddown"):
+        ha, dim_hb = await _run_dim(reset_shared, "")
 
     ha.call_service.assert_not_awaited()
     assert any("No WIND_DOWN_SCENE configured" in r.getMessage() for r in caplog.records)
+    dim_hb.set.assert_called_once()
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_dim_skipped_under_dnd(reset_shared):
-    """scene.turn_on can raise lights that are off — never fire under DND."""
-    shared = reset_shared
-    shared.DND_ACTIVE = True
-    ha = MagicMock()
-    ha.call_service = AsyncMock()
-
-    from orchestrator import jobs_winddown
-
-    with (
-        patch.object(shared, "WIND_DOWN_SCENE", "scene.bedroom_dimmed"),
-        patch.object(shared, "ha_client", ha),
-    ):
-        await jobs_winddown.wind_down_dim()
+    """scene.turn_on can raise lights that are off — never fire under DND.
+    The heartbeat must still advance."""
+    reset_shared.DND_ACTIVE = True
+    ha, dim_hb = await _run_dim(reset_shared, "scene.bedroom_dimmed")
 
     ha.call_service.assert_not_awaited()
+    dim_hb.set.assert_called_once()
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_dim_ignores_non_scene_entities(reset_shared, caplog):
     """A .env typo (switch.garage_door) must not get a nightly turn_on."""
-    shared = reset_shared
-    ha = MagicMock()
-    ha.call_service = AsyncMock(return_value=_ha_result())
-
-    from orchestrator import jobs_winddown
-
-    with (
-        patch.object(shared, "WIND_DOWN_SCENE", "scene.bedroom_dimmed,switch.garage_door"),
-        patch.object(shared, "ha_client", ha),
-        caplog.at_level(logging.WARNING, logger="orchestrator.jobs_winddown"),
-    ):
-        await jobs_winddown.wind_down_dim()
+    with caplog.at_level(logging.WARNING, logger="orchestrator.jobs_winddown"):
+        ha, _ = await _run_dim(reset_shared, "scene.bedroom_dimmed,switch.garage_door", result=_ha_result())
 
     assert ha.call_service.await_count == 1
     assert ha.call_service.await_args.args == ("scene.bedroom_dimmed", "turn_on")
     assert any("Ignoring non-scene entry" in r.getMessage() for r in caplog.records)
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_dim_scene_error_does_not_stop_remaining_scenes(reset_shared):
-    shared = reset_shared
-    ha = MagicMock()
-    ha.call_service = AsyncMock(side_effect=[RuntimeError("HA down"), _ha_result()])
-
-    from orchestrator import jobs_winddown
-
-    with (
-        patch.object(shared, "WIND_DOWN_SCENE", "scene.a,scene.b"),
-        patch.object(shared, "ha_client", ha),
-    ):
-        await jobs_winddown.wind_down_dim()
+    ha, _ = await _run_dim(reset_shared, "scene.a,scene.b", side_effect=[RuntimeError("HA down"), _ha_result()])
 
     assert ha.call_service.await_count == 2
-
-
-# ---------------------------------------------------------------------------
-# T-60: dim heartbeat (dead-man's-switch)
-#
-# The heartbeat is stamped at the TOP of wind_down_dim, before every early
-# return, so it proves the job FIRED independent of whether it did any work.
-# Without that, a scheduler that drops only the dim job leaves the Sleep
-# Wind-Down panels green/empty (the scene counter stays silent on the no-op
-# nights). These tests pin the stamp to the early-return paths specifically.
-# ---------------------------------------------------------------------------
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_dim_heartbeat_stamped_on_normal_run(reset_shared):
-    shared = reset_shared
-    ha = MagicMock()
-    ha.call_service = AsyncMock(return_value=_ha_result())
-
-    from orchestrator import jobs_winddown
-
-    with (
-        patch.object(shared, "WIND_DOWN_SCENE", "scene.bedroom_dimmed"),
-        patch.object(shared, "ha_client", ha),
-        patch.object(jobs_winddown, "WIND_DOWN_DIM_LAST_RUN") as dim_hb,
-    ):
-        await jobs_winddown.wind_down_dim()
-
-    dim_hb.set.assert_called_once()
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_dim_heartbeat_stamped_even_without_scene(reset_shared):
-    """No WIND_DOWN_SCENE -> no scene attempted, but the job still fired."""
-    shared = reset_shared
-    ha = MagicMock()
-    ha.call_service = AsyncMock()
-
-    from orchestrator import jobs_winddown
-
-    with (
-        patch.object(shared, "WIND_DOWN_SCENE", ""),
-        patch.object(shared, "ha_client", ha),
-        patch.object(jobs_winddown, "WIND_DOWN_DIM_LAST_RUN") as dim_hb,
-    ):
-        await jobs_winddown.wind_down_dim()
-
-    ha.call_service.assert_not_awaited()
-    dim_hb.set.assert_called_once()
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_dim_heartbeat_stamped_even_under_dnd(reset_shared):
-    """DND skips the scene fan-out but the heartbeat must still advance."""
-    shared = reset_shared
-    shared.DND_ACTIVE = True
-    ha = MagicMock()
-    ha.call_service = AsyncMock()
-
-    from orchestrator import jobs_winddown
-
-    with (
-        patch.object(shared, "WIND_DOWN_SCENE", "scene.bedroom_dimmed"),
-        patch.object(shared, "ha_client", ha),
-        patch.object(jobs_winddown, "WIND_DOWN_DIM_LAST_RUN") as dim_hb,
-    ):
-        await jobs_winddown.wind_down_dim()
-
-    ha.call_service.assert_not_awaited()
-    dim_hb.set.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -289,18 +140,12 @@ def _nudge_patches(*, events=None, announce_result=None, tomorrow_error=None):
 
 
 async def _run_nudge(patches):
-    from contextlib import ExitStack
-
-    from orchestrator import jobs_winddown
-
     with ExitStack() as stack:
         mocks = {name: stack.enter_context(p) for name, p in patches.items()}
         await jobs_winddown.wind_down_nudge()
     return mocks
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_nudge_includes_tomorrow_anchor(reset_shared):
     mocks = await _run_nudge(_nudge_patches(events=[_tomorrow_event("Dentist", hour=8, minute=30)]))
 
@@ -310,49 +155,32 @@ async def test_nudge_includes_tomorrow_anchor(reset_shared):
     assert "wind down" in text.lower()
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_nudge_no_events_wording(reset_shared):
-    mocks = await _run_nudge(_nudge_patches(events=[]))
-    text = mocks["voice"].await_args.args[0]
-    assert "Nothing early tomorrow" in text
+@pytest.mark.parametrize(
+    "events",
+    [pytest.param([], id="no-events"), pytest.param([_tomorrow_event("Trash day", all_day=True)], id="all-day-only")],
+)
+async def test_nudge_without_timed_event_says_nothing_early(reset_shared, events):
+    mocks = await _run_nudge(_nudge_patches(events=events))
+    assert "Nothing early tomorrow" in mocks["voice"].await_args.args[0]
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_nudge_all_day_only_counts_as_no_anchor(reset_shared):
-    mocks = await _run_nudge(_nudge_patches(events=[_tomorrow_event("Trash day", all_day=True)]))
-    text = mocks["voice"].await_args.args[0]
-    assert "Nothing early tomorrow" in text
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_nudge_skipped_under_dnd(reset_shared):
-    shared = reset_shared
-    shared.DND_ACTIVE = True
+    reset_shared.DND_ACTIVE = True
     mocks = await _run_nudge(_nudge_patches())
     mocks["voice"].assert_not_awaited()
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_nudge_skipped_during_routine(reset_shared):
-    from orchestrator import routine_manager
-
     patches = _nudge_patches()
     with patch.object(routine_manager, "_active_session", MagicMock()):
         mocks = await _run_nudge(patches)
     mocks["voice"].assert_not_awaited()
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_nudge_survives_calendar_failure(reset_shared):
     """A calendar blowup drops the anchor line but the nudge still speaks."""
     mocks = await _run_nudge(_nudge_patches(tomorrow_error=RuntimeError("calendar down")))
-    text = mocks["voice"].await_args.args[0]
-    assert "Screens away" in text
+    assert "Screens away" in mocks["voice"].await_args.args[0]
 
 
 # ---------------------------------------------------------------------------
@@ -360,11 +188,7 @@ async def test_nudge_survives_calendar_failure(reset_shared):
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_sleep_mode_indefinite_on_attempts_stamp(reset_shared):
-    from orchestrator import tool_handlers
-
     with (
         patch("orchestrator.tool_handlers._stamp_sleep_started") as stamp,
         patch("orchestrator.state_store.set_notification_flag"),
@@ -374,28 +198,19 @@ async def test_sleep_mode_indefinite_on_attempts_stamp(reset_shared):
     stamp.assert_called_once()
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_sleep_mode_timed_mute_does_not_stamp(reset_shared):
     """'Be quiet for 2 hours' is a meeting/guests mute, not a goodnight."""
-    from orchestrator import shared as _shared
-    from orchestrator import tool_handlers
-
     with (
         patch("orchestrator.tool_handlers._stamp_sleep_started") as stamp,
         patch("orchestrator.state_store.set_notification_flag"),
-        patch.object(_shared, "scheduler", MagicMock()),
+        patch.object(reset_shared, "scheduler", MagicMock()),
     ):
         await tool_handlers._reg_sleep_mode({"action": "on", "duration_hours": 2})
 
     stamp.assert_not_called()
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_sleep_mode_off_does_not_stamp(reset_shared):
-    from orchestrator import tool_handlers
-
     with (
         patch("orchestrator.tool_handlers._stamp_sleep_started") as stamp,
         patch("orchestrator.state_store.clear_notification_flag"),
@@ -405,12 +220,9 @@ async def test_sleep_mode_off_does_not_stamp(reset_shared):
     stamp.assert_not_called()
 
 
-@_skip_no_deps
 def test_stamp_only_in_bedtime_window():
     """The stamp helper only fires between 20:00 and 05:00 — an indefinite
     afternoon mute (nap, quiet time) is not a goodnight."""
-    from orchestrator import tool_handlers
-
     with patch("orchestrator.state_store.set_app_state") as set_state:
         assert tool_handlers._stamp_sleep_started(now=datetime(2026, 7, 6, 22, 30)) is True
         assert tool_handlers._stamp_sleep_started(now=datetime(2026, 7, 7, 1, 0)) is True
@@ -419,98 +231,3 @@ def test_stamp_only_in_bedtime_window():
 
     assert set_state.call_count == 2
     assert all(c.args[0] == "sleep_started_at" for c in set_state.call_args_list)
-
-
-# ---------------------------------------------------------------------------
-# Morning short-night adaptation
-# ---------------------------------------------------------------------------
-
-
-def _morning_patches(*, sleep_entry, announce_result=None):
-    from orchestrator.tests.calendar_fakes import no_calendar_patch
-
-    return {
-        "client": no_calendar_patch(),
-        "voice": patch(
-            "orchestrator.jobs_calendar._announce_voice",
-            new_callable=AsyncMock,
-            return_value=announce_result or {"success": True},
-        ),
-        "weather": patch("orchestrator.jobs_calendar._get_weather_forecast", new_callable=AsyncMock, return_value=None),
-        "reminders": patch("orchestrator.jobs_calendar.list_pending_reminders", return_value=[]),
-        "get_state": patch(
-            "orchestrator.state_store.get_app_state_entry",
-            side_effect=lambda key: sleep_entry if key == "sleep_started_at" else None,
-        ),
-        "delete_state": patch("orchestrator.state_store.delete_app_state"),
-        "outcomes": patch("orchestrator.state_store.get_recent_reminder_outcomes", return_value=[]),
-        # morning_briefing yields (asyncio.sleep(1)) before its routine-collision
-        # check; swap the module's asyncio ref so tests don't pay the real
-        # second, and pin the check to "no routine" so these stay about their
-        # own branch.
-        "yield": patch("orchestrator.jobs_calendar.asyncio", MagicMock(sleep=AsyncMock(return_value=None))),
-        "routine": patch("orchestrator.jobs_calendar._routine_active_or_imminent", return_value=False),
-    }
-
-
-def _sleep_entry(hours_ago):
-    return {
-        "value": (datetime.now() - timedelta(hours=hours_ago)).isoformat(),
-        "updated_at": (datetime.now() - timedelta(hours=hours_ago)).isoformat(),
-    }
-
-
-async def _run_morning(patches):
-    from contextlib import ExitStack
-
-    from orchestrator import jobs_calendar
-
-    with ExitStack() as stack:
-        mocks = {name: stack.enter_context(p) for name, p in patches.items()}
-        await jobs_calendar.morning_briefing()
-    return mocks
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_short_night_softens_briefing(reset_shared):
-    """Goodnight 5h ago -> gentle greeting, weather skipped, stamp cleared."""
-    mocks = await _run_morning(_morning_patches(sleep_entry=_sleep_entry(5)))
-
-    text = mocks["voice"].await_args.args[0]
-    assert "Short night" in text
-    assert "Good morning" not in text
-    mocks["weather"].assert_not_awaited()
-    mocks["delete_state"].assert_called_once_with("sleep_started_at")
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_full_night_stays_normal(reset_shared):
-    """Goodnight 8h ago -> normal greeting, weather included, stamp cleared."""
-    mocks = await _run_morning(_morning_patches(sleep_entry=_sleep_entry(8)))
-
-    text = mocks["voice"].await_args.args[0]
-    assert "Good morning" in text
-    mocks["weather"].assert_awaited_once()
-    mocks["delete_state"].assert_called_once_with("sleep_started_at")
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_stale_stamp_ignored(reset_shared):
-    """A 20h-old stamp (afternoon timed mute yesterday) is not last night."""
-    mocks = await _run_morning(_morning_patches(sleep_entry=_sleep_entry(20)))
-
-    text = mocks["voice"].await_args.args[0]
-    assert "Good morning" in text
-    mocks["delete_state"].assert_called_once_with("sleep_started_at")
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_no_stamp_stays_normal(reset_shared):
-    mocks = await _run_morning(_morning_patches(sleep_entry=None))
-    text = mocks["voice"].await_args.args[0]
-    assert "Good morning" in text
-    mocks["delete_state"].assert_not_called()

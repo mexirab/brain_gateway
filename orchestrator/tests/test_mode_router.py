@@ -2,160 +2,65 @@
 Tests for mode_router.py — Intent classification.
 
 Tests the deterministic v1 mode router: explicit overrides, emotional
-intensity detection, curiosity detection, and default routing.
+intensity detection, curiosity detection, and default routing. Uses
+conftest's ``mode_router`` fixture.
 """
 
 import pytest
 
-from orchestrator.mode_router import ModeRouter
+
+@pytest.mark.parametrize(
+    "text, mode, intensity",
+    [
+        # Explicit intent overrides
+        pytest.param("Can you analyze me and my patterns?", "mirror", None, id="analyze-me"),
+        pytest.param("Reflect on my behavioral tendencies", "mirror", None, id="reflect-on"),
+        pytest.param("Hold me accountable for this task", "challenge", None, id="hold-me-accountable"),
+        pytest.param("I need you to push me today", "challenge", None, id="push-me"),
+        pytest.param("No excuses, tell me what to do", "challenge", None, id="no-excuses"),
+        pytest.param("Don't sugarcoat it, be honest with me", "challenge", None, id="dont-sugarcoat"),
+        # Emotional intensity
+        pytest.param("I'm panicking and can't breathe", "baseline", "high", id="panic"),
+        pytest.param("Everything feels hopeless", "baseline", "high", id="hopeless"),
+        pytest.param("I feel like I'm falling apart", "baseline", "high", id="falling-apart"),
+        pytest.param("I've been feeling really lonely lately", "counterbalance", "medium", id="lonely"),
+        pytest.param("I'm spiraling again about work", "counterbalance", "medium", id="spiraling"),
+        pytest.param("I'm so overwhelmed with everything", "counterbalance", "medium", id="overwhelmed"),
+        pytest.param("What should I have for dinner?", None, "low", id="neutral"),
+        # Curiosity
+        pytest.param("How does ADHD medication work?", "explainer", None, id="how-does"),
+        pytest.param("What is the symbolism of Pisces?", "explainer", None, id="what-is"),
+        pytest.param("Explain how neural networks learn", "explainer", None, id="explain"),
+        pytest.param("What's the difference between SSRIs and SNRIs?", "explainer", None, id="difference-between"),
+        # "spiral" is medium intensity, which beats the "how does" curiosity keyword.
+        pytest.param("How does this spiral ever end?", "counterbalance", "medium", id="intensity-beats-curiosity"),
+        # Default routing
+        pytest.param("Turn on the bedroom lights", "explainer", "low", id="default-low"),
+        pytest.param("", "explainer", "low", id="empty"),
+    ],
+)
+def test_route(mode_router, text, mode, intensity):
+    result = mode_router.route(text)
+    if mode is not None:
+        assert result.mode == mode
+    if intensity is not None:
+        assert result.intensity == intensity
+    assert isinstance(result.tags, list)
 
 
-@pytest.fixture
-def router():
-    return ModeRouter()
+def test_long_input_routes_without_error(mode_router):
+    result = mode_router.route("This is a really long message. " * 200)
+    assert result.mode in ("explainer", "mirror", "counterbalance", "challenge", "baseline")
+    assert result.intensity in ("low", "medium", "high")
 
 
-# ── Explicit intent overrides ──
-
-
-class TestExplicitOverrides:
-    def test_mirror_analyze_me(self, router):
-        result = router.route("Can you analyze me and my patterns?")
-        assert result.mode == "mirror"
-
-    def test_mirror_reflect_on(self, router):
-        result = router.route("Reflect on my behavioral tendencies")
-        assert result.mode == "mirror"
-
-    def test_challenge_hold_me_accountable(self, router):
-        result = router.route("Hold me accountable for this task")
-        assert result.mode == "challenge"
-
-    def test_challenge_push_me(self, router):
-        result = router.route("I need you to push me today")
-        assert result.mode == "challenge"
-
-    def test_challenge_no_excuses(self, router):
-        result = router.route("No excuses, tell me what to do")
-        assert result.mode == "challenge"
-
-    def test_challenge_dont_sugarcoat(self, router):
-        result = router.route("Don't sugarcoat it, be honest with me")
-        assert result.mode == "challenge"
-
-
-# ── Emotional intensity ──
-
-
-class TestEmotionalIntensity:
-    def test_high_intensity_panic(self, router):
-        result = router.route("I'm panicking and can't breathe")
-        assert result.intensity == "high"
-        assert result.mode == "baseline"
-
-    def test_high_intensity_hopeless(self, router):
-        result = router.route("Everything feels hopeless")
-        assert result.intensity == "high"
-        assert result.mode == "baseline"
-
-    def test_high_intensity_falling_apart(self, router):
-        result = router.route("I feel like I'm falling apart")
-        assert result.intensity == "high"
-        assert result.mode == "baseline"
-
-    def test_medium_intensity_lonely(self, router):
-        result = router.route("I've been feeling really lonely lately")
-        assert result.intensity == "medium"
-        assert result.mode == "counterbalance"
-
-    def test_medium_intensity_spiraling(self, router):
-        result = router.route("I'm spiraling again about work")
-        assert result.intensity == "medium"
-        assert result.mode == "counterbalance"
-
-    def test_medium_intensity_overwhelmed(self, router):
-        result = router.route("I'm so overwhelmed with everything")
-        assert result.intensity == "medium"
-        assert result.mode == "counterbalance"
-
-    def test_low_intensity_neutral(self, router):
-        result = router.route("What should I have for dinner?")
-        assert result.intensity == "low"
-
-
-# ── Curiosity detection ──
-
-
-class TestCuriosityDetection:
-    def test_how_does(self, router):
-        result = router.route("How does ADHD medication work?")
-        assert result.mode == "explainer"
-
-    def test_what_is(self, router):
-        result = router.route("What is the symbolism of Pisces?")
-        assert result.mode == "explainer"
-
-    def test_explain(self, router):
-        result = router.route("Explain how neural networks learn")
-        assert result.mode == "explainer"
-
-    def test_difference_between(self, router):
-        result = router.route("What's the difference between SSRIs and SNRIs?")
-        assert result.mode == "explainer"
-
-    def test_curiosity_overridden_by_medium_intensity(self, router):
-        """Curiosity keywords shouldn't fire when intensity is medium+."""
-        result = router.route("How does this spiral ever end?")
-        # "spiral" triggers medium → counterbalance, even though "how does" is curiosity
-        assert result.intensity == "medium"
-        assert result.mode == "counterbalance"
-
-
-# ── Default routing ──
-
-
-class TestDefaultRouting:
-    def test_default_low_is_explainer(self, router):
-        result = router.route("Turn on the bedroom lights")
-        assert result.mode == "explainer"
-        assert result.intensity == "low"
-
-    def test_empty_input(self, router):
-        result = router.route("")
-        assert result.mode == "explainer"
-        assert result.intensity == "low"
-
-    def test_long_input(self, router):
-        text = "This is a really long message. " * 200
-        result = router.route(text)
-        assert result.mode in ("explainer", "mirror", "counterbalance", "challenge", "baseline")
-        assert result.intensity in ("low", "medium", "high")
-
-
-# ── Tags ──
-
-
-class TestTags:
-    def test_explicit_tag_present(self, router):
-        result = router.route("Hold me accountable")
-        assert any("explicit:" in t for t in result.tags)
-
-    def test_intensity_tag_present(self, router):
-        result = router.route("I feel so ashamed right now")
-        assert any("intensity_medium:" in t for t in result.tags)
-
-    def test_curiosity_tag_present(self, router):
-        result = router.route("Tell me about Pisces traits")
-        assert any("curiosity:" in t for t in result.tags)
-
-
-# ── RoutingResult structure ──
-
-
-class TestRoutingResult:
-    def test_dataclass_fields(self, router):
-        result = router.route("hello")
-        assert hasattr(result, "mode")
-        assert hasattr(result, "intensity")
-        assert hasattr(result, "tags")
-        assert isinstance(result.tags, list)
+@pytest.mark.parametrize(
+    "text, tag_prefix",
+    [
+        pytest.param("Hold me accountable", "explicit:", id="explicit"),
+        pytest.param("I feel so ashamed right now", "intensity_medium:", id="intensity"),
+        pytest.param("Tell me about Pisces traits", "curiosity:", id="curiosity"),
+    ],
+)
+def test_tags_name_the_rule_that_fired(mode_router, text, tag_prefix):
+    assert any(tag_prefix in t for t in mode_router.route(text).tags)

@@ -10,205 +10,67 @@ import unittest.mock as mock
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Exercise catalog fixtures
-# ---------------------------------------------------------------------------
-
-_EXERCISES = [
-    {
-        "name": "Barbell Squat",
-        "primary_muscle": "quads",
-        "secondary_muscles": ["glutes", "hamstrings"],
-        "equipment": "barbell",
-        "is_compound": True,
-        "movement_pattern": "squat",
-    },
-    {
-        "name": "Romanian Deadlift",
-        "primary_muscle": "hamstrings",
-        "secondary_muscles": ["glutes", "back"],
-        "equipment": "barbell",
-        "is_compound": True,
-        "movement_pattern": "hinge",
-    },
-    {
-        "name": "Bench Press",
-        "primary_muscle": "chest",
-        "secondary_muscles": ["triceps", "front_delts"],
-        "equipment": "barbell",
-        "is_compound": True,
-        "movement_pattern": "push_horizontal",
-    },
-    {
-        "name": "Barbell Row",
-        "primary_muscle": "back",
-        "secondary_muscles": ["biceps", "rear_delts"],
-        "equipment": "barbell",
-        "is_compound": True,
-        "movement_pattern": "pull_horizontal",
-    },
-    {
-        "name": "Overhead Press",
-        "primary_muscle": "front_delts",
-        "secondary_muscles": ["triceps"],
-        "equipment": "barbell",
-        "is_compound": True,
-        "movement_pattern": "push_vertical",
-    },
-    {
-        "name": "Pull-up",
-        "primary_muscle": "back",
-        "secondary_muscles": ["biceps"],
-        "equipment": "bodyweight",
-        "is_compound": True,
-        "movement_pattern": "pull_vertical",
-    },
-    {
-        "name": "Plank",
-        "primary_muscle": "core",
-        "secondary_muscles": [],
-        "equipment": "bodyweight",
-        "is_compound": False,
-        "movement_pattern": "core",
-    },
-    {
-        "name": "Bicep Curl",
-        "primary_muscle": "biceps",
-        "secondary_muscles": [],
-        "equipment": "dumbbell",
-        "is_compound": False,
-        "movement_pattern": "isolation",
-    },
-    {
-        "name": "Lunge",
-        "primary_muscle": "quads",
-        "secondary_muscles": ["glutes"],
-        "equipment": "bodyweight",
-        "is_compound": True,
-        "movement_pattern": "lunge",
-    },
-]
-
-
-@pytest.fixture()
-def seeded_db(tmp_db):
-    from orchestrator import state_store
-
-    state_store.seed_exercises(_EXERCISES)
-    return tmp_db
-
+from orchestrator import state_store, workout_manager
+from orchestrator.exercises_seed import FALLBACK_VARIANTS
+from orchestrator.metrics import WORKOUT_GENERATED, WORKOUT_PROGRESSION
+from orchestrator.tests._helpers import metric_value
+from orchestrator.tests.fixtures_pantry import workout_backdate as _backdate
+from orchestrator.tests.fixtures_pantry import workout_session as _session
+from orchestrator.tests.fixtures_pantry import workout_train_all as _train_all
+from orchestrator.workout_manager import (
+    _add_exercise_sets,
+    _cap_load,
+    _gear_ceiling,
+    _pick_for_slots,
+    _plan_target,
+    deload_status,
+    exercises_for_minutes,
+    generate_workout,
+    get_program_overview,
+    get_status,
+    modify_workout,
+    next_program_day,
+    program_split,
+)
+from orchestrator.workout_setup import add_location, clear_program, remove_location, set_program
 
 # ---------------------------------------------------------------------------
 # generate_workout — _decide_workout_type branches
 # ---------------------------------------------------------------------------
 
 
-def test_generate_workout_no_history_returns_full_body(seeded_db):
-    """No prior workouts → _decide_workout_type should pick full_body."""
-    from orchestrator import workout_manager
-
-    # Both callables return "no history" state
+@pytest.mark.parametrize(
+    "count,days_since,recent,expected",
+    [
+        pytest.param(0, None, {}, "full_body", id="no-history"),
+        pytest.param(1, 5, {}, "full_body", id="long-gap"),
+        pytest.param(1, 1, {}, "full_body_complement", id="one-recent-session"),
+        # 2+ sessions in 4 days: the least-loaded split wins
+        pytest.param(
+            2, 1, {"quads": 10, "hamstrings": 10, "glutes": 10, "chest": 1, "back": 1}, "push_day", id="legs-loaded"
+        ),
+        pytest.param(
+            3,
+            0,
+            {"chest": 12, "triceps": 10, "front_delts": 8, "back": 12, "biceps": 10, "quads": 0},
+            "legs_day",
+            id="push-pull-loaded",
+        ),
+    ],
+)
+def test_generate_workout_decides_type_from_history(tmp_db, count, days_since, recent, expected):
     with (
-        mock.patch.object(workout_manager.state_store, "count_workouts_in_window", return_value=0),
-        mock.patch.object(workout_manager.state_store, "days_since_last_workout", return_value=None),
-        mock.patch.object(workout_manager.state_store, "get_recent_muscle_groups", return_value={}),
-    ):
-        result = workout_manager.generate_workout()
-
-    assert result["ok"] is True
-    assert result["workout_type"] == "full_body"
-    assert result["workout_id"] > 0
-    assert len(result["exercises"]) > 0
-
-
-def test_generate_workout_long_gap_returns_full_body(seeded_db):
-    """5 days since last workout → full_body."""
-    from orchestrator import workout_manager
-
-    with (
-        mock.patch.object(workout_manager.state_store, "count_workouts_in_window", return_value=1),
-        mock.patch.object(workout_manager.state_store, "days_since_last_workout", return_value=5),
-        mock.patch.object(workout_manager.state_store, "get_recent_muscle_groups", return_value={}),
-    ):
-        result = workout_manager.generate_workout()
-
-    assert result["ok"] is True
-    assert result["workout_type"] == "full_body"
-
-
-def test_generate_workout_complement_after_one_session(seeded_db):
-    """1 session in last 4 days and less than 4 days ago → full_body_complement."""
-    from orchestrator import workout_manager
-
-    with (
-        mock.patch.object(workout_manager.state_store, "count_workouts_in_window", return_value=1),
-        mock.patch.object(workout_manager.state_store, "days_since_last_workout", return_value=1),
-        mock.patch.object(workout_manager.state_store, "get_recent_muscle_groups", return_value={}),
-    ):
-        result = workout_manager.generate_workout()
-
-    assert result["ok"] is True
-    assert result["workout_type"] == "full_body_complement"
-
-
-def test_generate_workout_split_push_day(seeded_db):
-    """2+ sessions in last 4 days, legs most trained → push_day selected."""
-    from orchestrator import workout_manager
-
-    # quads/hamstrings/glutes loaded high → legs load is highest → push is lowest
-    recent = {"quads": 10, "hamstrings": 10, "glutes": 10, "chest": 1, "back": 1}
-
-    with (
-        mock.patch.object(workout_manager.state_store, "count_workouts_in_window", return_value=2),
-        mock.patch.object(workout_manager.state_store, "days_since_last_workout", return_value=1),
+        mock.patch.object(workout_manager.state_store, "count_workouts_in_window", return_value=count),
+        mock.patch.object(workout_manager.state_store, "days_since_last_workout", return_value=days_since),
         mock.patch.object(workout_manager.state_store, "get_recent_muscle_groups", return_value=recent),
     ):
         result = workout_manager.generate_workout()
 
     assert result["ok"] is True
-    assert result["workout_type"] == "push_day"
-
-
-def test_generate_workout_split_legs_day(seeded_db):
-    """2+ sessions, push+pull muscles loaded → legs_day chosen."""
-    from orchestrator import workout_manager
-
-    recent = {
-        "chest": 12,
-        "triceps": 10,
-        "front_delts": 8,
-        "back": 12,
-        "biceps": 10,
-        "quads": 0,
-    }
-
-    with (
-        mock.patch.object(workout_manager.state_store, "count_workouts_in_window", return_value=3),
-        mock.patch.object(workout_manager.state_store, "days_since_last_workout", return_value=0),
-        mock.patch.object(workout_manager.state_store, "get_recent_muscle_groups", return_value=recent),
-    ):
-        result = workout_manager.generate_workout()
-
-    assert result["ok"] is True
-    assert result["workout_type"] == "legs_day"
-
-
-def test_generate_workout_sets_structure(seeded_db):
-    """Each exercise in the plan must have 3 sets with set_number 1, 2, 3."""
-    from orchestrator import workout_manager
-
-    with (
-        mock.patch.object(workout_manager.state_store, "count_workouts_in_window", return_value=0),
-        mock.patch.object(workout_manager.state_store, "days_since_last_workout", return_value=None),
-        mock.patch.object(workout_manager.state_store, "get_recent_muscle_groups", return_value={}),
-    ):
-        result = workout_manager.generate_workout()
-
-    assert result["ok"] is True
-    for ex in result["exercises"]:
-        assert len(ex["sets"]) == 3
-        set_numbers = [s["set_number"] for s in ex["sets"]]
-        assert set_numbers == [1, 2, 3]
+    assert result["workout_type"] == expected
+    assert result["workout_id"] > 0 and result["exercises"]
+    # Each exercise gets 3 sets numbered 1, 2, 3.
+    assert all([s["set_number"] for s in ex["sets"]] == [1, 2, 3] for ex in result["exercises"])
 
 
 # ---------------------------------------------------------------------------
@@ -216,10 +78,8 @@ def test_generate_workout_sets_structure(seeded_db):
 # ---------------------------------------------------------------------------
 
 
-def test_log_set_creates_custom_workout_when_none(seeded_db):
+def test_log_set_creates_custom_workout_when_none(tmp_db):
     """log_set with no existing today's workout creates a new one with workout_type='custom'."""
-    from orchestrator import state_store, workout_manager
-
     assert state_store.get_todays_workout() is None
 
     result = workout_manager.log_set(
@@ -235,10 +95,8 @@ def test_log_set_creates_custom_workout_when_none(seeded_db):
     assert workout["workout_type"] == "custom"
 
 
-def test_log_set_uses_existing_workout(seeded_db):
+def test_log_set_uses_existing_workout(tmp_db):
     """If today's workout already exists, log_set reuses it."""
-    from orchestrator import state_store, workout_manager
-
     wid = state_store.create_workout("full_body", True)
     result = workout_manager.log_set(
         exercise_name="Barbell Squat",
@@ -250,19 +108,15 @@ def test_log_set_uses_existing_workout(seeded_db):
     assert result["workout_id"] == wid
 
 
-def test_log_set_with_explicit_workout_id(seeded_db):
-    from orchestrator import state_store, workout_manager
-
+def test_log_set_with_explicit_workout_id(tmp_db):
     wid = state_store.create_workout("push_day", True)
-    result = workout_manager.log_set(
-        exercise_name="Bench Press",
-        weight_lbs=185.0,
-        reps=5,
-        workout_id=wid,
-    )
+    with mock.patch("orchestrator.selfcare_manager.record_movement_logged") as mock_rec:
+        result = workout_manager.log_set(exercise_name="Bench Press", weight_lbs=185.0, reps=5, workout_id=wid)
     assert result["ok"] is True
     assert result["workout_id"] == wid
     assert result["set"]["exercise_name"] == "Bench Press"
+    # The selfcare movement bridge fires for an explicit workout id too.
+    mock_rec.assert_called_once_with("set:Bench Press")
 
 
 # ---------------------------------------------------------------------------
@@ -270,11 +124,8 @@ def test_log_set_with_explicit_workout_id(seeded_db):
 # ---------------------------------------------------------------------------
 
 
-def test_modify_workout_remove_only_planned_sets(seeded_db):
+def test_modify_workout_remove_only_planned_sets(tmp_db):
     """Removing an exercise from a workout only deletes uncompleted sets."""
-    from orchestrator import state_store, workout_manager
-
-    state_store.seed_exercises(_EXERCISES)
     wid = state_store.create_workout("full_body", True)
 
     # Add one planned set and one completed set for the same exercise
@@ -299,9 +150,7 @@ def test_modify_workout_remove_only_planned_sets(seeded_db):
     assert bench_sets_after[0]["completed"] is True
 
 
-def test_modify_workout_not_found(seeded_db):
-    from orchestrator import workout_manager
-
+def test_modify_workout_not_found(tmp_db):
     result = workout_manager.modify_workout(99999, remove_exercises=["Bench Press"])
     assert result["ok"] is False
     assert "not found" in result["error"].lower()
@@ -312,16 +161,12 @@ def test_modify_workout_not_found(seeded_db):
 # ---------------------------------------------------------------------------
 
 
-def test_get_status_no_workout(seeded_db):
-    from orchestrator import workout_manager
-
+def test_get_status_no_workout(tmp_db):
     status = workout_manager.get_status()
     assert status["has_workout"] is False
 
 
-def test_get_status_with_workout(seeded_db):
-    from orchestrator import state_store, workout_manager
-
+def test_get_status_with_workout(tmp_db):
     wid = state_store.create_workout("full_body", True)
     state_store.add_planned_set(wid, "Barbell Squat", ["quads"], 1, 8, 135.0)
 
@@ -337,15 +182,11 @@ def test_get_status_with_workout(seeded_db):
 # ---------------------------------------------------------------------------
 
 
-def test_get_history_empty(seeded_db):
-    from orchestrator import workout_manager
-
+def test_get_history_empty(tmp_db):
     assert workout_manager.get_history() == []
 
 
-def test_get_history_summary(seeded_db):
-    from orchestrator import state_store, workout_manager
-
+def test_get_history_summary(tmp_db):
     wid = state_store.create_workout("full_body", True)
     state_store.log_completed_set(wid, "Barbell Squat", 135.0, 8)
 
@@ -366,11 +207,9 @@ def test_get_history_summary(seeded_db):
 # the user is actively at the gym. Bridge failures must not break log_set.
 
 
-def test_log_set_calls_record_movement_logged(seeded_db):
+def test_log_set_calls_record_movement_logged(tmp_db):
     """log_set routes through selfcare_manager.record_movement_logged with
     label 'set:<exercise_name>' so the movement gate resets on every set."""
-    from orchestrator import workout_manager
-
     with mock.patch("orchestrator.selfcare_manager.record_movement_logged") as mock_rec:
         result = workout_manager.log_set("Bench Press", 135.0, 8)
 
@@ -378,10 +217,9 @@ def test_log_set_calls_record_movement_logged(seeded_db):
     mock_rec.assert_called_once_with("set:Bench Press")
 
 
-def test_log_set_bridge_exception_does_not_propagate(seeded_db, caplog):
+def test_log_set_bridge_exception_does_not_propagate(tmp_db, caplog):
     """If record_movement_logged raises, log_set still returns its normal
     {"ok": True, ...} dict. ERROR with exc_info is logged."""
-    from orchestrator import workout_manager
 
     def _boom(label):
         raise RuntimeError("selfcare api drifted")
@@ -404,19 +242,6 @@ def test_log_set_bridge_exception_does_not_propagate(seeded_db, caplog):
     assert any(r.exc_info is not None for r in errors), "Expected exc_info on ERROR record"
 
 
-def test_log_set_bridge_fires_with_explicit_workout_id(seeded_db):
-    """Bridge fires even when workout_id is passed explicitly (not auto-created)."""
-    from orchestrator import state_store, workout_manager
-
-    wid = state_store.create_workout("full_body", True)
-    with mock.patch("orchestrator.selfcare_manager.record_movement_logged") as mock_rec:
-        result = workout_manager.log_set("Barbell Squat", 225.0, 5, workout_id=wid)
-
-    assert result["ok"] is True
-    assert result["workout_id"] == wid
-    mock_rec.assert_called_once_with("set:Barbell Squat")
-
-
 # ===========================================================================
 # Program builder: locations, programs, load caps (real seed catalog via tmp_db)
 # ===========================================================================
@@ -425,31 +250,19 @@ _HOME_GEAR = {"dumbbells", "kettlebell"}
 
 
 def _add_loc(name, template="commercial_gym", equipment=None, limits=None):
-    from orchestrator.workout_setup import add_location
-
     r = add_location(name, template=template, equipment=equipment, limits=limits)
     assert r["ok"] is True, r
     return r["location"]
 
 
 def _complete_first_set(workout_id, weight=20.0, reps=8):
-    from orchestrator import state_store
-
     s = state_store.get_workout(workout_id)["sets"][0]
     state_store.log_completed_set(workout_id, s["exercise_name"], weight, reps, set_id=s["id"])
 
 
 def _seed_pr(exercise_name, weight_lbs, reps=5):
-    from orchestrator import state_store
-
     wid = state_store.create_workout("custom", False)
     state_store.log_completed_set(wid, exercise_name, weight_lbs, reps)
-
-
-def _counter(result):
-    from orchestrator.metrics import WORKOUT_GENERATED
-
-    return WORKOUT_GENERATED.labels(result=result)._value.get()
 
 
 # --- exercises_for_minutes / program_split ----------------------------------
@@ -460,8 +273,6 @@ def _counter(result):
     [(20, 3), (27, 3), (36, 4), (45, 5), (60, 7), (72, 8), (120, 8), (0, 3), (1000, 8)],
 )
 def test_exercises_for_minutes_clamped(minutes, expected):
-    from orchestrator.workout_manager import exercises_for_minutes
-
     assert exercises_for_minutes(minutes) == expected
 
 
@@ -476,9 +287,6 @@ def test_exercises_for_minutes_clamped(minutes, expected):
     ],
 )
 def test_program_overview_split_labels(tmp_db, days, labels):
-    from orchestrator.workout_manager import get_program_overview
-    from orchestrator.workout_setup import set_program
-
     set_program("general", days, 45)
     p = get_program_overview()["program"]
     assert p["split"] == labels
@@ -488,14 +296,10 @@ def test_program_overview_split_labels(tmp_db, days, labels):
 
 
 def test_program_split_unknown_days_falls_back_to_three():
-    from orchestrator.workout_manager import program_split
-
     assert program_split(7) == program_split(3)
 
 
 def test_program_overview_without_program(tmp_db):
-    from orchestrator.workout_manager import get_program_overview
-
     _add_loc("Home", template="home_basic")
     ov = get_program_overview()
     assert ov["program"] is None
@@ -504,9 +308,6 @@ def test_program_overview_without_program(tmp_db):
 
 @pytest.mark.parametrize("minutes, expected", [(20, 3), (45, 5), (120, 8)])
 def test_program_minutes_set_exercise_count(tmp_db, minutes, expected):
-    from orchestrator.workout_manager import generate_workout
-    from orchestrator.workout_setup import set_program
-
     set_program("general", 3, minutes)
     r = generate_workout()
     assert r["ok"] is True
@@ -516,9 +317,6 @@ def test_program_minutes_set_exercise_count(tmp_db, minutes, expected):
 
 
 def test_program_goal_sets_rep_scheme(tmp_db):
-    from orchestrator.workout_manager import generate_workout
-    from orchestrator.workout_setup import set_program
-
     set_program("strength", 3, 20)  # 3 slots: squat, push, row — all compound
     r = generate_workout()
     for ex in r["exercises"]:
@@ -531,10 +329,6 @@ def test_program_goal_sets_rep_scheme(tmp_db):
 
 
 def test_next_program_day_advances_only_after_completed_sets(tmp_db):
-    from orchestrator import state_store
-    from orchestrator.workout_manager import generate_workout, get_program_overview, next_program_day
-    from orchestrator.workout_setup import set_program
-
     program = set_program("general", 3, 45)["program"]
 
     first = generate_workout()
@@ -562,10 +356,6 @@ def test_next_program_day_advances_only_after_completed_sets(tmp_db):
 
 
 def test_set_program_minutes_change_keeps_split_position(tmp_db):
-    from orchestrator import state_store
-    from orchestrator.workout_manager import generate_workout, next_program_day
-    from orchestrator.workout_setup import set_program
-
     program = set_program("general", 4, 45)["program"]
     _complete_first_set(generate_workout()["workout_id"])
     assert next_program_day(program) == 1
@@ -577,10 +367,6 @@ def test_set_program_minutes_change_keeps_split_position(tmp_db):
 
 
 def test_set_program_days_change_restarts_split(tmp_db):
-    from orchestrator import state_store
-    from orchestrator.workout_manager import generate_workout, next_program_day
-    from orchestrator.workout_setup import set_program
-
     set_program("general", 4, 45)
     _complete_first_set(generate_workout()["workout_id"])
     set_program("general", 5, 45)
@@ -588,8 +374,6 @@ def test_set_program_days_change_restarts_split(tmp_db):
 
 
 def test_last_trained_program_day_ignores_other_programs(tmp_db):
-    from orchestrator import state_store
-
     wid = state_store.create_workout("full_body", True)
     state_store.set_workout_context(wid, None, 999, 2)
     state_store.log_completed_set(wid, "Push-Up", 0.0, 10)
@@ -604,10 +388,6 @@ def test_last_trained_program_day_ignores_other_programs(tmp_db):
 def test_home_basic_never_needs_missing_gear(tmp_db, days):
     """Every day of every split (and the no-program planner) at a dumbbell+kettlebell
     home only picks exercises whose requires ⊆ that gear."""
-    from orchestrator import state_store
-    from orchestrator.workout_manager import generate_workout
-    from orchestrator.workout_setup import set_program
-
     home = _add_loc("Home", template="home_basic")
     if days:
         set_program("general", days, 120)
@@ -625,10 +405,6 @@ def test_home_basic_never_needs_missing_gear(tmp_db, days):
 
 
 def test_full_gym_never_picks_fallback_variants(tmp_db):
-    from orchestrator import state_store
-    from orchestrator.exercises_seed import FALLBACK_VARIANTS
-    from orchestrator.workout_manager import generate_workout
-
     gym = _add_loc("Big Gym")
     for _ in range(8):
         r = generate_workout(gym["id"])
@@ -640,8 +416,6 @@ def test_full_gym_never_picks_fallback_variants(tmp_db):
 def test_pick_prefers_non_fallback_variant(tmp_db):
     """Push-Up beats the floor presses at home; the floor pullover is still used
     when it is the only vertical pull."""
-    from orchestrator.workout_manager import _pick_for_slots
-
     for _ in range(10):
         picked, notes = _pick_for_slots(["push_horizontal", "pull_vertical"], set(_HOME_GEAR))
         assert [p["name"] for p in picked] == ["Push-Up", "Dumbbell Floor Pullover"]
@@ -649,24 +423,18 @@ def test_pick_prefers_non_fallback_variant(tmp_db):
 
 
 def test_pick_pattern_fallback_reported_in_notes(tmp_db):
-    from orchestrator.workout_manager import _pick_for_slots
-
     picked, notes = _pick_for_slots(["pull_vertical"], {"kettlebell"})
     assert [p["movement_pattern"] for p in picked] == ["pull_horizontal"]
     assert notes == ["No vertical pull option here — used a row instead."]
 
 
 def test_pick_skip_reported_in_notes(tmp_db):
-    from orchestrator.workout_manager import _pick_for_slots
-
     picked, notes = _pick_for_slots(["hinge"], set())
     assert picked == []
     assert notes == ["Skipped hinge — nothing for it here."]
 
 
 def test_pick_no_location_means_no_notes(tmp_db):
-    from orchestrator.workout_manager import _pick_for_slots
-
     # Even when a slot has to fall back, notes are location-only.
     picked, notes = _pick_for_slots(["isolation", "pull_vertical", "pull_vertical", "pull_vertical", "pull_vertical"])
     assert notes == []
@@ -675,8 +443,6 @@ def test_pick_no_location_means_no_notes(tmp_db):
 
 def test_pick_primary_pass_runs_before_fallbacks(tmp_db):
     """An early slot's fallback must not steal the only exercise a later slot needs."""
-    from orchestrator.workout_manager import _pick_for_slots
-
     # Bodyweight only: push_vertical has nothing and falls back to push_horizontal,
     # whose only option (Push-Up) belongs to the later push_horizontal slot.
     picked, notes = _pick_for_slots(["push_vertical", "push_horizontal"], set())
@@ -685,8 +451,6 @@ def test_pick_primary_pass_runs_before_fallbacks(tmp_db):
 
 
 def test_pick_isolation_respects_focus(tmp_db):
-    from orchestrator.workout_manager import _pick_for_slots
-
     picked, _ = _pick_for_slots(["isolation"] * 3, None, focus=frozenset({"biceps"}))
     assert picked
     assert all(p["primary_muscle"] == "biceps" for p in picked)
@@ -694,8 +458,6 @@ def test_pick_isolation_respects_focus(tmp_db):
 
 
 def test_generate_at_location_reports_fallback_notes(tmp_db):
-    from orchestrator.workout_manager import generate_workout
-
     kb = _add_loc("Hotel", equipment=["kettlebell"])
     r = generate_workout(kb["id"])
     assert r["ok"] is True
@@ -706,8 +468,6 @@ def test_generate_at_location_reports_fallback_notes(tmp_db):
 
 
 def test_generate_without_location_has_no_notes(tmp_db):
-    from orchestrator.workout_manager import generate_workout
-
     r = generate_workout()
     assert r["ok"] is True
     assert r["notes"] == []
@@ -716,9 +476,6 @@ def test_generate_without_location_has_no_notes(tmp_db):
 
 
 def test_generate_saves_location_context_and_touches_last_used(tmp_db):
-    from orchestrator import state_store
-    from orchestrator.workout_manager import generate_workout, get_status
-
     home = _add_loc("Home", template="home_basic")
     assert home["last_used_at"] is None
     r = generate_workout(home["id"])
@@ -730,52 +487,41 @@ def test_generate_saves_location_context_and_touches_last_used(tmp_db):
 
 
 def test_generate_bad_location_id(tmp_db):
-    from orchestrator import state_store
-    from orchestrator.workout_manager import generate_workout
-
-    before = _counter("bad_location")
+    before = metric_value(WORKOUT_GENERATED, result="bad_location")
     r = generate_workout(9999)
     assert r["ok"] is False
     assert "9999" in r["error"]
     assert state_store.get_todays_workout() is None
-    assert _counter("bad_location") == before + 1
+    assert metric_value(WORKOUT_GENERATED, result="bad_location") == before + 1
 
 
 def test_generate_no_exercises_at_location(tmp_db):
-    from orchestrator import state_store, workout_manager
-
     home = _add_loc("Home", template="empty")
-    before = _counter("no_exercises")
+    before = metric_value(WORKOUT_GENERATED, result="no_exercises")
     with mock.patch.object(workout_manager.state_store, "get_exercises", return_value=[]):
         r = workout_manager.generate_workout(home["id"])
     assert r["ok"] is False
     assert "Home" in r["error"]
     assert state_store.get_todays_workout() is None
-    assert _counter("no_exercises") == before + 1
+    assert metric_value(WORKOUT_GENERATED, result="no_exercises") == before + 1
 
 
 def test_generate_ok_counter(tmp_db):
-    from orchestrator.workout_manager import generate_workout
-
-    before = _counter("ok")
+    before = metric_value(WORKOUT_GENERATED, result="ok")
     assert generate_workout()["ok"] is True
-    assert _counter("ok") == before + 1
+    assert metric_value(WORKOUT_GENERATED, result="ok") == before + 1
 
 
 # --- load caps ----------------------------------------------------------------
 
 
 def _ex(name):
-    from orchestrator import state_store
-
     ex = state_store.get_exercise(name)
     assert ex, name
     return ex
 
 
 def _target(name, goal="general", limits=None, **kw):
-    from orchestrator.workout_manager import _plan_target
-
     return _plan_target(_ex(name), goal, limits, **kw)
 
 
@@ -798,8 +544,6 @@ def test_dumbbell_step_is_floor(tmp_db):
 
 
 def test_dumbbell_no_pr_stays_none(tmp_db):
-    from orchestrator.workout_manager import _cap_load
-
     assert _cap_load(_ex("Dumbbell Floor Press"), None, {"dumbbell_max_lbs": 50}) == (None, False)
 
 
@@ -835,8 +579,6 @@ def test_multiple_kettlebells_no_history_lets_user_pick(tmp_db):
 
 
 def test_capped_reps_never_exceed_max(tmp_db, monkeypatch):
-    from orchestrator import workout_manager
-
     monkeypatch.setattr(workout_manager, "_REP_SCHEMES", {"general": {"compound": (3, 19), "isolation": (3, 19)}})
     _seed_pr("Dumbbell Floor Press", 100.0)
     t = _target("Dumbbell Floor Press", limits={"dumbbell_max_lbs": 50})
@@ -844,9 +586,6 @@ def test_capped_reps_never_exceed_max(tmp_db, monkeypatch):
 
 
 def test_capped_exercise_entry_has_note_and_persists_targets(tmp_db):
-    from orchestrator import state_store
-    from orchestrator.workout_manager import _add_exercise_sets
-
     _seed_pr("Dumbbell Floor Press", 100.0)
     wid = state_store.create_workout("full_body", True)
     entry = _add_exercise_sets(wid, _ex("Dumbbell Floor Press"), "general", {"dumbbell_max_lbs": 50})
@@ -862,25 +601,6 @@ def test_capped_exercise_entry_has_note_and_persists_targets(tmp_db):
 
 
 # --- progression ---------------------------------------------------------------
-
-
-def _session(name, weight, reps, target_reps=8, *, days_ago=2, rpe=None, location_id=None, deload=False):
-    """Record a past planned session: one planned set per entry in `reps`
-    (None = planned but never done), all targeted at `weight`."""
-    from datetime import datetime, timedelta
-
-    from orchestrator import state_store
-
-    wid = state_store.create_workout("full_body", True)
-    when = (datetime.now() - timedelta(days=days_ago)).isoformat()
-    with state_store.get_db() as conn:
-        conn.execute("UPDATE workouts SET started_at = ? WHERE id = ?", (when, wid))
-    state_store.set_workout_context(wid, location_id, None, None, is_deload=deload)
-    for i, r in enumerate(reps, start=1):
-        sid = state_store.add_planned_set(wid, name, [], i, target_reps, weight)
-        if r is not None:
-            state_store.log_completed_set(wid, name, weight, r, rpe=rpe, set_id=sid)
-    return wid
 
 
 def test_progression_hit_lower_barbell_adds_ten(tmp_db):
@@ -1002,8 +722,6 @@ def test_progression_home_session_does_not_drag_gym_numbers(tmp_db):
 
 
 def test_progression_ignores_the_workout_being_built(tmp_db):
-    from orchestrator import state_store
-
     wid = _session("Bench Press", 100.0, [8, 8, 8], days_ago=0)
     assert _target("Bench Press", exclude_workout_id=wid)["progression"] == "new"
     assert state_store.get_exercise_sessions("Bench Press")[0]["workout_id"] == wid
@@ -1029,13 +747,9 @@ def test_deload_week_respects_gear(tmp_db):
 
 
 def test_progression_counter_increments(tmp_db):
-    from orchestrator import state_store
-    from orchestrator.metrics import WORKOUT_PROGRESSION
-    from orchestrator.workout_manager import _add_exercise_sets
-
-    before = WORKOUT_PROGRESSION.labels(progression="new")._value.get()
+    before = metric_value(WORKOUT_PROGRESSION, progression="new")
     _add_exercise_sets(state_store.create_workout("full_body", True), _ex("Push-Up"), "general", {})
-    assert WORKOUT_PROGRESSION.labels(progression="new")._value.get() == before + 1
+    assert metric_value(WORKOUT_PROGRESSION, progression="new") == before + 1
 
 
 # --- deload weeks ----------------------------------------------------------------
@@ -1046,27 +760,12 @@ def test_progression_counter_increments(tmp_db):
     [(0, False, 12), (11, False, 1), (12, True, 0), (14, True, 0), (15, False, 12)],
 )
 def test_deload_status_cycle(tmp_db, monkeypatch, trained, is_deload, until):
-    from orchestrator import state_store, workout_manager
-
     monkeypatch.setattr(state_store, "count_trained_program_sessions", lambda _pid: trained)
     status = workout_manager.deload_status({"id": 1, "days_per_week": 3, "deload_every_weeks": 4})
     assert (status["is_deload"], status["sessions_until_deload"]) == (is_deload, until)
 
 
-def test_deload_status_off(tmp_db):
-    from orchestrator.workout_manager import deload_status
-
-    assert deload_status({"id": 1, "days_per_week": 3, "deload_every_weeks": 0}) == {
-        "enabled": False,
-        "is_deload": False,
-        "sessions_until_deload": None,
-    }
-
-
 def test_generate_workout_deload_week(tmp_db, monkeypatch):
-    from orchestrator import state_store, workout_manager
-    from orchestrator.workout_setup import set_program
-
     set_program("general", 3, 45, deload_every_weeks=4)
     monkeypatch.setattr(state_store, "count_trained_program_sessions", lambda _pid: 12)
     result = workout_manager.generate_workout()
@@ -1086,9 +785,6 @@ def test_generate_workout_deload_week(tmp_db, monkeypatch):
 
 
 def test_count_trained_program_sessions(tmp_db):
-    from orchestrator import state_store
-    from orchestrator.workout_setup import set_program
-
     pid = set_program("general", 3, 45)["program"]["id"]
     trained = state_store.create_workout("full_body", True)
     state_store.set_workout_context(trained, None, pid, 0)
@@ -1100,8 +796,6 @@ def test_count_trained_program_sessions(tmp_db):
 
 
 def _complete_first_set_raw(workout_id):
-    from orchestrator import state_store
-
     sid = state_store.add_planned_set(workout_id, "Bench Press", [], 1, 8, 100.0)
     state_store.log_completed_set(workout_id, "Bench Press", 100.0, 8, set_id=sid)
 
@@ -1110,8 +804,6 @@ def _complete_first_set_raw(workout_id):
 
 
 def _home_workout():
-    from orchestrator.workout_manager import generate_workout
-
     home = _add_loc("Home", template="home_basic")
     r = generate_workout(home["id"])
     assert r["ok"] is True
@@ -1119,15 +811,10 @@ def _home_workout():
 
 
 def _unsupported_at_home():
-    from orchestrator import state_store
-
     return next(e for e in state_store.get_exercises(movement_pattern="push_horizontal") if "bench" in e["requires"])
 
 
 def test_modify_unsupported_swap_holds_removal(tmp_db):
-    from orchestrator import state_store
-    from orchestrator.workout_manager import modify_workout
-
     _, r = _home_workout()
     original = r["exercises"][0]["name"]
     bench_ex = _unsupported_at_home()
@@ -1149,8 +836,6 @@ def test_modify_unsupported_swap_holds_removal(tmp_db):
 
 
 def test_modify_unknown_exercise_skipped_and_removal_held(tmp_db):
-    from orchestrator.workout_manager import modify_workout
-
     _, r = _home_workout()
     original = r["exercises"][0]["name"]
     out = modify_workout(r["workout_id"], remove_exercises=[original], add_exercises=["Moon Squat"])
@@ -1159,9 +844,6 @@ def test_modify_unknown_exercise_skipped_and_removal_held(tmp_db):
 
 
 def test_modify_successful_swap(tmp_db):
-    from orchestrator import state_store
-    from orchestrator.workout_manager import modify_workout
-
     _, r = _home_workout()
     plan_names = {ex["name"] for ex in r["exercises"]}
     original = r["exercises"][0]
@@ -1182,9 +864,6 @@ def test_modify_successful_swap(tmp_db):
 
 def test_modify_partial_swap_still_removes(tmp_db):
     """One add fits, one doesn't → the swap goes ahead, the misfit is reported."""
-    from orchestrator import state_store
-    from orchestrator.workout_manager import modify_workout
-
     _, r = _home_workout()
     original = r["exercises"][0]
     plan_names = {ex["name"] for ex in r["exercises"]}
@@ -1203,10 +882,6 @@ def test_modify_partial_swap_still_removes(tmp_db):
 
 
 def test_modify_uses_program_goal_only_for_program_workout(tmp_db):
-    from orchestrator import state_store
-    from orchestrator.workout_manager import generate_workout, modify_workout
-    from orchestrator.workout_setup import clear_program, set_program
-
     set_program("strength", 3, 20)
     r = generate_workout()
     plan_names = {ex["name"] for ex in r["exercises"]}
@@ -1225,9 +900,6 @@ def test_modify_uses_program_goal_only_for_program_workout(tmp_db):
 
 
 def test_deleted_location_leaves_todays_workout_readable(tmp_db):
-    from orchestrator.workout_manager import get_status, modify_workout
-    from orchestrator.workout_setup import remove_location
-
     home, r = _home_workout()
     assert remove_location(home["id"])["ok"] is True
 
@@ -1244,8 +916,6 @@ def test_deleted_location_leaves_todays_workout_readable(tmp_db):
 
 def test_modify_workout_add_already_planned_is_skipped(tmp_db):
     """Adding an exercise that's already in the plan doesn't duplicate its sets."""
-    from orchestrator import state_store, workout_manager
-
     result = workout_manager.generate_workout()
     name = result["exercises"][0]["name"]
     before = len(state_store.get_workout(result["workout_id"])["sets"])
@@ -1260,23 +930,11 @@ def test_modify_workout_add_already_planned_is_skipped(tmp_db):
 # --- sticky program days (training blocks) ------------------------------------
 
 
-def _train_all(workout_id):
-    from orchestrator import state_store
-
-    for s in state_store.get_workout(workout_id)["sets"]:
-        state_store.log_completed_set(
-            workout_id, s["exercise_name"], s["target_weight_lbs"] or 20.0, s["target_reps"], set_id=s["id"]
-        )
-
-
 def _names(result):
     return [e["name"] for e in result["exercises"]]
 
 
 def test_program_day_repeats_its_exercises(tmp_db):
-    from orchestrator.workout_manager import generate_workout
-    from orchestrator.workout_setup import set_program
-
     set_program("general", 2, 45)
     first_a = generate_workout()
     _train_all(first_a["workout_id"])
@@ -1289,9 +947,6 @@ def test_program_day_repeats_its_exercises(tmp_db):
 
 
 def test_untrained_day_is_not_sticky(tmp_db):
-    from orchestrator import state_store
-    from orchestrator.workout_setup import set_program
-
     pid = set_program("general", 2, 45)["program"]["id"]
     wid = state_store.create_workout("full_body", True)
     state_store.set_workout_context(wid, None, pid, 0)
@@ -1300,9 +955,6 @@ def test_untrained_day_is_not_sticky(tmp_db):
 
 
 def test_last_program_day_exercises_prefers_same_location_and_respects_since(tmp_db):
-    from orchestrator import state_store
-    from orchestrator.workout_setup import set_program
-
     pid = set_program("general", 2, 45)["program"]["id"]
     gym = _add_loc("Gym A")
     home = _add_loc("Home", template="home_basic")
@@ -1335,8 +987,6 @@ def test_last_program_day_exercises_prefers_same_location_and_respects_since(tmp
 
 
 def test_block_exercises_rotate_after_deload_but_not_during(tmp_db, monkeypatch):
-    from orchestrator import state_store, workout_manager
-
     calls = []
     monkeypatch.setattr(state_store, "last_deload_started_at", lambda pid: "2026-01-01T00:00:00")
     monkeypatch.setattr(
@@ -1351,8 +1001,6 @@ def test_block_exercises_rotate_after_deload_but_not_during(tmp_db, monkeypatch)
 
 
 def test_sticky_exercise_skipped_when_gear_missing(tmp_db):
-    from orchestrator.workout_manager import _pick_for_slots
-
     home = {"dumbbells", "kettlebell"}
     picked, _ = _pick_for_slots(["squat"], home, sticky=["Back Squat"])
     assert picked and picked[0]["name"] != "Back Squat"
@@ -1391,8 +1039,6 @@ def test_kettlebell_never_goes_back_down_a_bell(tmp_db):
 
 
 def test_extra_heavy_single_does_not_turn_a_hit_into_a_miss(tmp_db):
-    from orchestrator import state_store
-
     wid = _session("Bench Press", 100.0, [8, 8, 8])
     state_store.log_completed_set(wid, "Bench Press", 110.0, 3)  # free-logged top single
     t = _target("Bench Press")
@@ -1400,8 +1046,6 @@ def test_extra_heavy_single_does_not_turn_a_hit_into_a_miss(tmp_db):
 
 
 def test_all_planned_sets_done_heavier_counts_from_the_heavier_weight(tmp_db):
-    from orchestrator import state_store
-
     wid = state_store.create_workout("full_body", True)
     for i in (1, 2, 3):
         sid = state_store.add_planned_set(wid, "Bench Press", [], i, 8, 100.0)
@@ -1489,8 +1133,6 @@ def test_progression_bodyweight_miss_holds_reps(tmp_db):
 
 
 def test_progression_adhoc_bodyweight_all_sets_at_scheme_is_a_hit(tmp_db):
-    from orchestrator import state_store
-
     wid = state_store.create_workout("custom", False)
     state_store.log_completed_set(wid, "Push-Up", 0.0, 10)
     state_store.log_completed_set(wid, "Push-Up", 0.0, 9)
@@ -1500,8 +1142,6 @@ def test_progression_adhoc_bodyweight_all_sets_at_scheme_is_a_hit(tmp_db):
 
 
 def test_progression_adhoc_bodyweight_short_set_holds_without_note(tmp_db):
-    from orchestrator import state_store
-
     wid = state_store.create_workout("custom", False)
     state_store.log_completed_set(wid, "Push-Up", 0.0, 10)
     state_store.log_completed_set(wid, "Push-Up", 0.0, 5)
@@ -1517,8 +1157,6 @@ def test_progression_bodyweight_comeback_has_no_weight(tmp_db):
 
 
 def test_progression_corrupt_location_limits_do_not_crash(tmp_db):
-    from orchestrator import state_store
-
     loc = state_store.create_workout_location("Garage", ["dumbbells"], {"dumbbell_max_lbs": 50})
     with state_store.get_db() as conn:
         conn.execute("UPDATE workout_locations SET limits = '{not json' WHERE id = ?", (loc["id"],))
@@ -1527,10 +1165,10 @@ def test_progression_corrupt_location_limits_do_not_crash(tmp_db):
     assert (t["weight"], t["progression"]) == (55.0, "up")
 
 
-@pytest.mark.parametrize("program", [{}, {"deload_every_weeks": None}, {"deload_every_weeks": -2}])
+@pytest.mark.parametrize(
+    "program", [{"deload_every_weeks": 0}, {}, {"deload_every_weeks": None}, {"deload_every_weeks": -2}]
+)
 def test_deload_status_missing_or_bad_cadence_is_disabled(tmp_db, program):
-    from orchestrator.workout_manager import deload_status
-
     assert deload_status({"id": 1, "days_per_week": 3, **program}) == {
         "enabled": False,
         "is_deload": False,
@@ -1543,9 +1181,6 @@ def _progression_logs(caplog):
 
 
 def test_stall_deload_is_logged(tmp_db, caplog):
-    from orchestrator import state_store
-    from orchestrator.workout_manager import _add_exercise_sets
-
     _session("Back Squat", 200.0, [8, 6, 5], days_ago=5)
     _session("Back Squat", 200.0, [8, 7, 6], days_ago=2)
     wid = state_store.create_workout("full_body", True)
@@ -1556,9 +1191,6 @@ def test_stall_deload_is_logged(tmp_db, caplog):
 
 
 def test_comeback_is_logged(tmp_db, caplog):
-    from orchestrator import state_store
-    from orchestrator.workout_manager import _add_exercise_sets
-
     _session("Bench Press", 100.0, [8, 8, 8], days_ago=30)
     wid = state_store.create_workout("full_body", True)
     with caplog.at_level(logging.INFO, logger="orchestrator.workout_manager"):
@@ -1568,9 +1200,6 @@ def test_comeback_is_logged(tmp_db, caplog):
 
 @pytest.mark.parametrize("reps, expected", [([8, 8, 6], "hold"), ([8, 8, 8], "up")])
 def test_hold_and_up_are_not_logged(tmp_db, caplog, reps, expected):
-    from orchestrator import state_store
-    from orchestrator.workout_manager import _add_exercise_sets
-
     _session("Bench Press", 100.0, reps)
     wid = state_store.create_workout("full_body", True)
     with caplog.at_level(logging.INFO, logger="orchestrator.workout_manager"):
@@ -1579,20 +1208,7 @@ def test_hold_and_up_are_not_logged(tmp_db, caplog, reps, expected):
     assert _progression_logs(caplog) == []
 
 
-def _backdate(workout_id, days):
-    from datetime import datetime, timedelta
-
-    from orchestrator import state_store
-
-    when = (datetime.now() - timedelta(days=days)).isoformat()
-    with state_store.get_db() as conn:
-        conn.execute("UPDATE workouts SET started_at = ? WHERE id = ?", (when, workout_id))
-
-
 def test_sticky_day_carries_progression_notes_to_status(tmp_db):
-    from orchestrator.workout_manager import generate_workout, get_status
-    from orchestrator.workout_setup import set_program
-
     set_program("general", 2, 45)
     first_a = generate_workout()
     _train_all(first_a["workout_id"])
@@ -1613,8 +1229,6 @@ def test_sticky_day_carries_progression_notes_to_status(tmp_db):
 
 
 def test_adhoc_bodyweight_reps_carry_forward(tmp_db):
-    from orchestrator import state_store
-
     wid = state_store.create_workout("custom", False)
     for _ in range(3):
         state_store.log_completed_set(wid, "Push-Up", 0.0, 15)
@@ -1623,8 +1237,6 @@ def test_adhoc_bodyweight_reps_carry_forward(tmp_db):
 
 
 def test_adhoc_kettlebell_reps_drive_bell_move(tmp_db):
-    from orchestrator import state_store
-
     wid = state_store.create_workout("custom", False)
     for _ in range(3):
         state_store.log_completed_set(wid, "Kettlebell Goblet Squat", 26.0, 12)
@@ -1633,8 +1245,6 @@ def test_adhoc_kettlebell_reps_drive_bell_move(tmp_db):
 
 
 def test_gear_ceiling_ignores_malformed_bell_list(tmp_db):
-    from orchestrator.workout_manager import _gear_ceiling
-
     kb = _ex("Kettlebell Goblet Squat")
     assert _gear_ceiling(kb, {"kettlebell_weights_lbs": 35}) is None
     assert _gear_ceiling(kb, {"kettlebell_weights_lbs": ["x", True]}) is None
