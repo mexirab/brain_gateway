@@ -249,6 +249,8 @@ Both need `SELF_AUDIT_ENABLED` + `JESS_ADVANCED`. Spec: `jess-features/F-014-sel
 
 `ALERT_TRIGGERS`: `HeliosHardwareFault`, `ChatStreamTruncating`, `EmptyRepliesReachingUsers`, `ToolCallsSilentlyDropped`, `EmbeddingErrors`, `AutoLearnFailing`, `SchedulerJobsMissed`, `HeliosLogsSilent` (keep in sync with the `self-investigator` route in `monitoring/alertmanager/alertmanager.yml.template`). Metric: `bgw_self_audit_alert_trigger_total{result}`.
 
+With the Claude investigator on (`SELF_AUDIT_CLAUDE_API_KEY`, `docs/ENV_VARS.md` → Self-audit), a run from either route is investigated on the paid Anthropic API while under the caps. `/run` has no rate limit of its own; every Claude run counts toward the 8 paid runs a UTC day and the monthly cap, after which runs use the local brain. Response shapes don't change; `reason: brain_asleep` only occurs when the run fell back to the local brain and Helios was asleep.
+
 ### Helios Power (PT-C)
 
 All bearer-gated. Return 409 when `HELIOS_WAKE_ENABLED` is false (`{ok:false, skipped:"disabled", reason}`) or, for sleep only, while a coder session/job is using the brain (`skipped:"coder_active"`, see Coder Gate → Helios sleep refusal), 502 on HA error (`{ok:false, error}`). All control runs through Home Assistant `switch.turn_on`/`switch.turn_off` on the Helios smart plug — see `orchestrator/helios_power.py`.

@@ -8,6 +8,7 @@ Import `settings` to access configuration anywhere:
     url = settings.model_url
 """
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Dict, List
@@ -708,6 +709,15 @@ class Settings(BaseSettings):
     self_audit_investigate_max_rounds: int = 12
     self_audit_investigate_max_tool_calls: int = 30
     self_audit_investigate_max_seconds: int = 600
+    # Run the investigator on Claude instead of the local brain (repo + logs
+    # only, no personal content). Empty key = local brain, as before. A month
+    # past SELF_AUDIT_CLAUDE_MONTHLY_USD (estimated from token usage) goes back
+    # to the local brain until the 1st. Derived: self_audit_claude_enabled.
+    self_audit_claude_api_key: str = ""
+    self_audit_claude_model: str = "claude-opus-5-5"
+    self_audit_claude_effort: str = "medium"  # low | medium | high | xhigh | max
+    self_audit_claude_monthly_usd: float = 40.0  # 0 = Claude off
+    self_audit_claude_enabled: bool = False  # derived; setting it in .env does nothing
     # Alertmanager -> POST /api/self_audit/alert. This token is accepted ONLY
     # on that path (Alertmanager never holds API_TOKEN). Empty = the route
     # only accepts API_TOKEN.
@@ -1008,6 +1018,33 @@ class Settings(BaseSettings):
         if self.self_audit_webhook_token and len(self.self_audit_webhook_token) < 24:
             log.error("[CONFIG] SELF_AUDIT_WEBHOOK_TOKEN is shorter than 24 chars; ignoring it.")
             object.__setattr__(self, "self_audit_webhook_token", "")
+        # Claude investigator: derived flag, never taken from the environment.
+        # Off switches: no key, or SELF_AUDIT_CLAUDE_MONTHLY_USD=0.
+        key = self.self_audit_claude_api_key.strip()
+        object.__setattr__(self, "self_audit_claude_api_key", key)  # a stray CR/space breaks the auth header
+        claude_on = False
+        if key and (len(key) < 20 or not key.startswith("sk-ant-")):
+            log.error(
+                "[CONFIG] SELF_AUDIT_CLAUDE_API_KEY doesn't look like an Anthropic key; investigator stays local."
+            )
+            object.__setattr__(self, "self_audit_claude_api_key", "")
+        elif key:
+            claude_on = True
+        if self.self_audit_claude_effort not in ("low", "medium", "high", "xhigh", "max"):
+            log.warning("[CONFIG] SELF_AUDIT_CLAUDE_EFFORT not one of low|medium|high|xhigh|max; using medium.")
+            object.__setattr__(self, "self_audit_claude_effort", "medium")
+        if not re.fullmatch(r"claude-[a-z0-9-]{1,60}", self.self_audit_claude_model or ""):
+            log.error("[CONFIG] SELF_AUDIT_CLAUDE_MODEL is not a claude-* model id; the investigator stays local.")
+            claude_on = False
+        cap = self.self_audit_claude_monthly_usd
+        if not (math.isfinite(cap) and cap > 0):  # 0, negative, NaN, inf
+            if claude_on:
+                log.warning(
+                    "[CONFIG] SELF_AUDIT_CLAUDE_MONTHLY_USD is not a positive number; investigator stays local."
+                )
+            object.__setattr__(self, "self_audit_claude_monthly_usd", 0.0)
+            claude_on = False
+        object.__setattr__(self, "self_audit_claude_enabled", claude_on)
         if not self.self_audit_enabled:
             return self
         url = self.self_audit_loki_url or ""

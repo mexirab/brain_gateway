@@ -226,7 +226,7 @@ line from Step B. If decision 5 is yes, the dashboard inbox also gets that one l
 
 Metrics: `bgw_self_audit_truncated_total{group}`, `bgw_helios_logs_silent`,
 `bgw_self_investigator_runs_total{trigger,result}` (`daily|alert`;
-`ok|budget|brain_asleep|error`), `bgw_self_investigator_tool_calls_total{tool,result}`,
+`ok|budget|brain_asleep|error`; a `backend` label was added in §8), `bgw_self_investigator_tool_calls_total{tool,result}`,
 `bgw_self_audit_alert_trigger_total{result}`
 (`accepted|ignored|rate_limited|busy|disabled`). Alert: `HeliosLogsSilent` (quiet).
 
@@ -300,3 +300,33 @@ Checks:
 - The frame markers are advisory. The real boundary is that every tool is read-only.
 - ~~No Grafana panels yet.~~ Self-audit row has "Investigator & Alert Webhook (/day)" (runs, webhook, denied/capped/error/duplicate tool calls); alert `SelfInvestigatorFailing` (quiet) covers repeated daily errors. Loki `max_query_lookback: 168h` is a server-side backstop for every client.
 - `run_tests` in an offline sandbox is the agreed follow-up (decision 3).
+
+## 8. Claude backend (2026-11-24)
+
+The investigator can run on Claude (Anthropic Messages API, official `anthropic`
+SDK, exact pin) instead of the local brain when `SELF_AUDIT_CLAUDE_API_KEY` is set.
+Authoritative safety story: the `self_investigator.py` module docstring; feature
+description: `jess-features/F-014-self-audit.md` → Claude backend.
+
+What changed against the design above:
+
+- **Decision 4 ("never wake Helios") still holds, but no longer means "no
+  investigation while Helios sleeps":** Claude runs without Helios. Helios asleep
+  only gives the digest when Claude was skipped or its first call failed.
+- **Data leaves the house.** Anthropic sees the task (now secret-redacted for both
+  backends) and every tool result: allow-listed public-repo files and any Loki line
+  from the last 24 h, which includes non-orchestrator lines (Grafana login name and
+  LogQL queries, HA entity ids, frontend/Conjure/redis/monitoring containers, the
+  Helios journal). Owner-accepted 2026-11-24. No server tools or MCP on the call.
+- **One loop, two conversation classes** (`_LocalConversation`, `_ClaudeConversation`).
+  The Claude history is append-only with thinking blocks replayed unchanged, so the
+  prompt cache and the API's thinking-block check hold.
+- **Money budgets on top of the round/call/time budgets:** an estimated monthly cap
+  (`SELF_AUDIT_CLAUDE_MONTHLY_USD`, alert runs 75 % of it) and 8 paid runs a UTC day,
+  both kept in `app_state` and failing closed. A Console spend limit is the hard cap.
+- **Fallback rule:** only a failed FIRST call (or a cap) moves the run to the local
+  brain. A later failure ends the run, except a transient one, which gets one
+  tool-less call for the final report.
+- **Monitoring:** `backend` label on the runs counter, `bgw_self_investigator_claude_*`
+  metrics, quiet alert `SelfInvestigatorClaudeUnavailable` (not an investigator
+  trigger). Runbook: `monitoring/README.md` → Self-audit investigator on Claude.

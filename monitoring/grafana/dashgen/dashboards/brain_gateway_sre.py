@@ -2156,8 +2156,8 @@ def build() -> dict:
             "Investigator & Alert Webhook (/day)",
             [
                 (
-                    "sum by (trigger, result) (increase(bgw_self_investigator_runs_total[1d]))",
-                    "run {{trigger}} {{result}}",
+                    "sum by (trigger, result, backend) (increase(bgw_self_investigator_runs_total[1d]))",
+                    "run {{trigger}} {{result}} ({{backend}})",
                 ),
                 ("sum by (result) (increase(bgw_self_audit_alert_trigger_total[1d]))", "webhook {{result}}"),
                 (
@@ -2171,6 +2171,49 @@ def build() -> dict:
         ),
     ]
     row, y = grid_row(self_audit_row, y, heights=[8, 8, 8])
+    panels.extend(row)
+
+    # Investigator on Claude (SELF_AUDIT_CLAUDE_API_KEY). The spend is the
+    # orchestrator's estimate from token usage; the Anthropic Console is the truth.
+    claude_row = [
+        stat(
+            "Claude Investigator Spend (this month)",
+            "bgw_self_investigator_claude_spend_usd",
+            unit="currencyUSD",
+            decimals=2,
+            graph_mode="none",
+            description="Estimated USD the investigator spent on Claude this calendar month (UTC), from "
+            "token usage x a price table in self_investigator.py. At SELF_AUDIT_CLAUDE_MONTHLY_USD the "
+            "investigator goes back to the local brain until the 1st. Check against the Anthropic Console.",
+        ),
+        stat(
+            "Claude Cap Used",
+            "100 * bgw_self_investigator_claude_spend_usd / (bgw_self_investigator_claude_cap_usd > 0)",
+            unit="percent",
+            thresholds=[(None, "green"), (80, "orange"), (100, "red")],
+            graph_mode="none",
+            description="Share of SELF_AUDIT_CLAUDE_MONTHLY_USD used. 'No data' = Claude investigator off "
+            "(no SELF_AUDIT_CLAUDE_API_KEY). 100% = runs use the local brain until next month.",
+        ),
+        timeseries(
+            "Claude Tokens (/day)",
+            [("sum by (kind) (increase(bgw_self_investigator_claude_tokens_total[1d]))", "{{kind}}")],
+            unit="short",
+            description="Tokens per day by kind. cache_read should dominate input (the prompt cache works); "
+            "output includes thinking, which Opus 5.5 always does.",
+        ),
+        timeseries(
+            "Claude Skipped → Local Brain (/day)",
+            [("sum by (reason) (increase(bgw_self_investigator_claude_fallback_total[1d])) > 0", "{{reason}}")],
+            unit="none",
+            description="Runs that wanted Claude but ran on the local brain. cap = monthly cap (or the "
+            "counter unreadable), daily_cap = 8 paid runs today; the first call failed with auth (bad key), "
+            "billing (credit / Console spend limit), model (404), rate_limit, server, connection, "
+            "bad_request, refusal, other. auth/billing/model/bad_request/other for 3 days = "
+            "SelfInvestigatorClaudeUnavailable.",
+        ),
+    ]
+    row, y = grid_row(claude_row, y, heights=[5, 5, 8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Deploys (CI → Jupiter)

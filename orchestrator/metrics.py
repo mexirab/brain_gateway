@@ -778,11 +778,58 @@ SELF_INVESTIGATOR_RUNS_TOTAL = Counter(
     # trigger: daily | alert
     # result:  ok | budget (a limit ran out; final answer forced) |
     #          brain_asleep (skipped, deterministic digest only) | error
-    ["trigger", "result"],
+    # backend: local (the Helios brain) | claude (SELF_AUDIT_CLAUDE_API_KEY)
+    ["trigger", "result", "backend"],
 )
 for _trigger in ("daily", "alert"):
     for _result in ("ok", "budget", "brain_asleep", "error"):
-        SELF_INVESTIGATOR_RUNS_TOTAL.labels(trigger=_trigger, result=_result)
+        SELF_INVESTIGATOR_RUNS_TOTAL.labels(trigger=_trigger, result=_result, backend="local")
+    for _result in ("ok", "budget", "error"):
+        SELF_INVESTIGATOR_RUNS_TOTAL.labels(trigger=_trigger, result=_result, backend="claude")
+
+# Claude investigator spend. Token counts come from each response's usage;
+# the dollar figure is an estimate from a price table in self_investigator.py
+# (the Anthropic Console usage page is the source of truth).
+SELF_INVESTIGATOR_CLAUDE_TOKENS_TOTAL = Counter(
+    "bgw_self_investigator_claude_tokens_total",
+    "Tokens the Claude investigator used",
+    # kind: input (uncached) | cache_write | cache_read | output (incl. thinking)
+    ["kind"],
+)
+for _kind in ("input", "cache_write", "cache_read", "output"):
+    SELF_INVESTIGATOR_CLAUDE_TOKENS_TOTAL.labels(kind=_kind)
+SELF_INVESTIGATOR_CLAUDE_SPEND_USD = Gauge(
+    "bgw_self_investigator_claude_spend_usd",
+    "Estimated Claude investigator spend this calendar month (USD)",
+)
+SELF_INVESTIGATOR_CLAUDE_CAP_USD = Gauge(
+    "bgw_self_investigator_claude_cap_usd",
+    "SELF_AUDIT_CLAUDE_MONTHLY_USD (0 = Claude investigator off)",
+)
+SELF_INVESTIGATOR_CLAUDE_FALLBACK_TOTAL = Counter(
+    "bgw_self_investigator_claude_fallback_total",
+    "Investigator runs that wanted Claude but ran on the local brain",
+    # reason: cap (monthly cap reached, or the counter unreadable) |
+    #         daily_cap (CLAUDE_MAX_RUNS_PER_DAY) |
+    #         first call failed: auth | billing (no credit / Console spend
+    #         limit) | model (404) | rate_limit | server | connection |
+    #         bad_request | refusal | other
+    ["reason"],
+)
+for _reason in (
+    "cap",
+    "daily_cap",
+    "auth",
+    "billing",
+    "model",
+    "rate_limit",
+    "server",
+    "connection",
+    "bad_request",
+    "refusal",
+    "other",
+):
+    SELF_INVESTIGATOR_CLAUDE_FALLBACK_TOTAL.labels(reason=_reason)
 
 SELF_INVESTIGATOR_TOOL_CALLS_TOTAL = Counter(
     "bgw_self_investigator_tool_calls_total",

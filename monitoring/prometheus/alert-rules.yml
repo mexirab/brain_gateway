@@ -1050,7 +1050,23 @@ groups:
           severity: warning
         annotations:
           summary: "Self-investigator keeps failing"
-          description: "The daily read-only investigation errored on its last runs with no successful one in 3 days, so the self-audit falls back to a log digest with no diagnosis. Check `docker logs brain-orchestrator | grep INVESTIGATOR` and bgw_background_llm_errors_total{caller=\"self_investigator\"} (brain timeouts, Helios asleep at 07:00 shows as brain_asleep, not error)."
+          description: "The daily read-only investigation errored on its last runs with no successful one in 3 days, so the self-audit falls back to a log digest with no diagnosis. Check `docker logs brain-orchestrator | grep INVESTIGATOR` and bgw_background_llm_errors_total{caller=~\"self_investigator|self_investigator_claude\"} (brain timeouts or Claude call errors; Helios asleep at 07:00 shows as brain_asleep, not error)."
+      - alert: SelfInvestigatorClaudeUnavailable
+        # The investigator is set up for Claude (SELF_AUDIT_CLAUDE_API_KEY) but
+        # its first call keeps failing for a reason that doesn't heal by itself:
+        # key revoked (auth), credit / Console spend limit used up (billing),
+        # retired model id (model), a rejected request shape (bad_request, e.g.
+        # a retired beta header). Runs quietly fall back to the local brain, so
+        # without this a broken key could go unnoticed for weeks. Not for cap /
+        # daily_cap (designed) or rate_limit / server / connection / refusal
+        # (transient). Not an investigator trigger itself (that would spend money in a loop).
+        expr: (sum(increase(bgw_self_investigator_claude_fallback_total{reason=~"auth|billing|bad_request|model|other"}[3d])) >= 1.5) unless (sum(increase(bgw_self_investigator_runs_total{backend="claude",result=~"ok|budget"}[3d])) > 0)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Self-audit can't use Claude"
+          description: "The investigator's Claude calls keep failing (no successful Claude run in 3 days), so it runs on the local brain (or not at all while Helios sleeps). `docker logs brain-orchestrator | grep 'Claude call failed'` shows the reason: auth = rotate SELF_AUDIT_CLAUDE_API_KEY in .env then `docker compose up -d --force-recreate orchestrator`; billing = credit or the Console spend limit is used up (Anthropic Console → Billing); model = SELF_AUDIT_CLAUDE_MODEL no longer exists; bad_request = the request shape was rejected (SDK/beta header change — see orchestrator/self_investigator.py)."
       - alert: WindDownNudgeStale
         # 25.5h, matching the dashboard panel's orange threshold: the largest
         # legitimate gap is 25h (the DST fall-back night) plus the 300s

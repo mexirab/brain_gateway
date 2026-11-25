@@ -56,6 +56,15 @@ Pillow>=11.0,<12.0
 # Pulls sqlalchemy, sqlmodel, proto-plus, greenlet; protobuf already present.
 actualpy>=0.22.4,<0.23
 
+# Self-audit investigator on Claude (SELF_AUDIT_CLAUDE_API_KEY; off without it).
+# Exact pin: this SDK holds the API key and is the investigator's only channel
+# off the box — bump deliberately (re-run tests/test_self_investigator_claude.py).
+# 2.x sends anthropic-version 2026-10-21 and is built on httpx2/httpcore2
+# (installed alongside httpx, not instead of it), pinned to their minor too.
+anthropic==2.13.0
+httpx2>=2.16,<2.17
+httpcore2>=2.16,<2.17
+
 # Budget import (CSV/Excel parsing + aggregation)
 pandas>=2.2,<3.0
 openpyxl>=3.1,<4.0

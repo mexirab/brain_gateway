@@ -4,6 +4,42 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Self-audit investigator on Claude (2026-11-24)
+
+Branch `feat/self-audit-claude`. The read-only self-audit investigator can run on Claude Opus 5.5 over the Anthropic API instead of the local brain. It only sees allow-listed public-repo files and Loki logs, so it sends no personal content (owner accepted on 2026-11-24 that non-orchestrator Loki lines go too). It runs while Helios sleeps. Off until `SELF_AUDIT_CLAUDE_API_KEY` is set. Safety story: `orchestrator/self_investigator.py` module docstring.
+
+### Upgrade action
+
+- None for the merge: without the key nothing changes (the deploy rebuilds the orchestrator image for the new packages).
+- To turn it on (owner): create a dedicated key in the Anthropic Console, set a Console spend limit, add `SELF_AUDIT_CLAUDE_API_KEY` to Jupiter `.env`, `docker compose up -d --force-recreate orchestrator`, then `POST /api/self_audit/run` to test. Steps: `docs/ENV_VARS.md` → Self-audit.
+
+### Orchestrator
+
+- `self_investigator.py`: one loop, two backends (`_LocalConversation`, `_ClaudeConversation`). Claude request: automatic prompt caching, server-side refusal fallback (beta `server-side-fallback-2026-07-01`), thinking blocks replayed unchanged, `tool_choice: none` on the forced final call, base URL fixed to `https://api.anthropic.com`. No server tools or MCP.
+- Local brain takes over at the estimated monthly cap (alert runs: 75 % of it), after 8 paid runs in a UTC day, when a counter is unreadable (fail closed), or when the first Claude call fails. Spend = token usage × a price table, kept in `app_state`; the Anthropic Console is the truth.
+- The task (cluster samples + alert payload) is now secret-redacted for both backends.
+- New env vars `SELF_AUDIT_CLAUDE_API_KEY`, `SELF_AUDIT_CLAUDE_MODEL` (`claude-opus-5-5`), `SELF_AUDIT_CLAUDE_EFFORT` (`medium`), `SELF_AUDIT_CLAUDE_MONTHLY_USD` (40); derived `self_audit_claude_enabled` (`config.validate_self_audit_config`).
+- Digest + report Note line say who investigated ("Investigated by Claude · ~$X of $40 this month", or why it ran locally).
+- `SECRET_PATTERNS` (`jobs_training_corpus.py`, `scripts/build_embedding_corpus.py`): new `sk-(?:ant|proj|svcacct|admin)-…` rule; the old `sk-` rule missed Anthropic and current OpenAI keys.
+- `log_config`: `anthropic`, `httpx2`, `httpcore2` quieted with the payload-logging libs (the SDK logs whole request bodies at DEBUG).
+- `requirements.txt`: `anthropic==2.13.0` (exact), `httpx2`/`httpcore2` pinned to minor. The coder box image installs them too (offline, no key).
+
+### Monitoring
+
+- `bgw_self_investigator_runs_total` gains `backend` (`local|claude`). New `bgw_self_investigator_claude_tokens_total{kind}`, `bgw_self_investigator_claude_spend_usd`, `bgw_self_investigator_claude_cap_usd`, `bgw_self_investigator_claude_fallback_total{reason}`; failed Claude calls count in `bgw_background_llm_errors_total{caller="self_investigator_claude"}`.
+- New quiet alert `SelfInvestigatorClaudeUnavailable` (`pushover-quiet`; not an investigator trigger).
+- Grafana self-audit row: runs split by backend; new panels Claude spend, cap used, tokens/day, skipped → local by reason.
+
+### Tests
+
+- New `orchestrator/tests/test_self_investigator_claude.py` (75 tests, no network: `httpx2.MockTransport`). Until the orchestrator image is rebuilt, the throwaway-container test command needs `anthropic==2.13.0 'httpx2>=2.16,<2.17' 'httpcore2>=2.16,<2.17'` in its `pip install`.
+
+### Docs
+
+- `CLAUDE.md`, `docs/ENV_VARS.md`, `monitoring/README.md` (new Self-audit investigator on Claude section), `jess-features/F-014-self-audit.md`, `jess-features/README.md`, `TECHNICAL_REFERENCE.md`, `docs/internal/SELF_INVESTIGATOR_DESIGN.md` (§8), `docs/JESS_SELF_KNOWLEDGE.md`, `docs/DEV.md`.
+
+---
+
 ## [Unreleased] — Read-only kiosk session for the closet dashboard (2026-11-24)
 
 Branch `claude/bold-liskov-95be2e`, on top of the X network-namespace entry below. The closet kiosk logged in with the phone's own session cookie (HMAC of `DASHBOARD_TOKEN`): it opened every page and every proxied write, and could only be revoked by logging the phone out too. It now gets its own read-only session.

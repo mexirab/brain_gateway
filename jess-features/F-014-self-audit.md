@@ -52,8 +52,20 @@ Behind `SELF_AUDIT_INVESTIGATE` (default false; **on in the live deployment sinc
 - **`loki_query` confinement (`_check_logql`):** the query itself is held to the last 24 h, not only start/end. Rejected: `offset`; any `[range]` over 24 h or with a subquery step; parser/format stages (`regexp`, `pattern`, `json`, `logfmt`, `unpack`, `label_format`, `line_format`, `unwrap`); `#` comments and newlines. Quoted strings are ignored when scanning. Metric output prints only allow-listed labels (`service`, `level`, `host`, `job`, `unit`, `container`, `transport`, `group`), each capped at 64 chars. Backstop for every client: Loki `max_query_lookback: 168h`.
 - **Every tool result** is secret-redacted, defanged, framed as untrusted and capped (6000 chars).
 - **Budgets:** daily runs `SELF_AUDIT_INVESTIGATE_MAX_ROUNDS` 12 / `_MAX_TOOL_CALLS` 30 / `_MAX_SECONDS` 600; alert runs 6 rounds / 300 s. ≤ 5 calls per round, duplicates collapsed, per-call timeouts clipped to the deadline with 90 s kept for a forced final report (`result=budget`).
-- **Slot etiquette:** waits for the single llama slot to be idle (`bgw_active_requests` and llama-server's `llamacpp:requests_processing`) before every model call; alert runs first wait for 3 min of idle (up to 30 min). **Never wakes Helios** — asleep means the deterministic digest (`result=brain_asleep`, run `partial`).
+- **Slot etiquette (local brain):** waits for the single llama slot to be idle (`bgw_active_requests` and llama-server's `llamacpp:requests_processing`) before every model call; alert runs first wait for 3 min of idle (up to 30 min). **Never wakes Helios** — asleep means the deterministic digest (`result=brain_asleep`, run `partial`).
 - **Citation check:** every `path:line` the model cites is checked against the allow-listed repo; wrong paths or out-of-range lines are tagged unverified.
+
+### Claude backend (2026-11-24, opt-in `SELF_AUDIT_CLAUDE_API_KEY`)
+
+The same loop, tools and budgets on Claude Opus 5.5 via the Anthropic Messages API (official `anthropic` SDK, exact pin). Why: the investigator only sees allow-listed public-repo files and Loki logs, so it is a use that sends no personal content to a cloud model. It runs while Helios sleeps and doesn't wait for the llama slot.
+
+- **What Anthropic sees:** the system prompt, the task (cluster samples + alert payload, secret-redacted for both backends) and every tool result. Loki lines include more than the orchestrator: Grafana's login name and LogQL queries, HA entity ids, frontend/Conjure/redis/monitoring container lines, the Helios journal. Owner-accepted 2026-11-24 (no message text, meds or calendar). No server tools or MCP on the call: the four client tools are its only reach.
+- **Local brain takes over** when the month's estimated spend reached `SELF_AUDIT_CLAUDE_MONTHLY_USD` (alert runs: 75 % of it), after `CLAUDE_MAX_RUNS_PER_DAY` (8) paid runs in a UTC day, when a counter is unreadable (fail closed), or when the FIRST Claude call fails (`auth`, `billing`, `model`, `rate_limit`, `server`, `connection`, `bad_request`, `refusal`, `other`). A later failed call ends the run (`error`), except a transient one, which gets one tool-less call for the final report (`budget`).
+- **Spend** is estimated from each response's token usage × a price table in `self_investigator.py` (a timed-out call is charged a full round), stored in `app_state` (`self_audit_claude_usd_YYYY-MM`, `self_audit_claude_runs_YYYY-MM-DD`). The Anthropic Console is the truth; a Console spend limit is the hard cap.
+- **Request:** automatic prompt caching, server-side refusal fallback (beta `server-side-fallback-2026-07-01`), thinking blocks replayed unchanged, `tool_choice: none` on the forced final call, base URL fixed to `https://api.anthropic.com`.
+- **Digest line** (Pushover + inbox + report Note): "Investigated by Claude · ~$X of $40 this month", "Claude investigation failed partway…", or "<reason> — investigated by the local brain".
+
+Setup steps: `docs/ENV_VARS.md` → Self-audit. Runbook: `monitoring/README.md` → Self-audit investigator on Claude.
 
 ### Alert trigger (`POST /api/self_audit/alert`, `orchestrator/routes_self_audit.py`)
 
@@ -106,12 +118,14 @@ the model download. User kills it. No more restart loop.
 ## Modified files
 
 - `orchestrator/jobs_self_audit.py` — main implementation (grouped Loki collection, clustering, untrusted framing, suggestion filter, digest, palace facts, Helios log-silence check). Never raises.
-- `orchestrator/self_investigator.py` — read-only investigator (tools, budgets, slot etiquette, citation check).
+- `orchestrator/self_investigator.py` — read-only investigator (tools, budgets, slot etiquette, citation check; local + Claude backends, spend counters).
 - `orchestrator/routes_self_audit.py` — `POST /api/self_audit/alert` (Alertmanager webhook).
 - `orchestrator/api_routes.py` — `POST /api/self_audit/run` manual trigger; includes the alert router.
 - `orchestrator/orchestrator.py` — daily cron (`wait_for_lock`), `helios_log_silence_check` job, `WEBHOOK_TOKEN_PATHS` scoped token in `BearerAuthMiddleware`, 64 KB body cap.
 - `orchestrator/config.py` — `SELF_AUDIT_*` settings + `model_validator` (auto-disable on bad Loki URL, clamps, short webhook token discarded even with the audit off).
 - `orchestrator/inbox.py` — `self_audit` message ref.
+- `orchestrator/log_config.py` — `anthropic`/`httpx2`/`httpcore2` quieted (the SDK logs request bodies at DEBUG).
+- `orchestrator/requirements.txt` — `anthropic==2.13.0` + `httpx2`/`httpcore2` pinned to minor.
 - `monitoring/prometheus/alert-rules.yml`, `monitoring/alertmanager/alertmanager.yml.template`, `scripts/generate-configs.sh` — alerts + webhook receiver.
 
 ## Env vars (all in `docs/ENV_VARS.md`)
@@ -133,6 +147,9 @@ the model download. User kills it. No more restart loop.
 | `SELF_AUDIT_INVESTIGATE_MAX_ROUNDS` / `_MAX_TOOL_CALLS` / `_MAX_SECONDS` | `12` / `30` / `600` | Daily investigation budgets |
 | `SELF_AUDIT_WEBHOOK_TOKEN` | _empty_ | Scoped Alertmanager bearer (≥ 24 chars) |
 | `SELF_AUDIT_ALERT_LOOKBACK_HOURS` | `3` | Loki window for alert runs |
+| `SELF_AUDIT_CLAUDE_API_KEY` | _empty_ | Run the investigator on Claude (`sk-ant-…`); empty = local brain |
+| `SELF_AUDIT_CLAUDE_MODEL` / `_EFFORT` | `claude-opus-5-5` / `medium` | Claude model id / effort (`low\|medium\|high\|xhigh\|max`) |
+| `SELF_AUDIT_CLAUDE_MONTHLY_USD` | `40` | Estimated monthly cap; `0` = Claude off |
 
 ## Metrics
 
@@ -142,9 +159,10 @@ the model download. User kills it. No more restart loop.
 - `bgw_self_audit_format_drift_total` — the `**Overall:**` line is missing, or its counts disagree with the parsed `## svc · SEVERITY` sections. An all-zero Overall with no sections is valid (not drift).
 - `bgw_self_audit_truncated_total{group}` — a source group's sample hit `SELF_AUDIT_LOKI_LIMIT_PER_GROUP`.
 - `bgw_self_audit_last_run_timestamp_seconds` — on `job_heartbeat` (`app_state` key `self_audit_last_run_ts`), stamped after each **daily** run (alert runs must not mask a dead cron), re-seeded at startup from the persisted value; disabling the audit forgets it.
-- `bgw_self_investigator_runs_total{trigger,result}` — `trigger ∈ {daily, alert}`, `result ∈ {ok, budget, brain_asleep, error}`.
+- `bgw_self_investigator_runs_total{trigger,result,backend}` — `trigger ∈ {daily, alert}`, `result ∈ {ok, budget, brain_asleep, error}`, `backend ∈ {local, claude}` (`brain_asleep` is local only).
 - `bgw_self_investigator_tool_calls_total{tool,result}` — `result ∈ {ok, denied, error, duplicate, capped}`.
-- `bgw_background_llm_errors_total{caller="self_investigator"}`.
+- `bgw_background_llm_errors_total{caller="self_investigator"|"self_investigator_claude"}`.
+- `bgw_self_investigator_claude_tokens_total{kind}` (`input|cache_write|cache_read|output`), `bgw_self_investigator_claude_spend_usd` (month estimate, NaN = unreadable), `bgw_self_investigator_claude_cap_usd`, `bgw_self_investigator_claude_fallback_total{reason}` (`cap|daily_cap|auth|billing|model|rate_limit|server|connection|bad_request|refusal|other`).
 - `bgw_self_audit_alert_trigger_total{result}` — `accepted | ignored | rate_limited | busy | disabled | bad_request`.
 - `bgw_helios_logs_silent` (gauge), `bgw_helios_log_check_total{result}`.
 
@@ -157,6 +175,7 @@ In `monitoring/prometheus/alert-rules.yml` group `brain_gateway_deadmans`, route
 | `SelfAuditStale` | No completed run in 25.5h |
 | `SelfAuditFailing` | ≥2 `failed` runs in 2d with no `ok`/`partial` run (`partial` = Helios asleep, logs still read — counts as healthy) |
 | `SelfInvestigatorFailing` | Daily investigator `result=error` ≥2 in 3d with no `ok` (a failed investigation still yields a `partial` audit, so `SelfAuditFailing` can't see it) |
+| `SelfInvestigatorClaudeUnavailable` | Claude first-call fallbacks for `auth\|billing\|bad_request\|model\|other` ≥ 1.5 in 3d with no Claude `ok`/`budget` run (group `brain_gateway_deadmans`) |
 
 In group `helios_health`, also `pushover-quiet`:
 
@@ -165,14 +184,15 @@ In group `helios_health`, also `pushover-quiet`:
 | `HeliosLogsSilent` | `bgw_helios_logs_silent == 1` AND llama-server generated tokens in the same 30 min, for 15m — promtail-helios or loki-push-gw is down |
 | `HeliosLogCheckFailing` | ≥ 5 `bgw_helios_log_check_total{result="error"}` in 30 min — the orchestrator can't query Loki |
 
-Grafana (`brain_gateway_sre.py`, "Background Jobs" row): "Self-Audit Heartbeat Age" stat + "Self-Audit Runs (by result, /day)". No panels yet for the investigator / alert-trigger / log-silence metrics.
+Grafana (`brain_gateway_sre.py`, self-audit row): "Self-Audit Heartbeat Age", "Self-Audit Runs (by result, /day)", "Investigator & Alert Webhook (/day)" (runs by trigger/result/backend, webhook outcomes, odd tool calls), then the Claude panels (spend, cap used, tokens/day, skipped → local by reason). Log silence: "Helios Health (self-monitoring)" row (`monitoring/README.md`).
 
 ## Failure modes (graceful)
 
 - **Loki unreachable** → log error, increment `bgw_self_audit_runs_total{result="failed"}`, push an explicit CRITICAL "audit failed" digest (never a green "all clean"). Cron retries tomorrow; `SelfAuditFailing` fires if it keeps failing.
 - **One source group's query fails** → run continues on the rest, `result="partial"` (`reason=sources_failed`), digest names the blind source and never says "All clean".
 - **Loki returns nothing** → save a one-line "no errors in last 24h" report, push priority-0 digest. Distinguishable from failure.
-- **Helios asleep (investigator on)** → never woken; deterministic digest, `bgw_self_investigator_runs_total{result="brain_asleep"}`.
+- **Helios asleep (investigator on the local brain)** → never woken; deterministic digest, `bgw_self_investigator_runs_total{result="brain_asleep"}`. With Claude it still runs; only a Claude skip/failure plus Helios asleep gives the digest.
+- **Claude cap reached / first Claude call fails** → local brain, `bgw_self_investigator_claude_fallback_total{reason}`, digest says why. **A later Claude call fails** → `error` ("Claude investigation failed partway"), or a forced final report if the error was transient.
 - **Investigation budget runs out** → final answer forced with the evidence so far (`result="budget"`).
 - **Jess unreachable / LLM timeout** → save raw cluster data to disk anyway, push a "audit captured, diagnosis unavailable" digest. `result="partial"`.
 - **Pushover disabled / fails** → write report to disk, log a warning, return success. The disk file is the source of truth; the push is best-effort.
@@ -181,6 +201,7 @@ Grafana (`brain_gateway_sre.py`, "Background Jobs" row): "Self-Audit Heartbeat A
 ## Security model
 
 - **Read-only design:** the orchestrator never executes model output. The investigator's tools only read the allow-listed repo and query Loki. Suggested diffs carry an "UNREVIEWED, possibly influenced by log content" banner.
+- **Claude backend data flow:** with `SELF_AUDIT_CLAUDE_API_KEY` set, the task and every tool result leave the house for `api.anthropic.com` (see Claude backend above). The task is secret-redacted; `SECRET_PATTERNS` (`jobs_training_corpus.py`, also used by the self-audit redaction; copy in `scripts/build_embedding_corpus.py`) now also match `sk-ant-`/`sk-proj-`/`sk-svcacct-`/`sk-admin-` keys, which the old `sk-` rule stopped short of.
 - **Untrusted log text:** log lines, tool results and alert labels/annotations are defanged and framed (`BEGIN/END UNTRUSTED LOG DATA`). The frame is advisory; the real boundary is that every tool is read-only.
 - **Suggested-command allow-list** (`_check_suggestion`): matches both `**Suggestion**:` and `**Suggestion:**` (the second format used to bypass it). Every stage of a `|` pipeline is checked; any other shell operator is refused (including redirects); `awk`/`sed` removed; `find -delete/-exec/-ok/-fprint*` refused; `docker compose` limited to `logs/ps/config/top/restart`, `docker image` to `ls/inspect`. Plus a dangerous-pattern regex and the secret-pattern filter on the report.
 - **Mempalace** only ever gets a code-built facts line, never model prose or log text.
@@ -195,6 +216,8 @@ Grafana (`brain_gateway_sre.py`, "Background Jobs" row): "Self-Audit Heartbeat A
 - [x] Unit test: `_build_audit_prompt` includes destructive-command guard rails
 - [x] Unit test: `_parse_jess_diagnosis` handles missing severity / malformed lines without raising
 - [x] Unit tests: investigator path allow-list, budgets, citation check, slot wait, webhook auth/rate limits/payload shapes, config clamps, `generate-configs.sh` receiver render (`test_self_investigator.py`, `test_jobs_self_audit.py`, `test_config.py`, `test_generate_configs.py`)
+- [x] Unit tests, Claude backend (no network, `httpx2.MockTransport`): request shape, replay, forced final + salvage, fallback to local, spend + caps failing closed, task redaction, config, digest note (`test_self_investigator_claude.py`)
+- [ ] Live: first Claude run after the owner sets the key (`POST /api/self_audit/run`)
 - [x] Unit test: failure paths (Loki down, LLM down) increment correct metrics + return correct result tag
 - [x] Integration: hit `POST /api/self_audit/run` manually, see Pushover digest land
 - [x] Manual: induce a known error (e.g. fake a llama-server crash via `systemctl stop`), wait one cycle, verify the cluster shows up in the report

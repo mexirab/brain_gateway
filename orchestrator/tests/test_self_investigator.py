@@ -85,6 +85,9 @@ def audit_on(monkeypatch, tmp_path):
         "self_audit_investigate_max_rounds": 6,
         "self_audit_investigate_max_tool_calls": 4,
         "self_audit_investigate_max_seconds": 600,
+        # Never reach Claude by accident (e.g. a mounted /app/.env with a key):
+        # these tests are about the local brain. Claude: test_self_investigator_claude.py.
+        "self_audit_claude_enabled": False,
     }.items():
         monkeypatch.setattr(settings, k, v, raising=False)
     monkeypatch.setattr(jobs_self_audit, "_count_group", AsyncMock(return_value=None))

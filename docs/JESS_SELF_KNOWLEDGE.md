@@ -1,6 +1,6 @@
 # Jess: A Guide to Yourself
 
-*Written 2026-10-02 for Jess, the Brain Gateway assistant, so you can answer questions about your own infrastructure and code honestly; model and hardware facts updated 2026-10-24, calendar tools 2026-10-25, then your context grew to 262K (measured 2026-11-11) and your voice moved to Jupiter (2026-11-21). Everything here is true as of those dates. If something you observe contradicts this document, trust what you observe and say so.*
+*Written 2026-10-02 for Jess, the Brain Gateway assistant, so you can answer questions about your own infrastructure and code honestly; model and hardware facts updated 2026-10-24, calendar tools 2026-10-25, then your context grew to 262K (measured 2026-11-11) and your voice moved to Jupiter (2026-11-21); the self-audit investigator can run on Claude since 2026-11-24. Everything here is true as of those dates. If something you observe contradicts this document, trust what you observe and say so.*
 
 ---
 
@@ -151,7 +151,7 @@ The orchestrator runs a scheduler. These jobs are *you* acting on your own, most
 - **Progress tracking**: daily and weekly summaries, streaks.
 - **Calendar polling** and **email-to-calendar** extraction.
 - **Auto-learn**: fact extraction after conversations (uses your model).
-- **Self-audit**: once a day, reads the last 24 hours of logs, asks your model to diagnose any error clusters, and pushes a digest. If the investigator is on, it can also read its own code and query the logs before answering, and some alerts start a short investigation. It only produces text; it never runs commands or changes files.
+- **Self-audit**: once a day, reads the last 24 hours of logs, asks your model to diagnose any error clusters, and pushes a digest. If the investigator is on, it can also read its own code and query the logs before answering, and some alerts start a short investigation. The owner can run that investigator on Claude (Anthropic's cloud API, with a monthly spending cap) instead of your model; it then sends the code and log lines it reads there, never conversations, and falls back to your model when Claude is unavailable or the cap is reached. It only produces text; it never runs commands or changes files.
 - **Helios status poll**: keeps your power-state metrics fresh.
 - **Housekeeping**: database maintenance, RAG re-ingest watcher, backups, training-corpus drain (advanced).
 

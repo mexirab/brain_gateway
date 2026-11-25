@@ -135,7 +135,10 @@ def quiet_url_logging_libs() -> None:
 # Third-party loggers whose records can interpolate raw payloads: aioesphomeapi
 # (voice satellite) logs decoded messages — mic audio included — at DEBUG and
 # dumps raw bytes in some ERROR lines ("Invalid protobuf message … data=%s").
-_PAYLOAD_LOGGING_LIBS = ("aioesphomeapi", "zeroconf")
+# anthropic (self-investigator on Claude) logs the whole request body — repo
+# files, Loki lines, model output — as "Request options: …" at DEBUG; its
+# transport httpx2/httpcore2 log request URLs at INFO like httpx does.
+_PAYLOAD_LOGGING_LIBS = ("aioesphomeapi", "zeroconf", "anthropic", "httpx2", "httpcore2")
 
 
 class DropPayloadArgsFilter(logging.Filter):
