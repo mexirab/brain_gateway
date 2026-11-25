@@ -11,6 +11,8 @@ must use it besides the chat tool:
   camera/motion/LED-style name when the registry is unreadable) are refused on
   the chat and NLP paths, hidden from the tool schema, and still allowed on
   the structured dashboard call.
+- ``HomeAssistantClient.call_service``'s own entity id / service format check
+  (the only check internal callers get) refuses before any HTTP request.
 """
 
 import json
@@ -108,6 +110,11 @@ class TestCheckHaCall:
             ("scene.x", "apply", "isn't available"),
             ("light.kitchen", "turn_on\n", "must look like"),
             ("light.kitchen; rm", "turn_on", "must look like"),
+            pytest.param("light.kitchen\n", "turn_on", "must look like", id="entity-trailing-newline"),
+            pytest.param("l" * 65 + ".kitchen", "turn_on", "must look like", id="domain-too-long"),
+            # 64 is the domain bound: passes the format check, then the domain
+            # allow-list refuses it.
+            pytest.param("l" * 64 + ".kitchen", "turn_on", "domain can't be controlled", id="domain-64-chars"),
         ],
     )
     def test_refusals(self, entity_id, service, needle):
@@ -253,6 +260,7 @@ class TestCheckHaCall:
             [PLUG],
             ["media_player.ok", "light.kitchen"],
             ["media_player.bad id"],
+            pytest.param(["media_player.kitchen\n"], id="member-trailing-newline"),
             [],
             None,
             [1],
@@ -767,3 +775,102 @@ class TestDashboardListing:
         assert by_id["switch.porch_widget_toggle"]["category"] == "config"
         assert "switch.porch_cam_power_save" in by_id
         assert out["rooms_available"] is True
+
+
+# ---------------------------------------------------------------------------
+# HomeAssistantClient.call_service format check
+# ---------------------------------------------------------------------------
+
+
+class TestCallServiceFormat:
+    """Routines (``ha_action``), wind-down scenes, ambient LED and focus audio
+    call ``call_service`` without ``check_ha_call``: its format check is their
+    only one. A refused call must not make any HTTP request."""
+
+    @pytest.mark.parametrize(
+        "entity_id,service,refused",
+        [
+            pytest.param("light.kitchen", "turn_on", None, id="valid"),
+            pytest.param("scene.movie_night_2", "turn_on", None, id="valid-digits"),
+            pytest.param("media_player.living_room_speaker", "media_stop", None, id="valid-underscores"),
+            pytest.param("light." + "a" * 128, "turn_on", None, id="valid-longest"),
+            pytest.param("light.kitchen\n", "turn_on", "entity_id", id="entity-trailing-newline"),
+            pytest.param("light.kitchen", "turn_on\n", "service", id="service-trailing-newline"),
+            pytest.param("light.kitchen;curl", "turn_on", "entity_id", id="entity-semicolon"),
+            pytest.param("light.kitchen", "turn_on;x", "service", id="service-semicolon"),
+            pytest.param("Light.Kitchen", "turn_on", "entity_id", id="entity-uppercase"),
+            pytest.param("light.kitchen", "Turn_On", "service", id="service-uppercase"),
+            pytest.param("kitchen", "turn_on", "entity_id", id="missing-domain"),
+            pytest.param(".kitchen", "turn_on", "entity_id", id="empty-domain"),
+            pytest.param("light." + "a" * 129, "turn_on", "entity_id", id="entity-too-long"),
+            pytest.param("l" * 65 + ".kitchen", "turn_on", "entity_id", id="domain-too-long"),
+            pytest.param(123, "turn_on", "entity_id", id="entity-not-str"),
+            pytest.param("light.kitchen", ["turn_on"], "service", id="service-not-str"),
+            pytest.param("light.kitchen", "t" * 65, "service", id="service-too-long"),
+        ],
+    )
+    async def test_format_check(self, client, monkeypatch, entity_id, service, refused):
+        from unittest.mock import AsyncMock
+
+        c, fake = client
+        post = AsyncMock(wraps=c._http.post)
+        monkeypatch.setattr(c._http, "post", post)
+        result = await c.call_service(entity_id, service)
+        if refused is None:
+            assert result.success, result.message
+            post.assert_awaited_once()
+            domain = entity_id.split(".", 1)[0]
+            assert fake.service_calls == [(f"/api/services/{domain}/{service}", {"entity_id": entity_id})]
+        else:
+            assert not result.success
+            assert result.message == f"Invalid {refused} format"
+            post.assert_not_called()
+            assert fake.service_calls == []
+
+
+# ---------------------------------------------------------------------------
+# config.py Helios plug entity id check
+# ---------------------------------------------------------------------------
+
+
+class TestHeliosPlugIdFormat:
+    """``Settings.validate_helios_wake_config`` checks HELIOS_PLUG_ENTITY and
+    HELIOS_PLUG_POWER_SENSOR with its own copy of ``ENTITY_ID_RE`` (config.py
+    can't import ha_guard). A bad id turns off wake and plug monitoring, and
+    the two copies must agree."""
+
+    @pytest.mark.parametrize("field", ["HELIOS_PLUG_ENTITY", "HELIOS_PLUG_POWER_SENSOR"])
+    @pytest.mark.parametrize(
+        "value,valid",
+        [
+            pytest.param("switch.test_plug", True, id="valid"),
+            pytest.param("l" * 64 + ".test_plug", True, id="domain-64"),
+            pytest.param("switch." + "a" * 128, True, id="object-128"),
+            pytest.param("switch.test_plug\n", False, id="trailing-newline"),
+            pytest.param("l" * 65 + ".test_plug", False, id="domain-65"),
+            pytest.param("switch." + "a" * 129, False, id="object-129"),
+        ],
+    )
+    def test_plug_id_format(self, monkeypatch, caplog, field, value, valid):
+        from orchestrator.config import Settings
+
+        env = {
+            "HELIOS_WAKE_ENABLED": "true",
+            "HELIOS_PLUG_MONITOR_ENABLED": "true",
+            "HA_URL": "http://ha.test:8123",
+            "HA_TOKEN": "tok",
+            "HELIOS_PLUG_ENTITY": "switch.test_plug",
+            "HELIOS_PLUG_POWER_SENSOR": "sensor.test_plug_power",
+        }
+        env[field] = value
+        for key, val in env.items():
+            monkeypatch.setenv(key, val)
+        with caplog.at_level("ERROR", logger="orchestrator.config"):
+            s = Settings(_env_file=None)
+        # The value reached the validator as given (not stripped on the way in).
+        assert getattr(s, field.lower()) == value
+        assert s.helios_wake_enabled is valid
+        assert s.helios_plug_monitor_enabled is valid
+        logged = any(f"{field}=" in r.getMessage() and "not a valid" in r.getMessage() for r in caplog.records)
+        assert logged is not valid
+        assert bool(ha_guard.ENTITY_ID_RE.fullmatch(value)) is valid

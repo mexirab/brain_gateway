@@ -26,7 +26,13 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from orchestrator.ha_guard import DEVICE_SETTING_REFUSAL, check_ha_call, device_setting_reason
+from orchestrator.ha_guard import (
+    DEVICE_SETTING_REFUSAL,
+    ENTITY_ID_RE,
+    SERVICE_RE,
+    check_ha_call,
+    device_setting_reason,
+)
 from orchestrator.ha_registry import ensure_fresh as ensure_ha_registry_fresh
 from orchestrator.metrics import HA_CALL_REFUSED, HA_DEVICE_SETTING_REFUSED
 
@@ -770,22 +776,25 @@ class HomeAssistantClient:
                 message="Missing entity_id or service",
             )
 
-        # Validate entity_id and service to prevent URL injection
-        import re
-
-        if not re.match(r"^[a-z_]+\.[a-z0-9_]+$", entity_id):
+        # Format check against URL injection (same patterns as ha_guard). Internal
+        # callers (routines, wind-down scenes, ambient LED, focus audio — whose
+        # speaker the model can pick) skip check_ha_call, so this is the only
+        # id/service check they get. fullmatch, not match + $: $ also matches
+        # before a trailing newline. The refusal never echoes the value: callers
+        # log result.message, and the value can be model text.
+        if not isinstance(entity_id, str) or not ENTITY_ID_RE.fullmatch(entity_id):
             return ExecutionResult(
                 success=False,
                 action=service or "unknown",
                 entity_id=entity_id,
-                message=f"Invalid entity_id format: {entity_id}",
+                message="Invalid entity_id format",
             )
-        if not re.match(r"^[a-z_]+$", service):
+        if not isinstance(service, str) or not SERVICE_RE.fullmatch(service):
             return ExecutionResult(
                 success=False,
                 action=service or "unknown",
                 entity_id=entity_id,
-                message=f"Invalid service format: {service}",
+                message="Invalid service format",
             )
 
         # Extract domain from entity_id

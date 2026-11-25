@@ -20,7 +20,9 @@ One policy, enforced in one place:
 
 Internal callers (reminder announcements, focus audio, routines) go through
 ``HomeAssistantClient.call_service`` directly and are not subject to this —
-their targets come from operator config, not user text.
+their targets come from operator config, not user text, except the focus
+audio speaker, which ``start_focus`` lets the model pick. ``call_service``
+still checks every id / service against ``ENTITY_ID_RE`` / ``SERVICE_RE``.
 
 ``shared`` is imported lazily: ``shared`` imports ``ha_integration``, which
 imports this module.
@@ -86,8 +88,10 @@ HA_ALLOWED_SERVICES = {
     "lock": {"lock"},
 }
 
-_ENTITY_RE = re.compile(r"[a-z_]+\.[a-z0-9_]{1,128}")
-_SERVICE_RE = re.compile(r"[a-z_]{1,64}")
+# Always ``fullmatch``: ``re.match`` with ``$`` also accepts a trailing newline.
+# ``HomeAssistantClient.call_service`` checks every call against these too.
+ENTITY_ID_RE = re.compile(r"[a-z_]{1,64}\.[a-z0-9_]{1,128}")
+SERVICE_RE = re.compile(r"[a-z_]{1,64}")
 _JOIN_MAX_MEMBERS = 16
 _MEDIA_SOURCES = ("media-source://media_source/", "media-source://radio_browser/")
 # play_media / join keep only these data keys: HA's play_media also takes a
@@ -270,7 +274,7 @@ def _check_media_data(service: str, data: Dict[str, Any]) -> Optional[str]:
         for m in members:
             if (
                 not isinstance(m, str)
-                or not _ENTITY_RE.fullmatch(m)
+                or not ENTITY_ID_RE.fullmatch(m)
                 or not m.startswith("media_player.")
                 or ha_tool_denied(m)
             ):
@@ -302,7 +306,7 @@ def check_ha_call(
         return "Failed: entity_id and service must be strings. Nothing was changed.", {}
     if data is not None and not isinstance(data, dict):
         return 'Failed: data must be an object, e.g. {"brightness": 128}. Nothing was changed.', {}
-    if not _ENTITY_RE.fullmatch(entity_id) or not _SERVICE_RE.fullmatch(service):
+    if not ENTITY_ID_RE.fullmatch(entity_id) or not SERVICE_RE.fullmatch(service):
         return "Failed: entity_id must look like 'light.kitchen' and service like 'turn_on'. Nothing was changed.", {}
 
     domain = entity_id.split(".", 1)[0]

@@ -4,6 +4,16 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — HA call_service: full-match id / service check (2026-11-25)
+
+### Security
+- `HomeAssistantClient.call_service` checked the entity id and service with `re.match(r"^...$")`. Python's `$` also matches before a trailing newline, so `"light.kitchen\n"` / `"turn_on\n"` passed, and there was no length bound. It now uses `isinstance` + `fullmatch` on `ha_guard.ENTITY_ID_RE` / `SERVICE_RE` (made public). Chat, fast path and `/api/ha/command` were already covered by `ha_guard.check_ha_call`; internal callers (routine `ha_action`, wind-down scenes, ambient LED, focus audio, whose speaker `start_focus` lets the model pick) have only this check. Not exploitable before (httpx refuses a newline in the URL; HA strips one from the body's entity id): defence in depth.
+- The domain part of `ENTITY_ID_RE` is now bounded (`{1,64}`), for the guard too. A non-string id is refused instead of raising `TypeError`. The refusal no longer echoes the value (callers log `result.message`).
+- `config.py`: the Helios plug id check uses the same pattern with `fullmatch`.
+
+### Tests
+- `test_ha_guard.py`: `TestCallServiceFormat` (real client over a MockTransport, refused calls make no HTTP request), `TestHeliosPlugIdFormat`, new `TestCheckHaCall` rows.
+
 ## [Unreleased] — Test suite streamlined (2026-11-25)
 
 Branch `chore/streamline-tests`. `orchestrator/tests/`: 165 → 151 test files, ~91k → ~79k lines, ~9,500 → 9,185 tests, all passing. No behavior change. Conventions: `docs/DEV.md` → Writing tests.
