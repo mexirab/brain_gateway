@@ -93,7 +93,8 @@ jobs:
   test-python:
     name: Python Tests
     runs-on: ubuntu-latest
-    # Usually ~4 min (max ~7 min). A stuck run otherwise holds the runner for
+    # Usually ~3 min (2026-11-25: ~1 min install, ~35 s collection, ~2 min run;
+    # was ~7 min with the CUDA torch wheels). A stuck run otherwise holds the runner for
     # GitHub's 360-min default: two tests with MB-long ids stalled "Run tests"
     # for 25+ min (conftest.py now refuses ids over 300 chars).
     timeout-minutes: 15

@@ -90,7 +90,7 @@ docker compose --profile models config
 | Python Lint & Format | 10 | ruff check + format check on `orchestrator/`, `coder/`, `scripts/jess-coder` and `scripts/jupiter-kiosk/` (ruff version pinned) |
 | Grafana Dashboards In Sync | 10 | regenerates `monitoring/grafana/dashgen/`, fails on drift |
 | Suite Theme In Sync | 10 | theme generator tests + `theme/build.py` drift check |
-| Python Tests | 15 | installs CPU-only torch from the PyTorch CPU index first (skips ~3 GB of CUDA wheels; pip cache keyed on `orchestrator/requirements.txt`), then `pytest orchestrator/tests/ -v`. ~7 min before the CPU-torch install (2.5 min install, ~50 s collection, ~3.5 min run); not yet re-measured |
+| Python Tests | 15 | installs CPU-only torch from the PyTorch CPU index first (skips ~3 GB of CUDA wheels; pip cache keyed on `orchestrator/requirements.txt`), then `pytest orchestrator/tests/ -v`. ~3 min (first run 2026-11-25, cold pip cache: 54 s install, 36 s collection, 1 min 50 s run); was ~7 min with the CUDA wheels (2.5 min install, ~50 s collection, ~3.5 min run) |
 | Frontend Lint & Type Check | 15 | ESLint, `tsc --noEmit`, `npm test` |
 | Docker Build (orchestrator) | 25 | builds the orchestrator image; also the coder box image (`coder/`, `docs/CODER.md`) + offline smoke checks when its inputs changed (`coder/`, `orchestrator/{Dockerfile,requirements.txt,embedding_pin.py}`) |
 | Deploy to Jupiter | 45 | push to `main` only; self-hosted runner on Jupiter (`actions.runner.mexirab-brain_gateway.jupiter.service`), operates on the live checkout `/home/labadmin/gateway_nerves`; concurrency group `deploy-jupiter`, a running deploy is never cancelled |

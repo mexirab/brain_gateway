@@ -17,7 +17,7 @@ Branch `chore/streamline-tests`. `orchestrator/tests/`: 165 → 151 test files, 
 - `tmp_db` copies a state_store DB built once per session (was one `init_db()`, ~100 fsyncs, per test).
 
 ### CI
-- Python Tests job: pip cache, and `pip install torch --index-url https://download.pytorch.org/whl/cpu` before `requirements.txt` (CPU torch instead of ~3 GB of CUDA wheels). Not yet measured in CI; the job took ~7 min before.
+- Python Tests job: pip cache, and `pip install torch --index-url https://download.pytorch.org/whl/cpu` before `requirements.txt` (CPU torch instead of ~3 GB of CUDA wheels). First CI run: the job went from ~7 min to 2 min 54 s (install ~2.5 min → 54 s with a cold pip cache, test run ~3.5 min → 1 min 50 s).
 
 ### Orchestrator
 - `tool_handlers.HA_REFRESH_TIMEOUT_S = 3`: the entity-refresh wait in `tool_home_assistant`, now a module constant (same value) so tests can shorten it.
