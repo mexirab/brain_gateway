@@ -653,7 +653,8 @@ SATELLITE_TURN_TOTAL = Counter(
     #         aborted | dropped | helios_asleep | wake_failed | wake_timeout |
     #         service_down | stt_failed | chat_failed | speaker_unavailable |
     #         tts_failed | error | duplicate (another device heard the same
-    #         wake word first and answers; this one stays quiet)
+    #         wake word first and answers; this one stays quiet) |
+    #         not_recognized (voice match: not an enrolled voice, ended silently)
     #         (no_speech + empty_transcript per wake_word ~ false wakes)
     # wake_word: hey_jess | okay_jess | okay_nabu | button | other
     # helios: unchecked (run never got that far) | awake | woken (waited for it)
@@ -671,6 +672,43 @@ SATELLITE_LISTEN_END_TOTAL = Counter(
     #         duplicate (another device answers the same wake word)
     # device: configured node name — each room has its own noise level
     ["reason", "device"],
+)
+
+SATELLITE_VOICE_MATCH_TOTAL = Counter(
+    "bgw_satellite_voice_match_total",
+    "Voice satellite voice match (VOICE_MATCH_DEVICES) checks by outcome",
+    # result: recognized | not_recognized (turned away, silently) | contested
+    #         (turned away while another device also heard the wake word: maybe
+    #         the owner from the next room) | too_short (nothing to compare;
+    #         turned away) | unavailable (model/voiceprints missing or bad: the
+    #         turn went ahead unchecked) | failed (error, timeout or busy pool:
+    #         went ahead unchecked)
+    # device: configured node name
+    ["result", "device"],
+)
+
+SATELLITE_VOICE_MATCH_SCORE = Histogram(
+    "bgw_satellite_voice_match_score",
+    "Voice satellite voice match: best similarity of a question to an enrolled voice "
+    "(1 = same voice; measured owner ~0.4-0.8, TV <= 0.3) — for tuning VOICE_MATCH_THRESHOLD",
+    ["device"],
+    buckets=(-0.2, 0.0, 0.1, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7, 0.8, 1.0),
+)
+
+SATELLITE_VOICE_MATCH_READY = Gauge(
+    "bgw_satellite_voice_match_ready",
+    "Voice match: 1 = model and voiceprints loaded, 0 = not ready (that room's turns go "
+    "ahead unchecked); no series = voice match off for that device",
+    # device label on purpose: an unlabelled gauge exports 0 even when the
+    # feature is off, which would fire VoiceMatchFailing on every install.
+    ["device"],
+)
+
+SATELLITE_VOICE_MATCH_RETRY_TOTAL = Counter(
+    "bgw_satellite_voice_match_retry_total",
+    "Voice match: a turned-away question followed by a recognized one on the same device "
+    "within RETRY_WINDOW_S — most likely the owner turned away (false reject); tuning signal",
+    ["device"],
 )
 
 SATELLITE_TURN_SECONDS = Histogram(

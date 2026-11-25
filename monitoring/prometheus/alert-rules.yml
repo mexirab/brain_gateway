@@ -670,8 +670,25 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Voice satellite config has {{ $value }} problem(s): a room may not be listening"
-          description: "A device in VOICE_SATELLITE_DEVICES was skipped, or VOICE_SATELLITE_ENABLED=true was turned off by validation, so \"Hey Jess\" there gets no answer. `docker logs brain-orchestrator 2>&1 | grep 'CONFIG.*VOICE_SATELLITE'` names the entry by position and what is wrong with it (format name@host=speaker, comma-separated, no spaces; host must be an IP; speaker one media_player.* id; names and IPs unique; at most 8). Fix Jupiter .env, then `docker compose up -d --force-recreate orchestrator`."
+          summary: "Voice satellite config has {{ $value }} problem(s): a room may not be listening, or not filtered"
+          description: "A device in VOICE_SATELLITE_DEVICES was skipped, or VOICE_SATELLITE_ENABLED=true was turned off by validation, so \"Hey Jess\" there gets no answer — or a VOICE_MATCH_* setting is wrong (a VOICE_MATCH_DEVICES name that isn't a configured device, VOICE_MATCH_THRESHOLD not a number between 0 and 1, VOICE_MATCH_VOICEPRINTS_PATH outside a voice_match directory), so a room isn't filtered as intended. `docker logs brain-orchestrator 2>&1 | grep -E 'CONFIG.*VOICE_(SATELLITE|MATCH)'` names the entry by position and what is wrong with it (format name@host=speaker, comma-separated, no spaces; host must be an IP; speaker one media_player.* id; names and IPs unique; at most 8). Fix Jupiter .env, then `docker compose up -d --force-recreate orchestrator`."
+
+      # Voice match (VOICE_MATCH_DEVICES, orchestrator/voice_match.py) fails
+      # OPEN: with no model, no voiceprints, a stale/bad voiceprint file or a
+      # scoring error, that room answers every voice again — including the TV
+      # it is there to filter. Nothing else shows it. ready has a device label
+      # and exists only for voice-match devices (no series when it's off); the
+      # bridge re-checks it every 5 min and on every question. The counter half
+      # catches a model that loads but can't score (ready flapping): >= 2 in 1h
+      # so one transient timeout doesn't notify.
+      - alert: VoiceMatchFailing
+        expr: (min by (device) (bgw_satellite_voice_match_ready) == 0) or on (device) (sum by (device) (increase(bgw_satellite_voice_match_total{result=~"unavailable|failed"}[1h])) >= 2)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Voice match isn't working on {{ $labels.device }}: it answers any voice, the TV too"
+          description: "That room's questions go ahead unchecked (fail open). Why: `docker logs brain-orchestrator 2>&1 | grep -i 'voice match'` (fixed reason in brackets). model_missing → `docker exec brain-orchestrator python -m orchestrator.voice_match fetch`; model_checksum → the file isn't the pinned model, fetch again; no_voiceprints / voiceprints_stale / voiceprints_invalid → enroll again: bridge off (VOICE_SATELLITE_ENABLED=false + `docker compose up -d --force-recreate orchestrator`), `docker exec -it brain-orchestrator python -m orchestrator.voice_match record <device> me1` (×3), then `... enroll owner me1 me2 me3`, bridge back on (docs/VOICE_AND_TTS.md → Voice match); features_missing → kaldi-native-fbank missing from the image (rebuild); failed → `{container=\"brain-orchestrator\"} |= \"voice match failed\"` in Loki: TimeoutError/busy = CPU starved (`docker stats brain-orchestrator`, the `voice_match=` stage on the turn lines), anything else → recreate the orchestrator. Clears within 5 min of the fix. To turn voice match off instead: clear VOICE_MATCH_DEVICES + recreate."
 
       # A voice-satellite reply that started playing but stopped early (or never
       # reached the speaker) while the turn still reported ok: progressive TTS

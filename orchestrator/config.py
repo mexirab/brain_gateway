@@ -9,6 +9,7 @@ Import `settings` to access configuration anywhere:
 """
 
 import math
+import os
 import re
 from dataclasses import dataclass
 from typing import Dict, List
@@ -76,6 +77,11 @@ def _ip_or_none(host: str) -> str | None:
     if getattr(ip, "scope_id", None):
         return None
     return str(ip)
+
+
+def _split_names(raw: str) -> List[str]:
+    """Comma-separated names, stripped, empties dropped (VOICE_MATCH_DEVICES)."""
+    return [n.strip() for n in (raw or "").split(",") if n.strip()]
 
 
 def parse_voice_satellite_devices(raw: str) -> tuple[List[SatelliteDevice], List[str]]:
@@ -605,6 +611,19 @@ class Settings(BaseSettings):
     # disabled — exported as bgw_satellite_config_problems (alert
     # VoiceSatelliteConfigInvalid), since a skipped device has no other signal.
     voice_satellite_config_problems: int = 0
+    # Voice match (orchestrator/voice_match.py): on the devices listed here
+    # (comma-separated node names from the device list, no spaces — scripts
+    # source .env with bash; empty = off), a question is answered only if it
+    # is in an enrolled voice — filters TV and game audio that false-wakes the
+    # mic. Not a security control. Fails open (model or voiceprints missing →
+    # turns go ahead unchecked, alert VoiceMatchFailing). Cosine-similarity
+    # threshold, 0-1: measured owner 0.4-0.8, TV ≤ 0.3. Model + voiceprints
+    # live on the data volume in a directory named voice_match (left out of
+    # the nightly backup: biometric; re-enroll after a restore).
+    voice_match_devices: str = ""
+    voice_match_threshold: float = 0.35
+    voice_match_model_path: str = "/app/data/voice_match/voxceleb_resnet34_LM.onnx"
+    voice_match_voiceprints_path: str = "/app/data/voice_match/voiceprints.json"
 
     # -- Paperless bridge (F-012) ----------------------------------------------
     # Hands files off to Paperless-ngx for OCR + auto-tagging. Doesn't
@@ -865,6 +884,14 @@ class Settings(BaseSettings):
         clamped = max(0, min(600, self.voice_satellite_helios_timeout_seconds))
         object.__setattr__(self, "voice_satellite_helios_timeout_seconds", clamped)
         object.__setattr__(self, "voice_satellite_config_problems", 0)
+        # Before the enabled check: the enrollment CLI (`score`) uses the
+        # threshold while the bridge is off. A problem only counts when voice
+        # match is asked for.
+        if not (0.0 < self.voice_match_threshold < 1.0):
+            log.error("[CONFIG] VOICE_MATCH_THRESHOLD must be a number between 0 and 1; using 0.35.")
+            object.__setattr__(self, "voice_match_threshold", 0.35)
+            if _split_names(self.voice_match_devices):
+                object.__setattr__(self, "voice_satellite_config_problems", 1)
         if not self.voice_satellite_enabled:
             return self
 
@@ -872,7 +899,9 @@ class Settings(BaseSettings):
         host = self.voice_satellite_host.strip()
         if self.voice_satellite_devices.strip():
             devices, skipped = parse_voice_satellite_devices(self.voice_satellite_devices)
-            object.__setattr__(self, "voice_satellite_config_problems", len(skipped))
+            object.__setattr__(
+                self, "voice_satellite_config_problems", self.voice_satellite_config_problems + len(skipped)
+            )
             for entry_problem in skipped:
                 log.error("[CONFIG] VOICE_SATELLITE_DEVICES %s; that device is skipped.", entry_problem)
             if not devices:
@@ -898,9 +927,51 @@ class Settings(BaseSettings):
             log.error("[CONFIG] VOICE_SATELLITE_ENABLED=true but %s; disabling the voice satellite.", problem)
             object.__setattr__(self, "voice_satellite_enabled", False)
             object.__setattr__(self, "voice_satellite_config_problems", self.voice_satellite_config_problems + 1)
-        else:
-            object.__setattr__(self, "voice_satellite_host", host)
+            return self
+        object.__setattr__(self, "voice_satellite_host", host)
+        # Voice match: a name that isn't a configured device would silently leave
+        # that room unfiltered, so it counts as a config problem (alerted).
+        known = {d.name for d in self.voice_satellites()}
+        for i, name in enumerate(_split_names(self.voice_match_devices), start=1):
+            if name not in known:
+                log.error("[CONFIG] VOICE_MATCH_DEVICES entry %d is not a configured device; it is ignored.", i)
+                object.__setattr__(self, "voice_satellite_config_problems", self.voice_satellite_config_problems + 1)
+        # The backup leaves out directories named voice_match; voiceprints (and the
+        # enrollment clips next to them) anywhere else would go off-box.
+        if self.voice_match_device_set() and (
+            os.path.basename(os.path.dirname(os.path.abspath(self.voice_match_voiceprints_path))) != "voice_match"
+        ):
+            log.error(
+                "[CONFIG] VOICE_MATCH_VOICEPRINTS_PATH must be in a directory named voice_match "
+                "(kept out of the backup); voice match stays off until it is."
+            )
+            object.__setattr__(self, "voice_match_devices", "")
+            object.__setattr__(self, "voice_satellite_config_problems", self.voice_satellite_config_problems + 1)
         return self
+
+    @field_validator("voice_match_threshold", mode="before")
+    @classmethod
+    def _voice_match_threshold_parse(cls, v):
+        """A non-number value must not fail startup (optional-feature config
+        logs, never raises): it becomes -1, which the range check in
+        validate_voice_satellite_config logs, resets to 0.35 and counts (when
+        voice match is on). Empty = unset = the default."""
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return v
+        text = "" if v is None else str(v).strip()
+        if not text:
+            return 0.35
+        try:
+            return float(text)
+        except ValueError:
+            return -1.0
+
+    def voice_match_device_set(self) -> frozenset[str]:
+        """Configured devices that have voice match on (empty = off everywhere)."""
+        if not self.voice_satellite_enabled:
+            return frozenset()
+        known = {d.name for d in self.voice_satellites()}
+        return frozenset(n for n in _split_names(self.voice_match_devices) if n in known)
 
     def voice_satellites(self) -> List[SatelliteDevice]:
         """The configured satellites: VOICE_SATELLITE_DEVICES' valid entries, or

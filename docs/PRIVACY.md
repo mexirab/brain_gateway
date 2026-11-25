@@ -46,7 +46,7 @@ Only what you explicitly turn on. By default, the system makes **zero** outbound
 | Home Assistant API | Wizard's HA integration | Service calls + entity queries to your HA instance |
 | SearXNG (web search) | `web_search` tool | Your search query → your own SearXNG instance (defaults to the local container) → upstream search engines |
 | Research helper (Context7, SearXNG, public web pages) | `look_it_up` tool (`RESEARCH_HELPER_ENABLED`, off by default) | A technical question and the helper's search queries → Context7 (`context7.com`, third-party docs index; with `RESEARCH_CONTEXT7_API_KEY` if set) and your SearXNG → upstream engines; page requests go straight from the box to public websites (they see its IP). Questions containing secrets, email addresses/phone numbers, private addresses or host names, home paths, your name or medication names are refused before sending. The helper never sees memory, meds, calendar or chat history |
-| Hugging Face (model downloads) | First boot / model swap | Anonymous GET requests for model weights (HF logs IP + user-agent) |
+| Hugging Face (model downloads) | First boot / model swap; `python -m orchestrator.voice_match fetch` (voice match speaker model, once, by hand) | Anonymous GET requests for model weights (HF logs IP + user-agent) |
 | Container registries | Image pulls | Anonymous Docker manifest requests (Docker Hub / GHCR log IP + user-agent) |
 
 You can verify any of this by watching the orchestrator container's egress with `tcpdump`, `iftop`, or the host firewall. The codebase has no hidden outbound paths.
@@ -118,6 +118,7 @@ If you connect Google Calendar or Gmail via the wizard:
   - If you switch the TTS backend to ElevenLabs or OpenAI, every spoken reply (house announcements, Telegram voice replies, dashboard chat voice replies) is sent to that provider as text.
 - **Wake-word ("Hey Jess" or your configured trigger) runs locally** on the voice puck (microWakeWord on ATOM Echo).
 - **Voice satellite (ATOM Echo talking to Jess directly, optional):** the mic audio after the wake word is held in RAM for one utterance and never written to disk; logs carry lengths and outcomes, never what was said. Anyone in the room can talk to it and gets the full voice feature set (including medication and calendar answers, spoken aloud); its turns are never auto-learned. See `docs/VOICE_AND_TTS.md` → Voice satellite.
+- **Voice match (optional, per room, off by default):** a TV filter for the voice satellite. The voiceprints (a numeric summary of each enrolled voice, still biometric) stay on the box: file mode 600, never logged, never served by an API, and left out of the nightly backup. Enrollment is the one time mic audio is written to disk: the clips you record on purpose, deleted once the voiceprint is saved. Scoring runs on the box; the speaker model is a one-time download you start yourself. See `docs/VOICE_AND_TTS.md` → Voice match.
 - The optional wake-word capture mode (`data/wakeword/`, gitignored) saves raw audio fragments to disk for retraining. **This is opt-in via env var and off by default.**
 
 ---

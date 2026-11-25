@@ -3059,3 +3059,857 @@ def test_startup_exports_the_config_problems_gauge_unconditionally():
     assert len(sets) == 1 and len(gates) == 1 and sets[0] < gates[0]
     gauge = metrics.SATELLITE_CONFIG_PROBLEMS
     assert gauge._labelnames == () and gauge._name == "bgw_satellite_config_problems"
+
+
+# ---------------------------------------------------------------------------
+# Voice match (VOICE_MATCH_DEVICES): the bridge side. voice_match.py itself is
+# tested in test_voice_match.py; here the matcher is a stub.
+# ---------------------------------------------------------------------------
+
+
+class FakeMatcher:
+    """Stands in for voice_match.VoiceMatcher: a fixed score, or an exception."""
+
+    def __init__(self, score: float = 0.6, exc: Exception | None = None, delay: float = 0.0) -> None:
+        self.value = score
+        self.exc = exc
+        self.delay = delay
+        self.scored: list[int] = []
+
+    async def score_async(self, pcm: bytes, timeout: float) -> float:
+        self.scored.append(len(pcm))
+        if self.delay:
+            await asyncio.wait_for(asyncio.sleep(self.delay), timeout)
+        if self.exc is not None:
+            raise self.exc
+        return self.value
+
+
+def _voice_match(result: str, device: str = NODE) -> float:
+    return metric_value(metrics.SATELLITE_VOICE_MATCH_TOTAL, result=result, device=device)
+
+
+def _score_count(device: str = NODE) -> float:
+    return metric_value(metrics.SATELLITE_VOICE_MATCH_SCORE, "_count", device=device)
+
+
+def _ready(device: str = NODE) -> float:
+    return metric_value(metrics.SATELLITE_VOICE_MATCH_READY, device=device)
+
+
+def _ready_series(device: str) -> list:
+    return [
+        s for f in metrics.SATELLITE_VOICE_MATCH_READY.collect() for s in f.samples if s.labels.get("device") == device
+    ]
+
+
+async def _one_turn(sat) -> None:
+    await sat.handle_start("c", 0, None, "Hey Jess")
+    await _say(sat.handle_audio, UTTERANCE)
+    await _drain(sat)
+
+
+def _vm_sat(make_sat, monkeypatch, matcher, **kw):
+    sat = make_sat(voice_match=matcher, voice_match_threshold=0.35, **kw)
+    return sat, _wire(sat, monkeypatch)
+
+
+async def test_voice_match_recognized_voice_gets_the_normal_turn(make_sat, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="orchestrator.voice_satellite")
+    matcher = FakeMatcher(0.62)
+    sat, p = _vm_sat(make_sat, monkeypatch, matcher)
+    before = (_turns("ok", helios="awake"), _voice_match("recognized"), _score_count())
+
+    await _one_turn(sat)
+
+    assert matcher.scored and p.stt.await_count == 1 and p.speak.await_count == 1
+    assert (_turns("ok", helios="awake"), _voice_match("recognized"), _score_count()) == tuple(b + 1 for b in before)
+    assert _ready() == 1
+    assert "voice match recognized score=0.62" in caplog.text
+    assert "voice_match=" in caplog.text  # stage timing on the turn line
+
+
+async def test_voice_match_unknown_voice_ends_silently(make_sat, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="orchestrator.voice_satellite")
+    sat, p = _vm_sat(make_sat, monkeypatch, FakeMatcher(0.05))
+    before = (_turns("not_recognized"), _voice_match("not_recognized"))
+
+    await _one_turn(sat)
+
+    # Before Helios, STT and the brain; no sound: the device is already back on the wake word.
+    assert p.status.await_count == 0 and p.stt.await_count == 0 and p.speak.await_count == 0
+    assert sat._chat.calls == []
+    assert sat._client.names == [RUN_START, STT_START, VAD_START, RUN_END]
+    assert (_turns("not_recognized"), _voice_match("not_recognized")) == (before[0] + 1, before[1] + 1)
+    assert sat._busy is False and sat._history == []
+    assert "voice match not recognized score=0.05" in caplog.text
+
+
+async def test_voice_match_threshold_is_inclusive(make_sat, monkeypatch):
+    sat, p = _vm_sat(make_sat, monkeypatch, FakeMatcher(0.35))
+    await _one_turn(sat)
+    assert p.speak.await_count == 1
+
+
+async def test_voice_match_contested_wake_is_counted_apart(make_sat, monkeypatch, caplog):
+    """Two rooms heard one "Hey Jess"; the voice-match room claimed it and
+    didn't recognize the voice (maybe the owner, farther away): turned away,
+    but counted as contested so the lock-out case is visible — even when a
+    newer wake (the owner trying again) started a new claim meanwhile."""
+    caplog.set_level(logging.INFO, logger="orchestrator.voice_satellite")
+    arbiter = vs.WakeArbiter()
+    sat, p = _vm_sat(make_sat, monkeypatch, FakeMatcher(0.2), arbiter=arbiter)
+    before = (_voice_match("contested"), _turns("not_recognized"))
+    await sat.handle_start("c", 0, None, "Hey Jess")
+    assert arbiter.claim(OTHER, "hey_jess") is False  # the other room heard it too
+    arbiter._claimed_at -= 10  # later: the owner says it again in the other room — a new claim
+    assert arbiter.claim(OTHER, "hey_jess") is True
+    await _say(sat.handle_audio, UTTERANCE)
+    await _drain(sat)
+    assert (_voice_match("contested"), _turns("not_recognized")) == (before[0] + 1, before[1] + 1)
+    assert p.speak.await_count == 0
+    assert "voice match contested score=0.20" in caplog.text
+
+
+async def test_voice_match_uncontested_unknown_voice_is_plain_not_recognized(make_sat, monkeypatch):
+    sat, _ = _vm_sat(make_sat, monkeypatch, FakeMatcher(0.2), arbiter=vs.WakeArbiter())
+    before = (_voice_match("contested"), _voice_match("not_recognized"))
+    await _one_turn(sat)
+    assert (_voice_match("contested"), _voice_match("not_recognized")) == (before[0], before[1] + 1)
+
+
+def test_arbiter_contested_flag_belongs_to_its_claim():
+    arbiter = vs.WakeArbiter(window_s=60)
+    assert arbiter.claim(NODE, "hey_jess")
+    first = arbiter.last_claim
+    assert not arbiter.was_contested(first)
+    assert not arbiter.claim(OTHER, "hey_jess")
+    assert arbiter.was_contested(first)
+    assert arbiter.claim(NODE, "hey_jess") and arbiter.last_claim == first  # the holder again: same claim
+    arbiter._claimed_at -= 120  # the window passed: a new claim starts clean
+    assert arbiter.claim(OTHER, "hey_jess")
+    assert arbiter.last_claim != first and not arbiter.was_contested(arbiter.last_claim)
+    assert arbiter.was_contested(first)  # the old claim keeps its flag
+    assert arbiter.claim(NODE, "button") and arbiter.last_claim is None
+    assert not arbiter.was_contested(None)
+
+
+async def test_voice_match_too_short_is_turned_away_and_keeps_ready(make_sat, monkeypatch):
+    from orchestrator.voice_match import VoiceMatchUnavailable
+
+    sat, p = _vm_sat(make_sat, monkeypatch, FakeMatcher(exc=VoiceMatchUnavailable("too_short")))
+    metrics.SATELLITE_VOICE_MATCH_READY.labels(device=NODE).set(1)
+    before = _voice_match("too_short")
+    await _one_turn(sat)
+    assert _voice_match("too_short") == before + 1 and p.speak.await_count == 0
+    assert _ready() == 1
+
+
+async def test_voice_match_turned_away_turns_do_not_use_the_rate_limit(make_sat, monkeypatch):
+    """A TV waking the mic over and over must not lock the owner out."""
+    matcher = FakeMatcher(0.05)
+    sat, p = _vm_sat(make_sat, monkeypatch, matcher)
+    for _ in range(vs.RATE_LIMIT_TURNS + 2):
+        await _one_turn(sat)
+    assert len(sat._turn_starts) == 0
+    matcher.value = 0.7
+    before = _turns("ok", helios="awake")
+    await _one_turn(sat)
+    assert _turns("ok", helios="awake") == before + 1 and p.speak.await_count == 1
+
+
+async def test_voice_match_scores_the_speech_not_the_silence(make_sat, monkeypatch):
+    matcher = FakeMatcher(0.6)
+    sat, p = _vm_sat(make_sat, monkeypatch, matcher)
+    await _one_turn(sat)
+    (captured,) = [len(call.args[0]) for call in p.stt.await_args_list]
+    assert 0 < matcher.scored[0] < captured  # trimmed to the VAD's speech span
+
+
+@pytest.mark.parametrize(
+    ("reason", "result", "ready"),
+    [
+        pytest.param("no_voiceprints", "unavailable", 0, id="no-voiceprints"),
+        pytest.param("model_output", "unavailable", 0, id="model-output"),
+        pytest.param("busy", "failed", 1, id="busy-pool"),
+    ],
+)
+async def test_voice_match_unavailable_fails_open(make_sat, monkeypatch, caplog, reason, result, ready):
+    from orchestrator.voice_match import VoiceMatchUnavailable
+
+    caplog.set_level(logging.INFO, logger="orchestrator.voice_satellite")
+    sat, p = _vm_sat(make_sat, monkeypatch, FakeMatcher(exc=VoiceMatchUnavailable(reason)))
+    metrics.SATELLITE_VOICE_MATCH_READY.labels(device=NODE).set(1)
+    before = (_turns("ok", helios="awake"), _voice_match(result))
+
+    await _one_turn(sat)
+
+    assert p.speak.await_count == 1  # the turn went ahead unchecked
+    assert (_turns("ok", helios="awake"), _voice_match(result)) == (before[0] + 1, before[1] + 1)
+    assert _ready() == ready  # a busy pool says nothing about readiness
+    assert f"voice match {result} ({reason}); turn goes ahead unchecked" in caplog.text
+
+
+async def test_voice_match_error_fails_open_without_the_message(make_sat, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="orchestrator.voice_satellite")
+    sat, p = _vm_sat(make_sat, monkeypatch, FakeMatcher(exc=RuntimeError("secret detail")))
+    before = _voice_match("failed")
+    await _one_turn(sat)
+    assert p.speak.await_count == 1 and _voice_match("failed") == before + 1
+    assert "voice match failed (RuntimeError)" in caplog.text and "secret detail" not in caplog.text
+
+
+async def test_voice_match_timeout_fails_open(make_sat, monkeypatch):
+    monkeypatch.setattr(vs, "VOICE_MATCH_TIMEOUT_S", 0.01)
+    sat, p = _vm_sat(make_sat, monkeypatch, FakeMatcher(0.05, delay=0.5))
+    before = _voice_match("failed")
+    await _one_turn(sat)
+    assert p.speak.await_count == 1 and _voice_match("failed") == before + 1
+
+
+async def test_voice_match_fault_warns_once_per_reason(make_sat, monkeypatch, caplog):
+    """A broken filter in a TV room is many turns an hour: one WARNING per
+    change of reason, INFO after (the counter carries the rate)."""
+    from orchestrator.voice_match import VoiceMatchUnavailable
+
+    caplog.set_level(logging.INFO, logger="orchestrator.voice_satellite")
+    matcher = FakeMatcher(exc=VoiceMatchUnavailable("no_voiceprints"))
+    sat, _ = _vm_sat(make_sat, monkeypatch, matcher)
+    for _ in range(3):
+        await _one_turn(sat)
+    levels = [r.levelname for r in caplog.records if "voice match unavailable" in r.getMessage()]
+    assert levels == ["WARNING", "INFO", "INFO"]
+    matcher.exc = None  # fixed: the next fault warns again
+    await _one_turn(sat)
+    matcher.exc = VoiceMatchUnavailable("no_voiceprints")
+    await _one_turn(sat)
+    levels = [r.levelname for r in caplog.records if "voice match unavailable" in r.getMessage()]
+    assert levels[-1] == "WARNING"
+
+
+async def test_voice_match_retry_counts_a_likely_false_reject(make_sat, monkeypatch):
+    matcher = FakeMatcher(0.1)
+    sat, _ = _vm_sat(make_sat, monkeypatch, matcher)
+    retry = metrics.SATELLITE_VOICE_MATCH_RETRY_TOTAL
+    before = metric_value(retry, device=NODE)
+    await _one_turn(sat)  # turned away
+    matcher.value = 0.7
+    await _one_turn(sat)  # recognized soon after
+    assert metric_value(retry, device=NODE) == before + 1
+    await _one_turn(sat)  # recognized again: no turned-away question before it
+    assert metric_value(retry, device=NODE) == before + 1
+    monkeypatch.setattr(vs, "RETRY_WINDOW_S", -1.0)  # outside the window
+    matcher.value = 0.1
+    await _one_turn(sat)
+    matcher.value = 0.7
+    await _one_turn(sat)
+    assert metric_value(retry, device=NODE) == before + 1
+
+
+async def test_device_without_voice_match_is_not_checked(sat, pipeline):
+    before = sum(_voice_match(r) for r in vs.VOICE_MATCH_RESULTS)
+    await _one_turn(sat)
+    assert sum(_voice_match(r) for r in vs.VOICE_MATCH_RESULTS) == before
+    assert pipeline.speak.await_count == 1
+
+
+NOVM = "atom-echo-novm"
+
+
+async def test_voice_match_off_exports_no_ready_series(monkeypatch):
+    """An unlabelled gauge would export 0 with the feature off and fire
+    VoiceMatchFailing on every install."""
+    assert metrics.SATELLITE_VOICE_MATCH_READY._labelnames == ("device",)
+    monkeypatch.setattr(vs._settings, "voice_satellite_enabled", True)
+    monkeypatch.setattr(vs._settings, "voice_satellite_devices", f"{NOVM}@10.0.0.52={SPEAKER}")
+    monkeypatch.setattr(vs._settings, "voice_satellite_api_key", _KEY)
+    monkeypatch.setattr(vs._settings, "voice_match_devices", "")
+
+    async def fake_run_forever(self):
+        return None
+
+    monkeypatch.setattr(vs.Satellite, "run_forever", fake_run_forever)
+    await vs.satellite_loop(FakeChat())  # returns: no upkeep task when off
+    assert _ready_series(NOVM) == []
+
+
+async def _loop_with_voice_match(monkeypatch, devices_on: str, preload_result):
+    from orchestrator import voice_match
+
+    monkeypatch.setattr(vs._settings, "voice_satellite_enabled", True)
+    monkeypatch.setattr(vs._settings, "voice_satellite_devices", TWO_DEVICES)
+    monkeypatch.setattr(vs._settings, "voice_satellite_api_key", _KEY)
+    monkeypatch.setattr(vs._settings, "voice_match_devices", devices_on)
+    calls = []
+
+    def fake_preload(self):
+        calls.append(1)
+        return preload_result
+
+    monkeypatch.setattr(voice_match.VoiceMatcher, "preload", fake_preload)
+    started = []
+
+    async def fake_run_forever(self):
+        started.append(self)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(vs.Satellite, "run_forever", fake_run_forever)
+    task = asyncio.create_task(vs.satellite_loop(FakeChat()))
+    for _ in range(200):
+        if calls and len(started) == 2:
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)  # let the upkeep set the gauges
+    return task, started, calls
+
+
+async def _stop(task):
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def test_satellite_loop_voice_match_only_on_listed_devices(monkeypatch, caplog):
+    from orchestrator import voice_match
+
+    caplog.set_level(logging.INFO, logger="orchestrator.voice_satellite")
+    task, started, calls = await _loop_with_voice_match(monkeypatch, OTHER, None)
+    try:
+        by_node = {s._node: s for s in started}
+        assert by_node[NODE]._voice_match is None
+        assert isinstance(by_node[OTHER]._voice_match, voice_match.VoiceMatcher)
+        assert by_node[OTHER]._voice_match_threshold == vs._settings.voice_match_threshold
+        assert _ready(OTHER) == 1
+        assert f"Voice match on for {OTHER}" in caplog.text
+    finally:
+        await _stop(task)
+
+
+async def test_satellite_loop_voice_match_not_ready_is_logged_not_fatal(monkeypatch, caplog):
+    task, started, calls = await _loop_with_voice_match(monkeypatch, f"{NODE},{OTHER}", "model_missing")
+    try:
+        assert len(started) == 2 and all(s._voice_match is not None for s in started)  # fail open per turn
+        assert _ready(NODE) == 0 and _ready(OTHER) == 0
+        assert "Voice match not ready (model_missing)" in caplog.text
+        assert not task.done()  # the bridge keeps running
+    finally:
+        await _stop(task)
+
+
+async def test_voice_match_upkeep_rechecks_and_logs_on_change(monkeypatch, caplog):
+    """The ready gauge follows `fetch` / `enroll` without anyone speaking."""
+    caplog.set_level(logging.INFO, logger="orchestrator.voice_satellite")
+    monkeypatch.setattr(vs, "VOICE_MATCH_RECHECK_S", 0.0)
+    results = ["model_missing", "model_missing", None, None]
+
+    class Matcher:
+        async def preload_async(self, timeout: float):
+            if not results:
+                await asyncio.Event().wait()
+            return results.pop(0)
+
+    task = asyncio.create_task(vs._voice_match_upkeep(Matcher(), frozenset({NODE})))
+    await _until(lambda: not results)
+    await _tick(20)
+    assert _ready(NODE) == 1
+    assert caplog.text.count("Voice match not ready (model_missing)") == 1
+    assert caplog.text.count(f"Voice match on for {NODE}") == 1
+    await _stop(task)
+
+
+async def test_voice_match_upkeep_survives_an_error(monkeypatch):
+    monkeypatch.setattr(vs, "VOICE_MATCH_RECHECK_S", 0.0)
+    results: list = [RuntimeError("x"), None]
+
+    class Matcher:
+        async def preload_async(self, timeout: float):
+            if not results:
+                await asyncio.Event().wait()
+            r = results.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return r
+
+    task = asyncio.create_task(vs._voice_match_upkeep(Matcher(), frozenset({NODE})))
+    await _until(lambda: not results)
+    await _tick(20)
+    assert _ready(NODE) == 1 and not task.done()
+    await _stop(task)
+
+
+async def test_voice_match_upkeep_busy_pool_is_not_not_ready(monkeypatch, caplog, tmp_path):
+    """A recheck that finds the pool full of questions says nothing about
+    readiness: no ERROR line, the gauge stays as it was."""
+    from orchestrator import voice_match
+
+    caplog.set_level(logging.INFO, logger="orchestrator.voice_satellite")
+    real = voice_match.VoiceMatcher(str(tmp_path / "m.onnx"), str(tmp_path / "voice_match" / "p.json"))
+    real._in_flight = voice_match.MAX_IN_FLIGHT
+    metrics.SATELLITE_VOICE_MATCH_READY.labels(device=NODE).set(1)
+    task = asyncio.create_task(vs._voice_match_upkeep(real, frozenset({NODE})))
+    await _tick(20)
+    assert _ready(NODE) == 1
+    assert "not ready" not in caplog.text
+    await _stop(task)
+
+
+def test_config_voice_match_devices_must_be_configured_devices(caplog):
+    s = _settings(
+        VOICE_SATELLITE_HOST=None,
+        VOICE_SATELLITE_SPEAKER=None,
+        VOICE_SATELLITE_DEVICES=TWO_DEVICES,
+        VOICE_MATCH_DEVICES=f"{OTHER},atom-echo-typo",
+    )
+    assert s.voice_satellite_enabled
+    assert s.voice_match_device_set() == frozenset({OTHER})
+    assert s.voice_satellite_config_problems == 1
+    assert "VOICE_MATCH_DEVICES entry 2 is not a configured device" in caplog.text
+    assert "atom-echo-typo" not in caplog.text
+
+
+@pytest.mark.parametrize("value", ["0", "1", "1.5", "-0.2", "0,3", "nan", "abc"])
+def test_config_voice_match_threshold_bad_values_fall_back(value):
+    """A bad value must never stop the orchestrator starting (optional feature);
+    it counts as a config problem only when voice match is asked for."""
+    on = _settings(VOICE_MATCH_THRESHOLD=value, VOICE_MATCH_DEVICES="atom-echo-jess")
+    assert on.voice_match_threshold == 0.35 and on.voice_satellite_config_problems == 1
+    assert on.voice_satellite_enabled  # the satellite itself keeps working
+    off = _settings(VOICE_MATCH_THRESHOLD=value)
+    assert off.voice_match_threshold == 0.35 and off.voice_satellite_config_problems == 0
+    bridge_off = _settings(VOICE_MATCH_THRESHOLD=value, VOICE_SATELLITE_ENABLED="false")
+    assert bridge_off.voice_match_threshold == 0.35  # the CLI uses it with the bridge off
+
+
+def test_config_voice_match_threshold_empty_is_the_default():
+    s = _settings(VOICE_MATCH_THRESHOLD="", VOICE_MATCH_DEVICES="atom-echo-jess")
+    assert s.voice_match_threshold == 0.35 and s.voice_satellite_config_problems == 0
+
+
+def test_config_problems_add_up():
+    s = _settings(
+        VOICE_SATELLITE_HOST=None,
+        VOICE_SATELLITE_SPEAKER=None,
+        VOICE_SATELLITE_DEVICES=f"{TWO_DEVICES},bad entry",
+        VOICE_MATCH_DEVICES=OTHER,
+        VOICE_MATCH_THRESHOLD="7",
+    )
+    assert s.voice_satellite_config_problems == 2  # the skipped device + the threshold
+
+
+def test_config_voice_match_threshold_default_and_valid():
+    assert _settings().voice_match_threshold == 0.35
+    assert _settings(VOICE_MATCH_THRESHOLD="0.4").voice_match_threshold == 0.4
+
+
+def test_config_voice_match_voiceprints_must_sit_in_the_backup_excluded_dir(caplog):
+    s = _settings(VOICE_MATCH_DEVICES="atom-echo-jess", VOICE_MATCH_VOICEPRINTS_PATH="/app/data/prints.json")
+    assert s.voice_match_device_set() == frozenset()
+    assert s.voice_satellite_config_problems == 1
+    assert "must be in a directory named voice_match" in caplog.text
+    ok = _settings(VOICE_MATCH_DEVICES="atom-echo-jess", VOICE_MATCH_VOICEPRINTS_PATH="/srv/voice_match/p.json")
+    assert ok.voice_match_device_set() == frozenset({"atom-echo-jess"})
+
+
+def test_config_voice_match_off_by_default_and_off_with_the_bridge():
+    assert _settings().voice_match_device_set() == frozenset()
+    off = _settings(VOICE_SATELLITE_ENABLED="false", VOICE_MATCH_DEVICES="atom-echo-jess")
+    assert off.voice_match_device_set() == frozenset()
+    single = _settings(VOICE_MATCH_DEVICES="atom-echo-jess")  # the single-device default name
+    assert single.voice_match_device_set() == frozenset({"atom-echo-jess"})
+
+
+# -- voice match: wake arbitration, the shared matcher, what a turned-away turn skips ----------
+
+THIRD = "atom-echo-third"
+THIRD_SPEAKER = "media_player.hall_test"
+
+
+async def test_voice_match_button_press_is_never_contested(make_sat, monkeypatch):
+    """A button press is deliberate, never one wake word heard twice: even
+    right after this room's contested "Hey Jess", an unknown voice on the
+    button is plain not_recognized."""
+    arbiter = vs.WakeArbiter()
+    sat, p = _vm_sat(make_sat, monkeypatch, FakeMatcher(0.2), arbiter=arbiter)
+    assert arbiter.claim(NODE, "hey_jess") and not arbiter.claim(OTHER, "hey_jess")
+    assert arbiter.was_contested(arbiter.last_claim)
+    before = (_voice_match("contested"), _voice_match("not_recognized"), _turns("not_recognized", wake="button"))
+
+    await sat.handle_start("c", 0, None, None)  # the button
+    await _say(sat.handle_audio, UTTERANCE)
+    await _drain(sat)
+
+    after = (_voice_match("contested"), _voice_match("not_recognized"), _turns("not_recognized", wake="button"))
+    assert after == (before[0], before[1] + 1, before[2] + 1)
+    assert p.speak.await_count == 0
+
+
+async def test_voice_match_a_button_press_elsewhere_does_not_contest_this_wake(make_sat, monkeypatch):
+    arbiter = vs.WakeArbiter()
+    sat, _ = _vm_sat(make_sat, monkeypatch, FakeMatcher(0.2), arbiter=arbiter)
+    before = (_voice_match("contested"), _voice_match("not_recognized"))
+    await sat.handle_start("c", 0, None, "Hey Jess")
+    assert arbiter.claim(OTHER, "button")  # someone presses the other room's button meanwhile
+    await _say(sat.handle_audio, UTTERANCE)
+    await _drain(sat)
+    assert (_voice_match("contested"), _voice_match("not_recognized")) == (before[0], before[1] + 1)
+
+
+async def test_voice_match_duplicate_run_is_never_scored(make_sat, monkeypatch):
+    """The room that lost the wake word ends silently at its first audio: no
+    score and no voice-match count, even with voice match on there too."""
+    arbiter = vs.WakeArbiter()
+    matcher = FakeMatcher(0.7)
+    first, p1 = _vm_sat(make_sat, monkeypatch, matcher, arbiter=arbiter)
+    second, p2 = _vm_sat(
+        make_sat, monkeypatch, matcher, arbiter=arbiter, node_name=OTHER, speaker=OTHER_SPEAKER, host="10.0.0.51"
+    )
+    before = (sum(_voice_match(r, OTHER) for r in vs.VOICE_MATCH_RESULTS), _turns("duplicate", device=OTHER))
+
+    await first.handle_start("c", 0, None, "Hey Jess")
+    await second.handle_start("c", 0, None, "Hey Jess")
+    await _say(first.handle_audio, UTTERANCE)
+    await _say(second.handle_audio, UTTERANCE)
+    await asyncio.gather(_drain(first), _drain(second))
+
+    assert len(matcher.scored) == 1 and p1.speak.await_count == 1
+    assert p2.status.await_count == 0 and p2.speak.await_count == 0
+    assert sum(_voice_match(r, OTHER) for r in vs.VOICE_MATCH_RESULTS) == before[0]
+    assert _turns("duplicate", device=OTHER) == before[1] + 1
+
+
+async def test_voice_match_rooms_score_at_once_on_the_shared_matcher(make_sat, monkeypatch, tmp_path, caplog):
+    """Two rooms' questions run side by side on the real matcher's two threads
+    and both get a verdict; a third at the same moment finds the pool full and
+    goes ahead unchecked at once (fail open) — it never queues behind them."""
+    import threading
+
+    import numpy as np
+
+    from orchestrator import voice_match
+
+    caplog.set_level(logging.INFO, logger="orchestrator.voice_satellite")
+    owner = np.full(voice_match.EMBED_DIM, 1 / 16, dtype=np.float32)  # a unit vector
+    prints = tmp_path / "voice_match" / "voiceprints.json"
+    voice_match.save_voiceprints(str(prints), {"owner": owner})
+    matcher = voice_match.VoiceMatcher(str(tmp_path / "voice_match" / "missing.onnx"), str(prints))
+    both = threading.Barrier(2, timeout=5)
+
+    def embed(samples):
+        both.wait()  # returns only while the other room's question is being scored too
+        return owner
+
+    monkeypatch.setattr(matcher, "embed", embed)
+    rooms = [
+        _vm_sat(make_sat, monkeypatch, matcher),
+        _vm_sat(make_sat, monkeypatch, matcher, node_name=OTHER, speaker=OTHER_SPEAKER, host="10.0.0.51"),
+        _vm_sat(make_sat, monkeypatch, matcher, node_name=THIRD, speaker=THIRD_SPEAKER, host="10.0.0.52"),
+    ]
+    names = (NODE, OTHER, THIRD)
+    before = [(_voice_match("recognized", n), _voice_match("failed", n)) for n in names]
+
+    for sat, _ in rooms:  # no arbiter: three separate questions at once
+        await sat.handle_start("c", 0, None, "Hey Jess")
+    for sat, _ in rooms:
+        await _say(sat.handle_audio, UTTERANCE)
+    await asyncio.gather(*(_drain(sat) for sat, _ in rooms))
+
+    after = [(_voice_match("recognized", n), _voice_match("failed", n)) for n in names]
+    assert after == [
+        (before[0][0] + 1, before[0][1]),
+        (before[1][0] + 1, before[1][1]),
+        (before[2][0], before[2][1] + 1),
+    ]
+    assert [p.speak.await_count for _, p in rooms] == [1, 1, 1]  # every room was answered
+    assert f"{THIRD}: voice match failed (busy)" in caplog.text
+
+
+async def test_voice_match_turned_away_question_does_not_hold_reminders_off(make_sat, monkeypatch):
+    """Reminders wait while someone talks to Jess (D6); a TV that false-woke
+    the mic is not someone talking to Jess."""
+    matcher = FakeMatcher(0.05)
+    sat, _ = _vm_sat(make_sat, monkeypatch, matcher)
+    await _one_turn(sat)
+    assert not shared.is_voice_session_active()
+    matcher.value = 0.7
+    await _one_turn(sat)
+    assert shared.is_voice_session_active()
+
+
+class _ContextMatcher(FakeMatcher):
+    """Records the auto_learn flag the scoring runs under."""
+
+    def __init__(self, score: float) -> None:
+        super().__init__(score)
+        self.skip_seen: list[bool] = []
+
+    async def score_async(self, pcm: bytes, timeout: float) -> float:
+        self.skip_seen.append(skip_auto_learn_var.get())
+        return await super().score_async(pcm, timeout)
+
+
+@pytest.mark.parametrize("score", [pytest.param(0.7, id="recognized"), pytest.param(0.05, id="turned-away")])
+async def test_voice_match_turn_still_never_feeds_auto_learn(make_sat, monkeypatch, score):
+    matcher = _ContextMatcher(score)
+    sat, _ = _vm_sat(make_sat, monkeypatch, matcher)
+    await _one_turn(sat)
+    assert matcher.skip_seen == [True]  # set before voice match runs
+    assert [skip for skip, _ in sat._chat.ctx] == ([True] if score >= 0.35 else [])
+    assert skip_auto_learn_var.get() is False  # set in the turn's own task, not leaked out
+
+
+async def test_voice_match_verdict_never_reaches_the_chat_call(make_sat, monkeypatch):
+    """What a voice turn may do must not depend on who is speaking: a
+    recognized turn sends the brain exactly what an unchecked room sends."""
+    plain = make_sat()
+    _wire(plain, monkeypatch)
+    matched, _ = _vm_sat(make_sat, monkeypatch, FakeMatcher(0.83))
+    await _one_turn(plain)
+    await _one_turn(matched)
+    assert matched._chat.calls == plain._chat.calls == [[{"role": "user", "content": "what time is it"}]]
+    assert "0.83" not in repr(matched._chat.calls)
+
+
+async def test_voice_match_logs_carry_no_voiceprint_id_or_transcript(make_sat, monkeypatch, tmp_path, caplog):
+    """Runtime twin of the static log guard, through the real matcher and its
+    voiceprint file: recognized, not recognized, an invalid file and a deleted
+    one log scores, lengths and reasons — never the id, transcript or reply."""
+    import json
+
+    import numpy as np
+
+    from orchestrator import voice_match
+
+    caplog.set_level(logging.DEBUG)
+    eye = np.eye(voice_match.EMBED_DIM, dtype=np.float32)
+    prints = tmp_path / "voice_match" / "voiceprints.json"
+    voice_match.save_voiceprints(str(prints), {"zqx-owner": eye[0], "zqx-guest": eye[1]})
+    matcher = voice_match.VoiceMatcher(str(tmp_path / "voice_match" / "missing.onnx"), str(prints))
+    probe = {"emb": eye[0]}
+    monkeypatch.setattr(matcher, "embed", lambda samples: probe["emb"])
+    sat = make_sat(chat=FakeChat("zqx private reply"), voice_match=matcher, voice_match_threshold=0.35)
+    p = _wire(sat, monkeypatch, transcript="zqx secret question words")
+
+    await _one_turn(sat)  # recognized
+    probe["emb"] = eye[2]
+    await _one_turn(sat)  # not recognized
+    bad = {"version": 1, "model_sha256": voice_match.MODEL_SHA256, "voiceprints": {"ZQX Owner": [0.1] * 256}}
+    prints.write_text(json.dumps(bad))
+    await _one_turn(sat)  # unavailable: voiceprints_invalid (fails open)
+    prints.unlink()
+    await _one_turn(sat)  # unavailable: no_voiceprints (fails open)
+
+    assert p.speak.await_count == 3
+    assert "voice match recognized score=1.00" in caplog.text and "voice match not recognized" in caplog.text
+    assert "(voiceprints_invalid)" in caplog.text and "(no_voiceprints)" in caplog.text
+    assert "zqx" not in caplog.text.lower()
+
+
+SEED_A, SEED_B, SEED_OFF = "atom-echo-seed-a", "atom-echo-seed-b", "atom-echo-seed-off"
+
+
+def _device_series(metric, device: str) -> list:
+    return [s for f in metric.collect() for s in f.samples if s.labels.get("device") == device]
+
+
+class _Rounds:
+    """vs.asyncio stand-in: the upkeep's between-rounds sleep parks until the
+    test lets the next round run. Tests cancel the upkeep only while it is
+    parked: a cancel that lands as a preload finishes is the bug in
+    test_voice_match_upkeep_stops_when_cancelled_as_a_preload_finishes."""
+
+    def __init__(self) -> None:
+        self.rounds = 0  # finished upkeep rounds
+        self._go = asyncio.Event()
+
+    def __getattr__(self, name):
+        return getattr(asyncio, name)
+
+    async def sleep(self, delay, *args):
+        self.rounds += 1
+        self._go.clear()
+        await self._go.wait()
+
+    def next(self) -> None:
+        self._go.set()
+
+
+async def _settle(cond, what: str = "condition") -> None:
+    """Poll with real sleeps: the matcher works on its own threads."""
+    for _ in range(300):
+        if cond():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"{what} never became true")
+
+
+async def test_satellite_loop_seeds_voice_match_series_and_shares_one_matcher(monkeypatch):
+    """Every voice-match room has its series from startup (the first increase
+    after a restart is visible) and all share one matcher (one pool, one
+    model in RAM); a room without voice match exports none of them."""
+    from orchestrator import voice_match
+
+    devices = f"{SEED_A}@10.0.0.60={SPEAKER},{SEED_B}@10.0.0.61={OTHER_SPEAKER},{SEED_OFF}@10.0.0.62={THIRD_SPEAKER}"
+    monkeypatch.setattr(vs._settings, "voice_satellite_enabled", True)
+    monkeypatch.setattr(vs._settings, "voice_satellite_devices", devices)
+    monkeypatch.setattr(vs._settings, "voice_satellite_api_key", _KEY)
+    monkeypatch.setattr(vs._settings, "voice_match_devices", f"{SEED_A},{SEED_B}")
+    monkeypatch.setattr(voice_match.VoiceMatcher, "preload", lambda self: "model_missing")
+    rounds = _Rounds()
+    monkeypatch.setattr(vs, "asyncio", rounds)
+    started = []
+
+    async def fake_run_forever(self):
+        started.append(self)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(vs.Satellite, "run_forever", fake_run_forever)
+    task = asyncio.create_task(vs.satellite_loop(FakeChat()))
+    try:
+        await _settle(lambda: len(started) == 3 and rounds.rounds == 1, "devices up and one upkeep round")
+        by_node = {s._node: s for s in started}
+        assert by_node[SEED_A]._voice_match is not None
+        assert by_node[SEED_A]._voice_match is by_node[SEED_B]._voice_match
+        assert by_node[SEED_OFF]._voice_match is None
+        for name in (SEED_A, SEED_B):
+            totals = _device_series(metrics.SATELLITE_VOICE_MATCH_TOTAL, name)
+            assert {s.labels["result"] for s in totals if s.name.endswith("_total")} == set(vs.VOICE_MATCH_RESULTS)
+            assert _device_series(metrics.SATELLITE_VOICE_MATCH_RETRY_TOTAL, name)
+            assert _ready_series(name)
+            turns = _device_series(metrics.SATELLITE_TURN_TOTAL, name)
+            assert any(s.labels["result"] == "not_recognized" for s in turns)
+        for metric in (
+            metrics.SATELLITE_VOICE_MATCH_TOTAL,
+            metrics.SATELLITE_VOICE_MATCH_RETRY_TOTAL,
+            metrics.SATELLITE_VOICE_MATCH_READY,
+            metrics.SATELLITE_VOICE_MATCH_SCORE,
+        ):
+            assert _device_series(metric, SEED_OFF) == []
+        turns_off = _device_series(metrics.SATELLITE_TURN_TOTAL, SEED_OFF)
+        assert not any(s.labels["result"] == "not_recognized" for s in turns_off)
+    finally:
+        await _stop(task)
+
+
+async def test_voice_match_upkeep_follows_a_deleted_voiceprint_file(monkeypatch, tmp_path, caplog):
+    """The real matcher under the upkeep loop: ready once the voiceprints load,
+    not ready again soon after the file is deleted — with nobody speaking."""
+    import numpy as np
+
+    from orchestrator import voice_match
+
+    caplog.set_level(logging.INFO, logger="orchestrator.voice_satellite")
+    rounds = _Rounds()
+    monkeypatch.setattr(vs, "asyncio", rounds)
+    prints = tmp_path / "voice_match" / "voiceprints.json"
+    voice_match.save_voiceprints(str(prints), {"owner": np.full(voice_match.EMBED_DIM, 1 / 16, dtype=np.float32)})
+    matcher = voice_match.VoiceMatcher(str(tmp_path / "voice_match" / "m.onnx"), str(prints))
+    monkeypatch.setattr(matcher, "_load_session", lambda: object())  # the model is test_voice_match's business
+    device = "atom-echo-upkeep"
+
+    task = asyncio.create_task(vs._voice_match_upkeep(matcher, frozenset({device})))
+    try:
+        await _settle(lambda: rounds.rounds == 1, "first upkeep round")
+        assert _ready(device) == 1 and _ready_series(device)
+        prints.unlink()
+        rounds.next()
+        await _settle(lambda: rounds.rounds == 2, "second upkeep round")
+        assert _ready(device) == 0
+        assert "Voice match not ready (no_voiceprints)" in caplog.text
+    finally:
+        await _stop(task)  # parked between rounds: a clean cancel
+
+
+class _HeldPool:
+    """Stands in for the matcher's ThreadPoolExecutor: the test decides when a
+    call finishes (everything else is the real VoiceMatcher._run path)."""
+
+    def __init__(self) -> None:
+        self.calls: list = []
+
+    def submit(self, fn, *args):
+        import concurrent.futures
+
+        future = concurrent.futures.Future()
+        self.calls.append((future, fn, args))
+        return future
+
+
+async def test_voice_match_upkeep_stops_when_cancelled_as_a_preload_finishes(tmp_path):
+    """Shutdown cancels the bridge in the moment an upkeep round's preload
+    result has come back from the pool but the upkeep hasn't resumed yet."""
+    import contextlib
+
+    from orchestrator import voice_match
+
+    matcher = voice_match.VoiceMatcher(str(tmp_path / "m.onnx"), str(tmp_path / "voice_match" / "p.json"))
+    pool = _HeldPool()
+    matcher._executor = pool
+    task = asyncio.create_task(vs._voice_match_upkeep(matcher, frozenset({"atom-echo-race"})))
+    try:
+        await _until(lambda: pool.calls)  # the upkeep is waiting on its preload
+        ((future, fn, args),) = pool.calls
+        future.set_result(fn(*args))  # the preload finishes ("model_missing") ...
+        await asyncio.sleep(0)  # ... its result reaches the event loop ...
+        task.cancel()  # ... and shutdown cancels the bridge before the upkeep resumes
+        done, _ = await asyncio.wait({task}, timeout=1)
+        assert task in done and task.cancelled()
+    finally:
+        task.cancel()  # a dropped first cancel left it in the between-rounds sleep
+        with contextlib.suppress(BaseException):
+            await task
+
+
+@pytest.mark.parametrize(
+    "listed",
+    [
+        pytest.param(f" {NODE} , {OTHER} ", id="spaces"),
+        pytest.param(f"{OTHER},{NODE},{OTHER}", id="repeat"),
+        pytest.param(f",{NODE},,{OTHER},", id="empty-entries"),
+    ],
+)
+def test_config_voice_match_devices_tolerates_spaces_repeats_and_empties(caplog, listed):
+    s = _settings(
+        VOICE_SATELLITE_HOST=None,
+        VOICE_SATELLITE_SPEAKER=None,
+        VOICE_SATELLITE_DEVICES=TWO_DEVICES,
+        VOICE_MATCH_DEVICES=listed,
+    )
+    assert s.voice_match_device_set() == frozenset({NODE, OTHER})
+    assert s.voice_satellite_config_problems == 0
+    assert "VOICE_MATCH_DEVICES" not in caplog.text
+
+
+def test_config_voice_match_single_device_by_its_configured_name(caplog):
+    s = _settings(VOICE_SATELLITE_NAME="atom-echo-kitchen", VOICE_MATCH_DEVICES="atom-echo-kitchen")
+    assert s.voice_match_device_set() == frozenset({"atom-echo-kitchen"})
+    assert s.voice_satellite_config_problems == 0
+    stale = _settings(VOICE_SATELLITE_NAME="atom-echo-kitchen", VOICE_MATCH_DEVICES="atom-echo-jess")
+    assert stale.voice_match_device_set() == frozenset()  # the default name is not this device
+    assert stale.voice_satellite_config_problems == 1
+    assert "VOICE_MATCH_DEVICES entry 1 is not a configured device" in caplog.text
+
+
+def test_config_voice_match_on_a_broken_bridge_is_off_and_not_counted_twice():
+    s = _settings(VOICE_SATELLITE_API_KEY=None, VOICE_MATCH_DEVICES="atom-echo-jess")
+    assert not s.voice_satellite_enabled and s.voice_match_device_set() == frozenset()
+    assert s.voice_satellite_config_problems == 1  # the key; voice match adds nothing on top
+
+
+def test_config_voice_match_on_a_skipped_device_counts_both_problems():
+    """The device entry is bad AND its room is then unfiltered: two problems."""
+    s = _settings(
+        VOICE_SATELLITE_HOST=None,
+        VOICE_SATELLITE_SPEAKER=None,
+        VOICE_SATELLITE_DEVICES=f"{NODE}@10.0.0.50={SPEAKER},{OTHER}@echo.local={OTHER_SPEAKER}",
+        VOICE_MATCH_DEVICES=OTHER,
+    )
+    assert [d.name for d in s.voice_satellites()] == [NODE]
+    assert s.voice_match_device_set() == frozenset()
+    assert s.voice_satellite_config_problems == 2
+
+
+@pytest.mark.parametrize(("value", "expected"), [(" 0.5 ", 0.5), ("0.999", 0.999), ("1e-2", 0.01)])
+def test_config_voice_match_threshold_accepts_padded_and_written_out_numbers(value, expected):
+    s = _settings(VOICE_MATCH_THRESHOLD=value, VOICE_MATCH_DEVICES="atom-echo-jess")
+    assert s.voice_match_threshold == pytest.approx(expected)
+    assert s.voice_satellite_config_problems == 0

@@ -206,6 +206,8 @@ A question you ask the voice puck (voice satellite) is still answered during qui
 
 **Voice puck sounds** (voice satellite): a beep after the wake word; then a short sound if nothing was heard, if it's still busy with your last question, if the GPU box is waking up (the answer comes in a minute or two), or if something failed. Normal answers play on the room's speaker, not the puck; a long answer starts after a few seconds while the rest is still being made. If one stops partway (no error sound), ask again. It stops listening about a second after you finish talking; with a TV or other loud noise on, it may keep listening for the full 15 seconds before answering. With pucks in several rooms, each answers on its own room's speaker; if two hear the same "Hey Jess", both beep but only one answers (the first to hear it, not always the nearer one).
 
+**Voice match** (optional, per room, usually the TV room): that room's puck answers only voices it has learned, so the TV or a game waking it gets silence instead of an answer. A beep and then silence means it didn't recognize the voice: say it again a little closer, or in a few more words. Guests and family need their own voice learned before that puck answers them. It keeps the TV out; it is not a lock.
+
 ---
 
 ## Voice style

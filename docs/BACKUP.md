@@ -28,6 +28,13 @@ worth keeping in 30 rotated archives on two machines (see `docs/PANTRY.md`).
 Receipt photos follow the same rule, and committed/discarded receipt scans keep
 only store/date/total in `brain_state.db` — no line-level purchase history
 reaches the backups.
+`voice_match/` (any directory of that name) is excluded too: the voice-satellite
+voiceprints are biometric and stay on this box, never in rotated archives on two
+machines, and the enrollment clips beside them are raw voice recordings. The
+speaker model in it re-downloads. After a restore, run
+`docker exec brain-orchestrator python -m orchestrator.voice_match fetch` and
+enroll again (`docs/VOICE_AND_TTS.md` → Voice match); until then the
+voice-match rooms answer every voice and `VoiceMatchFailing` fires.
 
 ## What the backup does
 

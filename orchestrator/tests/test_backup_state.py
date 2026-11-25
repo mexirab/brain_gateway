@@ -64,6 +64,10 @@ def _build_tree(root: Path) -> tuple[Path, Path, Path]:
     (data / "hf_cache" / "big.bin").write_bytes(b"x" * 4096)
     (data / "app-backup-20200101-000000").mkdir()
     (data / "app-backup-20200101-000000" / "old.db").write_bytes(b"stale")
+    # Voice match: biometric voiceprints + raw enrollment clips stay on the box.
+    (data / "app" / "voice_match" / "clips").mkdir(parents=True)
+    (data / "app" / "voice_match" / "voiceprints.json").write_text("{}")
+    (data / "app" / "voice_match" / "clips" / "me1.wav").write_bytes(b"RIFF")
     # A stray WAL sidecar that must not be copied raw:
     (data / "app" / "brain_state.db-wal").write_bytes(b"torn")
 
@@ -137,6 +141,7 @@ class TestBackupContents:
         # excluded
         assert not any("hf_cache" in n for n in names)
         assert not any("app-backup-" in n for n in names)
+        assert not any("voice_match" in n for n in names)
         assert not any(n.endswith("-wal") or n.endswith("-shm") for n in names)
 
     def test_sqlite_snapshot_is_consistent(self, one_backup, tmp_path):

@@ -61,8 +61,24 @@ while you talk (D6); short per-device history, reset after 5 min of silence
 auto_learn (``skip_auto_learn_var``), replies are not stored in
 announcement_history (no replay into /chat), and turns are rate-limited.
 
+Voice match (D14, VOICE_MATCH_DEVICES, per device): while it works, those
+devices answer enrolled voices only. Right after listening ends — before
+Helios, STT and the brain — the captured question (trimmed to the VAD's
+speech span) is scored against the voiceprints on the matcher's own thread
+pool (voice_match.py); below VOICE_MATCH_THRESHOLD the turn ends silently as
+``not_recognized`` and frees its rate-limit slot (a TV waking the mic
+repeatedly must not lock out the owner). It is a TV filter, not a security
+control: D8 stays the security assumption for every room, and the verdict
+never reaches the chat call. It fails open: no model/voiceprints, an error, a
+busy pool or VOICE_MATCH_TIMEOUT_S → the turn goes ahead unchecked
+(``bgw_satellite_voice_match_total{result="unavailable"|"failed"}``, alert
+VoiceMatchFailing). Known limit: two devices hear one "Hey Jess" and the
+voice-match room reports first — it may not recognize a voice from the next
+room and nobody answers (counted as ``contested``; say it again nearer).
+
 Privacy (D9): mic audio is held in RAM for one utterance and never written to
-disk. The spoken reply goes the announcement way (a WAV in /tmp/brain_audio
+disk (the one exception: enrollment clips the operator records with
+``python -m orchestrator.voice_match record``, deleted after ``enroll``). The spoken reply goes the announcement way (a WAV in /tmp/brain_audio
 served to the Cast speaker by an unguessable URL for up to an hour). Logs
 carry lengths, levels, outcomes and the fixed wake-word label — never the
 transcript or the reply (``tests/test_no_user_content_in_logs.py``); the
@@ -114,7 +130,7 @@ import traceback
 import wave
 from array import array
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol
 from urllib.parse import urlsplit
 
 import httpx
@@ -143,6 +159,17 @@ BACKOFF_MIN_S = 5.0
 BACKOFF_MAX_S = 120.0
 RATE_LIMIT_TURNS = 6  # turns per device per RATE_LIMIT_WINDOW_S (TV false-waking it)
 RATE_LIMIT_WINDOW_S = 300.0
+# Voice match (voice_match.py): a score takes ~40-80 ms, a cold model load
+# ~0.2 s. Past this the turn goes ahead unchecked (fail open).
+VOICE_MATCH_TIMEOUT_S = 3.0
+# A turned-away question followed by a recognized one on the same device
+# within this long = probably the owner turned away (false reject).
+RETRY_WINDOW_S = 30.0
+# Background re-check of the model + voiceprints (keeps the ready gauge true
+# after `fetch` / `enroll` / a deleted file, without waiting for a question).
+VOICE_MATCH_RECHECK_S = 300.0
+VOICE_MATCH_RESULTS = ("recognized", "not_recognized", "contested", "too_short", "unavailable", "failed")
+_VOICE_TURNED_AWAY = frozenset({"not_recognized", "contested", "too_short"})
 # A wake word on another device this soon after = the same utterance heard
 # twice (Home Assistant's assist pipeline uses a 2 s cooldown the same way;
 # 3 s here because the device reports the wake only after its beep, whose
@@ -427,6 +454,14 @@ def reply_text(response: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
+class VoiceScorer(Protocol):
+    """What the bridge needs from voice_match.VoiceMatcher."""
+
+    async def score_async(self, pcm: bytes, timeout: float) -> float: ...
+
+    async def preload_async(self, timeout: float) -> Optional[str]: ...
+
+
 class WakeArbiter:
     """One spoken wake word, two devices in earshot: only the first answers.
 
@@ -442,16 +477,32 @@ class WakeArbiter:
         self._window = window_s
         self._claimed_at = -math.inf
         self.holder = ""  # device of the current claim (for the log line)
+        self._claim_id = 0
+        self.last_claim: Optional[int] = None  # the claim the latest winning claim() call holds
+        # Claims another device also heard (kept by id: the verdict comes up to
+        # ~15 s later, after newer claims may have started).
+        self._contested: collections.deque[int] = collections.deque(maxlen=64)
 
     def claim(self, device: str, wake: str) -> bool:
         """True = this device answers (or refuses) the wake word itself."""
         if wake == "button":
+            self.last_claim = None
             return True
         now = time.monotonic()
         if now - self._claimed_at < self._window:
-            return device == self.holder
-        self._claimed_at, self.holder = now, device
+            if device != self.holder:
+                if self._claim_id not in self._contested:
+                    self._contested.append(self._claim_id)
+                return False
+            self.last_claim = self._claim_id
+            return True
+        self._claim_id += 1
+        self._claimed_at, self.holder, self.last_claim = now, device, self._claim_id
         return True
+
+    def was_contested(self, claim_id: Optional[int]) -> bool:
+        """Another device also heard the wake word of claim ``claim_id``."""
+        return claim_id is not None and claim_id in self._contested
 
 
 @dataclass
@@ -469,6 +520,8 @@ class _Run:
     watcher: Optional[asyncio.Task] = None
     helios: str = "unchecked"  # unchecked | awake | woken (metric label)
     stages: Dict[str, int] = field(default_factory=dict)  # stage -> ms
+    turn_started_at: Optional[float] = None  # this run's rate-limit slot (_turn_starts)
+    claim_id: Optional[int] = None  # WakeArbiter claim this run answers (voice match: contested?)
 
 
 # Hostnames that mean "the box the orchestrator runs on" (Jupiter): Docker's
@@ -502,8 +555,14 @@ class Satellite:
         progressive_tts: bool = True,
         arbiter: Optional[WakeArbiter] = None,
         client_factory: Optional[Callable[..., Any]] = None,
+        voice_match: Optional[VoiceScorer] = None,
+        voice_match_threshold: float = 0.35,
     ) -> None:
         self._chat = chat
+        self._voice_match = voice_match  # a voice_match.VoiceMatcher, or None = off for this device
+        self._voice_match_threshold = voice_match_threshold
+        self._vm_fault = ""  # last voice-match fault reason (WARNING once per change, INFO after)
+        self._vm_turned_away_at: Optional[float] = None  # for the false-reject (retry) signal
         self._arbiter = arbiter  # shared by all devices; None = no duplicate check
         self._progressive_tts = progressive_tts
         self._host = host
@@ -601,6 +660,8 @@ class Satellite:
         owns_busy = not self._busy
         self._busy = True
         run = _Run(wake_word=wake, duplicate=duplicate, owns_busy=owns_busy)
+        if self._arbiter is not None and not duplicate:
+            run.claim_id = self._arbiter.last_claim
         self._run = run
         if duplicate:
             holder = self._arbiter.holder if self._arbiter is not None else ""
@@ -712,7 +773,8 @@ class Satellite:
             self._count(result, run.wake_word)
             self._send_error(ERR_NO_SPEECH if result == "no_speech" else ERR_FAILED)
             return
-        self._turn_starts.append(time.monotonic())
+        run.turn_started_at = time.monotonic()
+        self._turn_starts.append(run.turn_started_at)
         self._spawn(self._turn(run))
 
     # -- the Jess turn ------------------------------------------------------
@@ -753,6 +815,14 @@ class Satellite:
 
         # Room audio may not be the owner's words: never feed auto_learn (D8).
         skip_auto_learn_var.set(True)
+        if self._voice_match is not None:
+            # Before Helios, STT and the brain: a TV false wake costs only CPU here.
+            t = time.monotonic()
+            verdict = await self._check_voice(run)
+            run.stages["voice_match"] = int((time.monotonic() - t) * 1000)
+            if verdict in _VOICE_TURNED_AWAY:
+                self._free_rate_slot(run)
+                return "not_recognized"  # silent: the device is already back on the wake word
         # Reminders hold off while the user is talking to Jess (D6).
         shared.mark_voice_activity()
 
@@ -793,6 +863,87 @@ class Satellite:
         # stops early but is remembered whole — bgw_tts_progressive_total.)
         self._remember(transcript, spoken)
         return "ok"
+
+    async def _check_voice(self, run: _Run) -> str:
+        """Voice match verdict: recognized | not_recognized | contested (not
+        recognized while another device also heard this wake word — maybe the
+        owner farther away) | too_short (nothing to compare) | unavailable |
+        failed. The three not-recognized verdicts turn the question away; a
+        fault fails open (voice_match.py). The verdict never reaches the chat
+        call: what a voice turn may do must not depend on who is speaking."""
+        from orchestrator.metrics import (
+            SATELLITE_VOICE_MATCH_READY,
+            SATELLITE_VOICE_MATCH_SCORE,
+            SATELLITE_VOICE_MATCH_TOTAL,
+        )
+        from orchestrator.voice_match import VoiceMatchUnavailable, speech_span
+
+        ready = SATELLITE_VOICE_MATCH_READY.labels(device=self._node)
+        score: Optional[float] = None
+        reason, verdict = "", "failed"
+        pcm = b""
+        try:
+            vad = run.vad
+            pcm = speech_span(bytes(run.pcm), vad.speech_at, vad.quiet_ms, run.audio_ms)
+            score = await self._voice_match.score_async(pcm, VOICE_MATCH_TIMEOUT_S)
+        except VoiceMatchUnavailable as e:
+            reason = e.reason
+            verdict = "too_short" if reason == "too_short" else "failed" if reason == "busy" else "unavailable"
+        except Exception as e:  # noqa: BLE001 — incl. timeout; a broken filter must not stop the turn
+            reason, verdict = type(e).__name__, "failed"
+        if score is not None:
+            ready.set(1)
+            SATELLITE_VOICE_MATCH_SCORE.labels(device=self._node).observe(score)
+            verdict = "recognized" if score >= self._voice_match_threshold else "not_recognized"
+            if verdict == "not_recognized" and self._arbiter is not None and self._arbiter.was_contested(run.claim_id):
+                verdict = "contested"
+        elif verdict == "unavailable":
+            ready.set(0)
+        SATELLITE_VOICE_MATCH_TOTAL.labels(result=verdict, device=self._node).inc()
+        audio_ms = len(pcm) // (SAMPLE_RATE * SAMPLE_WIDTH // 1000)
+        if verdict in ("unavailable", "failed"):
+            # log-safe: a fixed reason from voice_match.REASONS or an exception type.
+            # WARNING once per change: a broken filter in a TV room is many lines an hour.
+            log = logger.warning if reason != self._vm_fault else logger.info
+            self._vm_fault = reason
+            log("[SATELLITE] %s: voice match %s (%s); turn goes ahead unchecked", self._node, verdict, reason)
+            return verdict
+        self._vm_fault = ""
+        if score is None:
+            logger.info(
+                "[SATELLITE] %s: voice match: too short to compare (audio=%dms); turned away", self._node, audio_ms
+            )
+        else:
+            # log-safe: a similarity number, the scored audio length and a fixed verdict
+            logger.info(
+                "[SATELLITE] %s: voice match %s score=%.2f audio=%dms",
+                self._node,
+                verdict.replace("_", " "),
+                score,
+                audio_ms,
+            )
+        self._note_voice_retry(verdict)
+        return verdict
+
+    def _note_voice_retry(self, verdict: str) -> None:
+        """Turned away, then recognized soon after on the same device: most
+        likely the owner, turned away the first time (a false reject)."""
+        from orchestrator.metrics import SATELLITE_VOICE_MATCH_RETRY_TOTAL
+
+        now = time.monotonic()
+        if verdict in _VOICE_TURNED_AWAY:
+            self._vm_turned_away_at = now
+            return
+        if self._vm_turned_away_at is not None and now - self._vm_turned_away_at <= RETRY_WINDOW_S:
+            SATELLITE_VOICE_MATCH_RETRY_TOTAL.labels(device=self._node).inc()
+            logger.info("[SATELLITE] %s: voice match recognized right after turning a question away", self._node)
+        self._vm_turned_away_at = None
+
+    def _free_rate_slot(self, run: _Run) -> None:
+        """A turn voice match turned away doesn't count against the rate limit:
+        a TV waking the mic six times must not lock out the owner's question."""
+        with contextlib.suppress(ValueError):
+            self._turn_starts.remove(run.turn_started_at)
 
     async def _service_status(self, names: tuple) -> Dict[str, bool]:
         from orchestrator import shared
@@ -1264,6 +1415,8 @@ async def satellite_loop(chat: ChatFn) -> None:
         from orchestrator import audio_stream
 
         audio_stream.seed_metrics()
+    matched = _settings.voice_match_device_set()
+    matcher = _new_voice_matcher(matched)
     arbiter = WakeArbiter()
     satellites = [
         Satellite(
@@ -1276,13 +1429,78 @@ async def satellite_loop(chat: ChatFn) -> None:
             helios_timeout_s=_settings.voice_satellite_helios_timeout_seconds,
             progressive_tts=_settings.voice_satellite_progressive_tts,
             arbiter=arbiter,
+            voice_match=matcher if device.name in matched else None,
+            voice_match_threshold=_settings.voice_match_threshold,
         )
         for device in devices
     ]
     logger.info("[SATELLITE] Bridge started for %s", ", ".join(s._node for s in satellites))
     async with asyncio.TaskGroup() as group:
+        if matcher is not None:
+            # In the background: rooms connect meanwhile (the first question loads it if needed).
+            group.create_task(_voice_match_upkeep(matcher, matched), name="voice-match-upkeep")
         for sat in satellites:
             group.create_task(_run_device(sat), name=f"voice-satellite-{sat._node}")
+
+
+def _new_voice_matcher(matched: frozenset[str]) -> Optional[VoiceScorer]:
+    """One shared VoiceMatcher for the VOICE_MATCH_DEVICES (None = voice match
+    off), with every device's series seeded so the first increase after a
+    restart is visible. The ready gauge starts at 0 until the upkeep task has
+    loaded the model and voiceprints. Per-device labels: with voice match off
+    the gauge has no series at all (an unlabelled gauge would export 0)."""
+    if not matched:
+        return None
+    from orchestrator.metrics import (
+        SATELLITE_TURN_TOTAL,
+        SATELLITE_VOICE_MATCH_READY,
+        SATELLITE_VOICE_MATCH_RETRY_TOTAL,
+        SATELLITE_VOICE_MATCH_TOTAL,
+    )
+    from orchestrator.voice_match import VoiceMatcher
+
+    for name in matched:
+        for result in VOICE_MATCH_RESULTS:
+            SATELLITE_VOICE_MATCH_TOTAL.labels(result=result, device=name)
+        SATELLITE_VOICE_MATCH_RETRY_TOTAL.labels(device=name)
+        SATELLITE_VOICE_MATCH_READY.labels(device=name).set(0)
+        SATELLITE_TURN_TOTAL.labels(result="not_recognized", wake_word="hey_jess", helios="unchecked", device=name)
+    return VoiceMatcher(_settings.voice_match_model_path, _settings.voice_match_voiceprints_path)
+
+
+async def _voice_match_upkeep(matcher: VoiceScorer, matched: frozenset[str]) -> None:
+    """Load the model + voiceprints now and re-check every VOICE_MATCH_RECHECK_S,
+    so the ready gauge (alert VoiceMatchFailing) follows `fetch`, `enroll` or a
+    deleted file without waiting for someone to speak. Cheap once loaded (a
+    stat of the voiceprint file). Logs on change only; never raises — an
+    exception here would take the whole bridge's TaskGroup down."""
+    from orchestrator.metrics import SATELLITE_VOICE_MATCH_READY
+    from orchestrator.voice_match import VoiceMatchUnavailable
+
+    names = ", ".join(sorted(matched))
+    last: Optional[str] = None
+    while True:
+        try:
+            reason = await matcher.preload_async(timeout=60.0)
+        except asyncio.CancelledError:
+            raise
+        except VoiceMatchUnavailable as e:  # "busy": the pool is full of questions right now
+            reason = e.reason
+        except Exception as e:  # noqa: BLE001 — incl. timeout; the next round retries
+            reason = type(e).__name__
+        reason = reason or ""
+        if reason != "busy":  # a busy pool says nothing about readiness
+            for name in matched:
+                SATELLITE_VOICE_MATCH_READY.labels(device=name).set(0 if reason else 1)
+            if reason != last:
+                if reason:
+                    logger.error(
+                        "[SATELLITE] Voice match not ready (%s): %s answer unchecked until it is", reason, names
+                    )
+                else:
+                    logger.info("[SATELLITE] Voice match on for %s", names)
+                last = reason
+        await asyncio.sleep(VOICE_MATCH_RECHECK_S)
 
 
 def log_loop_exit(task: asyncio.Task) -> None:
