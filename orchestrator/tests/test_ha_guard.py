@@ -110,6 +110,11 @@ class TestCheckHaCall:
             ("scene.x", "apply", "isn't available"),
             ("light.kitchen", "turn_on\n", "must look like"),
             ("light.kitchen; rm", "turn_on", "must look like"),
+            pytest.param("light.kitchen\n", "turn_on", "must look like", id="entity-trailing-newline"),
+            pytest.param("l" * 65 + ".kitchen", "turn_on", "must look like", id="domain-too-long"),
+            # 64 is the domain bound: passes the format check, then the domain
+            # allow-list refuses it.
+            pytest.param("l" * 64 + ".kitchen", "turn_on", "domain can't be controlled", id="domain-64-chars"),
         ],
     )
     def test_refusals(self, entity_id, service, needle):
@@ -255,6 +260,7 @@ class TestCheckHaCall:
             [PLUG],
             ["media_player.ok", "light.kitchen"],
             ["media_player.bad id"],
+            pytest.param(["media_player.kitchen\n"], id="member-trailing-newline"),
             [],
             None,
             [1],
@@ -820,3 +826,51 @@ class TestCallServiceFormat:
             assert result.message == f"Invalid {refused} format"
             post.assert_not_called()
             assert fake.service_calls == []
+
+
+# ---------------------------------------------------------------------------
+# config.py Helios plug entity id check
+# ---------------------------------------------------------------------------
+
+
+class TestHeliosPlugIdFormat:
+    """``Settings.validate_helios_wake_config`` checks HELIOS_PLUG_ENTITY and
+    HELIOS_PLUG_POWER_SENSOR with its own copy of ``ENTITY_ID_RE`` (config.py
+    can't import ha_guard). A bad id turns off wake and plug monitoring, and
+    the two copies must agree."""
+
+    @pytest.mark.parametrize("field", ["HELIOS_PLUG_ENTITY", "HELIOS_PLUG_POWER_SENSOR"])
+    @pytest.mark.parametrize(
+        "value,valid",
+        [
+            pytest.param("switch.test_plug", True, id="valid"),
+            pytest.param("l" * 64 + ".test_plug", True, id="domain-64"),
+            pytest.param("switch." + "a" * 128, True, id="object-128"),
+            pytest.param("switch.test_plug\n", False, id="trailing-newline"),
+            pytest.param("l" * 65 + ".test_plug", False, id="domain-65"),
+            pytest.param("switch." + "a" * 129, False, id="object-129"),
+        ],
+    )
+    def test_plug_id_format(self, monkeypatch, caplog, field, value, valid):
+        from orchestrator.config import Settings
+
+        env = {
+            "HELIOS_WAKE_ENABLED": "true",
+            "HELIOS_PLUG_MONITOR_ENABLED": "true",
+            "HA_URL": "http://ha.test:8123",
+            "HA_TOKEN": "tok",
+            "HELIOS_PLUG_ENTITY": "switch.test_plug",
+            "HELIOS_PLUG_POWER_SENSOR": "sensor.test_plug_power",
+        }
+        env[field] = value
+        for key, val in env.items():
+            monkeypatch.setenv(key, val)
+        with caplog.at_level("ERROR", logger="orchestrator.config"):
+            s = Settings(_env_file=None)
+        # The value reached the validator as given (not stripped on the way in).
+        assert getattr(s, field.lower()) == value
+        assert s.helios_wake_enabled is valid
+        assert s.helios_plug_monitor_enabled is valid
+        logged = any(f"{field}=" in r.getMessage() and "not a valid" in r.getMessage() for r in caplog.records)
+        assert logged is not valid
+        assert bool(ha_guard.ENTITY_ID_RE.fullmatch(value)) is valid
