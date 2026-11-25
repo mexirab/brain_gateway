@@ -5,15 +5,16 @@ tmp_db gives a fresh SQLite DB with the real exercise catalog.
 """
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from orchestrator import state_store
+from orchestrator.exercises_seed import EQUIPMENT_TOKENS
+from orchestrator.routes_workout import router
 
 
 @pytest.fixture
 def client(tmp_db):
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    from orchestrator.routes_workout import router
-
     app = FastAPI()
     app.include_router(router)
     return TestClient(app)
@@ -126,8 +127,6 @@ def test_locations_create_patch_delete_flow(client):
 
 
 def test_locations_create_defaults_to_full_gym(client):
-    from orchestrator.exercises_seed import EQUIPMENT_TOKENS
-
     assert _make_loc(client, "Big Gym")["equipment"] == list(EQUIPMENT_TOKENS)
 
 
@@ -190,8 +189,6 @@ def test_generate_with_location_id(client):
 
 
 def test_generate_non_int_location_400(client):
-    from orchestrator import state_store
-
     r = client.post("/api/workouts/generate", json={"location_id": "abc"})
     assert r.status_code == 400
     assert r.json() == {"ok": False, "error": "location_id must be an integer"}
@@ -212,8 +209,6 @@ def test_generate_without_body_uses_only_location(client):
 
 
 def test_generate_without_body_uses_last_used_location(client):
-    from orchestrator import state_store
-
     _make_loc(client, "Home", template="home_basic")
     gym = _make_loc(client, "Big Gym")
     state_store.touch_workout_location(gym["id"])
@@ -275,8 +270,6 @@ def test_today_reports_location_after_location_deleted(client):
 
 def test_generate_explicit_null_location_uses_whole_catalog(client):
     """An explicit null location_id skips the last-used default (dashboard "Not sure (full gym)")."""
-    from orchestrator import state_store
-
     loc = client.post("/api/workouts/locations", json={"name": "Home", "template": "home_basic"}).json()["location"]
     state_store.touch_workout_location(loc["id"])
 
@@ -287,8 +280,6 @@ def test_generate_explicit_null_location_uses_whole_catalog(client):
 
 
 def test_today_exposes_deload_flag_and_exercise_notes(client, monkeypatch):
-    from orchestrator import state_store
-
     client.put(
         "/api/workouts/program",
         json={"goal": "general", "days_per_week": 3, "session_minutes": 30, "deload_every_weeks": 4},

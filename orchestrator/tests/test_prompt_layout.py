@@ -49,6 +49,15 @@ def test_dynamic_content_is_after_marker():
     assert mirror_phrase not in static
 
 
+def test_backlog_is_dynamic_context(monkeypatch):
+    from orchestrator import backlog_manager
+
+    monkeypatch.setattr(backlog_manager, "backlog_context", lambda: "Open tasks (1): BACKLOG_SENTINEL_7")
+    static, dynamic = _split(get_unified_system_prompt())
+    assert "BACKLOG_SENTINEL_7" in dynamic
+    assert "BACKLOG_SENTINEL_7" not in static
+
+
 def test_static_block_is_stable_across_calls_and_modes():
     a, _ = _split(get_unified_system_prompt(personal_context="one", mode="explainer"))
     b, _ = _split(get_unified_system_prompt(personal_context="two", mode="mirror"))
@@ -193,7 +202,3 @@ def test_paperless_gated_by_flag(monkeypatch):
     finally:
         tool_definitions._tools_cache_key = saved_key
         tool_definitions._tools_cache_key = ()  # force a clean rebuild for later tests
-
-
-def test_prompt_builder_exports_marker():
-    assert prompt_builder.DYNAMIC_CONTEXT_MARKER.startswith("CURRENT CONTEXT")

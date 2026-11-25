@@ -3,13 +3,14 @@
 
 import time
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from orchestrator import calendar_sources, shared
 from orchestrator.calendar_types import CalendarEvent, CalendarResponse
+from orchestrator.tests.calendar_fakes import fake_client
 
 TZ = ZoneInfo("America/Chicago")
 DAY = datetime(2026, 10, 20, tzinfo=TZ)
@@ -26,23 +27,16 @@ def _push(title, start, **kw):
 
 
 @pytest.fixture
-def env(monkeypatch):
+def env(monkeypatch, delivery_phone_cache):
     """CalDAV + Google mocked; phone cache empty and never synced."""
-    caldav = MagicMock(is_configured=True)
-    caldav.list_window = AsyncMock(return_value=CalendarResponse(success=True, events=[]))
-    caldav.create_event = AsyncMock()
-    google = MagicMock(is_configured=False)
-    google.list_window = AsyncMock(return_value=CalendarResponse(success=True, events=[]))
-    google.create_event = AsyncMock()
+    caldav = fake_client(configured=True)
+    google = fake_client(configured=False)
     monkeypatch.setattr(calendar_sources, "get_caldav_client", lambda http_client=None: caldav)
     monkeypatch.setattr(calendar_sources, "get_google_client", lambda http_client=None: google)
     monkeypatch.setattr(shared, "TIMEZONE", "America/Chicago", raising=False)
     monkeypatch.setattr(shared, "CALENDAR_GOOGLE_ENABLED", True, raising=False)
     monkeypatch.setattr(shared, "PHONE_CALENDAR_SYNC_ENABLED", True, raising=False)
     monkeypatch.setattr(shared, "PHONE_CALENDAR_MAX_AGE_HOURS", 24.0, raising=False)
-    monkeypatch.setattr(shared, "_phone_calendar_events", [], raising=False)
-    monkeypatch.setattr(shared, "_phone_calendar_sync_time", 0.0, raising=False)
-    monkeypatch.setattr(shared, "_phone_calendar_source", "exchange", raising=False)
     return MagicMock(caldav=caldav, google=google)
 
 

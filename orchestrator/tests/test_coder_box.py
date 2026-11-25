@@ -32,8 +32,6 @@ import argparse
 import contextlib
 import datetime as dt
 import errno
-import importlib.machinery
-import importlib.util
 import io
 import ipaddress
 import itertools
@@ -55,7 +53,9 @@ from types import ModuleType
 import pytest
 import yaml
 
-_REPO = Path(__file__).resolve().parents[2]
+from orchestrator.tests._helpers import REPO_ROOT, load_script
+
+_REPO = REPO_ROOT
 _CODER = _REPO / "coder"
 _LAUNCHER = _REPO / "scripts" / "jess-coder"
 
@@ -66,28 +66,19 @@ pytestmark = pytest.mark.skipif(
 needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
 
 
-def _load(name: str, path: Path) -> ModuleType:
-    loader = importlib.machinery.SourceFileLoader(name, str(path))
-    spec = importlib.util.spec_from_loader(name, loader)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    loader.exec_module(module)
-    return module
-
-
 @pytest.fixture(scope="module")
 def jc() -> ModuleType:
-    return _load("jess_coder_launcher", _LAUNCHER)
+    return load_script(_LAUNCHER, "jess_coder_launcher")
 
 
 @pytest.fixture(scope="module")
 def entry() -> ModuleType:
-    return _load("jess_coder_entrypoint", _CODER / "entrypoint.py")
+    return load_script(_CODER / "entrypoint.py", "jess_coder_entrypoint")
 
 
 @pytest.fixture(scope="module")
 def selftest() -> ModuleType:
-    return _load("jess_coder_selftest", _CODER / "selftest.py")
+    return load_script(_CODER / "selftest.py", "jess_coder_selftest")
 
 
 @pytest.fixture
@@ -100,6 +91,18 @@ def cfg(jc, tmp_path, monkeypatch):
     monkeypatch.setenv("JESS_CODER_HOME", str(tmp_path / "no-home"))
     monkeypatch.setenv("JESS_CODER_METRICS_DIR", str(tmp_path / "no-metrics"))
     return jc.Config()
+
+
+def _completed(stdout: str = "", returncode: int = 0) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess([], returncode, stdout=stdout, stderr="")
+
+
+def _git(*args, cwd):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def _git_out(*args, cwd) -> str:
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
 # ------------------------------------------------------------------- image
@@ -292,22 +295,6 @@ def test_box_command_hardening(jc, cfg, tmp_path):
     assert cmd[-2:] == ["jess-coder:current", "session"]
 
 
-def test_box_command_patch_is_offline_and_read_only(jc, cfg, tmp_path):
-    cmd = jc.box_command(
-        cfg,
-        name="x-patch",
-        kind="patch",
-        mode=["patch", "a" * 40],
-        network="none",
-        cidfile=tmp_path / "cid",
-        workspace=tmp_path,
-        workspace_ro=True,
-    )
-    assert _flag_value(cmd, "--network") == ["none"]
-    assert _flag_value(cmd, "--mount") == [f"type=bind,src={tmp_path},dst=/work,readonly"]
-    assert "-it" not in cmd and "-i" not in cmd
-
-
 def test_box_command_is_the_only_docker_run():
     src = _LAUNCHER.read_text()
     assert src.count('"docker", "run"') == 1
@@ -386,21 +373,21 @@ def _net(**over):
 )
 def test_check_network_refuses_unsafe_layouts(jc, cfg, monkeypatch, over, problem):
     out = json.dumps([_net(**over)])
-    monkeypatch.setattr(jc, "run", lambda *a, **k: type("R", (), {"returncode": 0, "stdout": out})())
+    monkeypatch.setattr(jc, "run", lambda *a, **k: _completed(out))
     with pytest.raises(jc.Fatal, match=problem):
         jc.check_network(cfg)
 
 
 def test_check_network_accepts_the_real_layout(jc, cfg, monkeypatch):
     out = json.dumps([_net()])
-    monkeypatch.setattr(jc, "run", lambda *a, **k: type("R", (), {"returncode": 0, "stdout": out})())
+    monkeypatch.setattr(jc, "run", lambda *a, **k: _completed(out))
     jc.check_network(cfg)
 
 
 def test_network_refusal_is_recorded_as_a_failed_selftest(jc, cfg, monkeypatch, tmp_path):
     cfg.metrics_dir = tmp_path
     out = json.dumps([_net(Internal=False)])
-    monkeypatch.setattr(jc, "run", lambda *a, **k: type("R", (), {"returncode": 0, "stdout": out})())
+    monkeypatch.setattr(jc, "run", lambda *a, **k: _completed(out))
     with pytest.raises(jc.Fatal):
         jc.checked_network(cfg)
     assert "jess_coder_selftest_ok 0" in (tmp_path / "jess_coder_selftest.prom").read_text()
@@ -448,6 +435,27 @@ def test_network_refusal_is_recorded_as_a_failed_selftest(jc, cfg, monkeypatch, 
         "orchestrator/./x.py",
         "orchestrator/we ird.py",
         "orchestrator/x\n+++ b/y.py",
+        # case doesn't matter
+        "SCRIPTS/deploy.py",
+        ".GITHUB/workflows/x.yml",
+        "Docker-Compose.Override.YML",
+        "orchestrator/DOCKERFILE.dev",
+        "orchestrator/Requirements-Dev.TXT",
+        "frontend/Package.JSON",
+        "x/RUN.SH",
+        ".ENV.production",
+        ".GIT/config",
+        ".Git",
+        "MakeFile",
+        "docs/Claude.MD",
+        "frontend/AGENTS.md",
+        "frontend/Vite.Config.MTS",
+        "frontend/.ESLintRC.cjs",
+        "Monitoring/x.yml",
+        "frontend/src/app/(private)/.env",
+        # agent config dirs anywhere in the tree
+        "frontend/.claude/skills/x/SKILL.md",
+        "orchestrator/.claude/settings.json",
     ],
 )
 def test_refused_paths(jc, path):
@@ -456,7 +464,20 @@ def test_refused_paths(jc, path):
 
 @pytest.mark.parametrize(
     "path",
-    ["orchestrator/grocery_amounts.py", "orchestrator/tests/test_x.py", "docs/CODER.md", "frontend/src/app/page.tsx"],
+    [
+        "orchestrator/grocery_amounts.py",
+        "orchestrator/tests/test_x.py",
+        "docs/CODER.md",
+        "frontend/src/app/page.tsx",
+        # lookalikes of refused names, and Next.js route folders
+        "orchestrator/scripts_helper.py",
+        "orchestrator/environment.py",
+        "orchestrator/tests/test_dockerfile.py",
+        "frontend/src/config.ts",
+        "docs/claude_notes.txt",
+        "frontend/src/app/(private)/settings/page.tsx",
+        "frontend/src/app/api/[id]/route.ts",
+    ],
 )
 def test_ordinary_paths(jc, path):
     assert jc.refused_reason(path) is None
@@ -536,25 +557,24 @@ def test_sanitize_for_terminal(jc):
     out = jc.sanitize_for_terminal("a\x1b[2Jb\u202ec\td\n")
     assert out == "a^[[2Jb<U+202E>c\td\n"
     assert jc.sanitize_for_terminal("x\ny", keep_newlines=False) == "x^Jy"
+    assert jc.sanitize_for_terminal("a\x7fb\x85c\u200bd\u2028e") == "a^?b<U+0085>c<U+200B>d<U+2028>e"
 
 
 # ------------------------------------- patch: hostile diff text vs trusted git
 
 
-def _git(*args, cwd):
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
-
-
-@pytest.fixture
-def base_bundle(tmp_path):
-    """A repo with a.py at a base commit, as a bundle (like jess-coder's)."""
+@pytest.fixture(scope="module")
+def base_bundle(tmp_path_factory):
+    """A repo with a.py at a base commit, as a bundle (like jess-coder's).
+    Module-scoped: tests only read the bundle (or copy it)."""
+    tmp_path = tmp_path_factory.mktemp("base-bundle")
     repo = tmp_path / "src"
     repo.mkdir()
     _git("init", "-q", "-b", "main", cwd=repo)
     (repo / "a.py").write_text("def f(x):\n    return x\n")
     _git("add", "a.py", cwd=repo)
     _git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base", cwd=repo)
-    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    base = _git_out("rev-parse", "HEAD", cwd=repo)
     bundle = tmp_path / "base.bundle"
     _git("bundle", "create", "-q", str(bundle), "main", cwd=repo)
     return bundle, base
@@ -711,7 +731,7 @@ def test_patch_box_ignores_workspace_filter_drivers(entry, tmp_path, monkeypatch
     repo.mkdir(parents=True)
     _git("init", "-q", cwd=repo)
     _git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "b", cwd=repo)
-    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    base = _git_out("rev-parse", "HEAD", cwd=repo)
     pwned = tmp_path / "pwned"
     _git("config", "filter.x.clean", f"sh -c 'touch {pwned}; cat'", cwd=repo)
     (repo / ".git" / "info").mkdir(exist_ok=True)
@@ -773,10 +793,6 @@ TID = "0123456789abcdef" * 2
 
 def _boom(*_a, **_k):
     raise AssertionError("must not be called")
-
-
-def _completed(stdout: str = "", returncode: int = 0) -> subprocess.CompletedProcess:
-    return subprocess.CompletedProcess([], returncode, stdout=stdout, stderr="")
 
 
 def _fake_subprocess(**over) -> types.SimpleNamespace:
@@ -877,7 +893,7 @@ def test_run_captured_stops_output_over_the_limit(jc, tmp_path, kills, with_cid)
 def test_run_captured_kills_at_the_deadline_and_keeps_what_came(jc, tmp_path, kills):
     t0 = time.monotonic()
     code, out, _err, problem = jc.run_captured(
-        _py("import time; print('started', flush=True); time.sleep(60)"), tmp_path / "cid", limit=1024, timeout=2
+        _py("import time; print('started', flush=True); time.sleep(60)"), tmp_path / "cid", limit=1024, timeout=1
     )
     assert problem == "timeout" and code != 0 and kills == [tmp_path / "cid"]
     assert out == b"started\n"
@@ -1596,6 +1612,7 @@ def test_patch_box_is_offline_and_read_only(jc, boxes, capsys):
     assert _flag_value(cmd, "--network") == ["none"]
     assert _flag_value(cmd, "--mount") == [f"type=bind,src={boxes.cfg.sessions / 'demo' / 'box'},dst=/work,readonly"]
     assert _flag_value(cmd, "--name") == ["jess-coder-demo-patch"] and cmd[-2:] == ["patch", BASE]
+    assert "-it" not in cmd and "-i" not in cmd
     assert (run["limit"], run["timeout"]) == (jc.MAX_PATCH_BYTES, jc.PATCH_TIMEOUT_S)
     assert "no changes" in capsys.readouterr().out
 
@@ -1768,56 +1785,6 @@ def test_main_exit_codes(jc, cfg, monkeypatch, capsys):
     assert "docker failed (exit 1)" in err and "--secret-arg" not in err
 
 
-# ----------------------------------------------------- patch: more path cases
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "SCRIPTS/deploy.py",
-        ".GITHUB/workflows/x.yml",
-        "Docker-Compose.Override.YML",
-        "orchestrator/DOCKERFILE.dev",
-        "orchestrator/Requirements-Dev.TXT",
-        "frontend/Package.JSON",
-        "x/RUN.SH",
-        ".ENV.production",
-        ".GIT/config",
-        ".Git",
-        "MakeFile",
-        "docs/Claude.MD",
-        "frontend/AGENTS.md",
-        "frontend/Vite.Config.MTS",
-        "frontend/.ESLintRC.cjs",
-        "Monitoring/x.yml",
-        "frontend/src/app/(private)/.env",
-    ],
-)
-def test_refused_paths_ignore_case(jc, path):
-    assert jc.refused_reason(path)
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "orchestrator/scripts_helper.py",
-        "orchestrator/environment.py",
-        "orchestrator/tests/test_dockerfile.py",
-        "frontend/src/config.ts",
-        "docs/claude_notes.txt",
-        "frontend/src/app/(private)/settings/page.tsx",
-        "frontend/src/app/api/[id]/route.ts",
-    ],
-)
-def test_lookalike_and_route_folder_paths_are_ordinary(jc, path):
-    assert jc.refused_reason(path) is None
-
-
-@pytest.mark.parametrize("path", ["frontend/.claude/skills/x/SKILL.md", "orchestrator/.claude/settings.json"])
-def test_nested_agent_config_dirs_are_refused(jc, path):
-    assert jc.refused_reason(path)
-
-
 def test_allow_suggestion_is_shell_quoted_and_case_exact(jc):
     path = "frontend/src/app/(private)/.env"
     problems = jc.review_changes([_entry(path, status="A", old_mode="000000")], [], "", [])
@@ -1869,15 +1836,7 @@ def test_text_problems_one_per_line_five_at_most(jc):
     assert many == [f"line {i}: control character 0x1b" for i in range(1, 6)]
 
 
-def test_sanitize_shows_del_and_c1(jc):
-    assert jc.sanitize_for_terminal("a\x7fb\x85c\u200bd\u2028e") == "a^?b<U+0085>c<U+200B>d<U+2028>e"
-
-
 # ==================================================================== entrypoint
-
-
-def _git_out(*args, cwd) -> str:
-    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
 def _exit_code(fn, *args) -> int:

@@ -4,6 +4,30 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Test suite streamlined (2026-11-25)
+
+Branch `chore/streamline-tests`. `orchestrator/tests/`: 165 → 151 test files, ~91k → ~79k lines, ~9,500 → 9,185 tests, all passing. No behavior change. Conventions: `docs/DEV.md` → Writing tests.
+
+### Tests
+- Deleted (tested copies of code, or tautologies): `test_nemotron_loop`, `test_ha_validation`, `test_focus_manager`, `test_shared_parsing`, `test_tier_selection`. The real `poll_calendar` tier logic `test_tier_selection` claimed to cover is now tested in `test_calendar_consumers.py`.
+- Merged (source → target): `test_unified_loop_cap` → `test_tool_result_sanitizer`; `test_client_markup_neutralize_extra` → `test_client_markup_neutralize`; `test_tool_registry_module` → `test_metric_preseed`; `test_coder_gate_extra` → `test_coder_gate`; `test_self_audit_gate` → `test_jobs_self_audit`; `test_ha_intent_internals` → `test_ha_intent_gate`; `test_announce_volume_floor` → `test_announce_speaker_liveness`; `test_inbox_messages` → `test_dashboard_inbox`; `test_receipt_routes` → `test_pantry_routes`.
+- Moved: evening-briefing morning pickup + wind-down short-night tests → `test_morning_briefing.py`; the voice satellite's `_announce_voice` flag tests → `test_announce_speaker_liveness.py`; photo turns skipping the HA fast path → `test_image_parts_never_forwarded.py`; the cloud_brain strip + every-loop-path matrix → `test_client_markup_neutralize.py`.
+- New `_helpers.py` (`load_script`, `metric_value`) and `fixtures_<area>.py` (`loop`, `ha_voice`, `delivery`, `selfcare`, `pantry`, `memory`, `ops`, `coder`): shared fixtures in `__all__` with area-prefixed names, imported suite-wide by `conftest.py`, which refuses name clashes. Test files no longer import each other.
+- All 759 `@pytest.mark.asyncio` marks removed; `conftest.py` refuses to run unless `asyncio_mode=auto`. `_can_import` / skip-if-import-fails guards removed.
+- `tmp_db` copies a state_store DB built once per session (was one `init_db()`, ~100 fsyncs, per test).
+
+### CI
+- Python Tests job: pip cache, and `pip install torch --index-url https://download.pytorch.org/whl/cpu` before `requirements.txt` (CPU torch instead of ~3 GB of CUDA wheels). First CI run: the job went from ~7 min to 2 min 54 s (install ~2.5 min → 54 s with a cold pip cache, test run ~3.5 min → 1 min 50 s).
+
+### Orchestrator
+- `tool_handlers.HA_REFRESH_TIMEOUT_S = 3`: the entity-refresh wait in `tool_home_assistant`, now a module constant (same value) so tests can shorten it.
+
+### Operator notes
+- Local test command adds `--tmpfs /tmp:rw,exec,size=8g`: the suite fsyncs heavily, and on Jupiter's busy NVMe runs were ~4x slower without it. Full suite ~2 min.
+
+### Docs
+- `CLAUDE.md`, `docs/DEV.md`, `.claude/agents/unit-test.md`, `TECHNICAL_REFERENCE.md`, `docs/FRONTEND.md`, `docs/VOICE_AND_TTS.md`, `docs/PANTRY.md`, `jess-features/F-015-pantry-meal-prep.md`.
+
 ## [Unreleased] — Self-audit investigator on Claude (2026-11-24)
 
 Branch `feat/self-audit-claude`. The read-only self-audit investigator can run on Claude Opus 5.5 over the Anthropic API instead of the local brain. It only sees allow-listed public-repo files and Loki logs, so it sends no personal content (owner accepted on 2026-11-24 that non-orchestrator Loki lines go too). It runs while Helios sleeps. Off until `SELF_AUDIT_CLAUDE_API_KEY` is set. Safety story: `orchestrator/self_investigator.py` module docstring.

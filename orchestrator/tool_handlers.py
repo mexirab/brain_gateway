@@ -149,6 +149,11 @@ def _handle_shopping_list(arguments: Dict[str, Any]) -> str:
     return f"Unknown action: {action}"
 
 
+# How long tool_home_assistant waits for an entity refresh on an unknown id
+# before answering "couldn't reach Home Assistant" (a slow HA can't stall a voice turn).
+HA_REFRESH_TIMEOUT_S = 3
+
+
 async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any] = None) -> str:
     """Execute a Home Assistant service call directly."""
     # Domain, deny list, service allow-list, targeting keys, media args — the
@@ -182,7 +187,7 @@ async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any]
         # Picks up newly added entities, and fills an empty cache (HA was down
         # at startup). TTL-bound; capped so a slow HA can't stall a voice turn.
         try:
-            await asyncio.wait_for(ha_client.refresh_entities(), timeout=3)
+            await asyncio.wait_for(ha_client.refresh_entities(), timeout=HA_REFRESH_TIMEOUT_S)
         except TimeoutError:
             ha_client.last_refresh_ok = False
         unknown = ha_client.get_entity(entity_id) is None

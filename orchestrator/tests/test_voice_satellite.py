@@ -1,7 +1,8 @@
 """Voice satellite bridge (orchestrator/voice_satellite.py) and the changes it
-needs elsewhere: reminder_manager._announce_voice flags, cloud_brain's
-skip_auto_learn_var, the config validator, log_config.DropPayloadArgsFilter
-and the shutdown hook.
+needs elsewhere: cloud_brain's skip_auto_learn_var, the config validator,
+log_config.DropPayloadArgsFilter and the shutdown hook. (The
+reminder_manager._announce_voice flags it adds are in
+test_announce_speaker_liveness.py.)
 
 No network: the ESPHome device is a fake client recording the events the
 bridge sends, STT/HA are respx mocks, the brain is an injected chat callable.
@@ -20,16 +21,17 @@ import io
 import logging
 import os
 import re
+import sys
 import textwrap
 import time
 import wave
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, mock_open, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 import respx
-from aioesphomeapi import APIVersion, DeviceInfo, VoiceAssistantFeature
+from aioesphomeapi import APIClient, APIVersion, DeviceInfo, VoiceAssistantFeature
 from aioesphomeapi.core import (
     APIConnectionError,
     BadNameAPIError,
@@ -46,20 +48,34 @@ from aioesphomeapi.core import (
     TimeoutAPIError,
 )
 from httpx import Response
+from prometheus_client import CollectorRegistry, Counter, Gauge
 from starlette.responses import JSONResponse
 
-from orchestrator import metrics, shared
+from orchestrator import helios_power, metrics, reminder_manager, shared, voice_style
 from orchestrator import voice_satellite as vs
-from orchestrator.cloud_brain import conversation_id_var, skip_auto_learn_var
+from orchestrator.cloud_brain import CloudBrain, conversation_id_var, skip_auto_learn_var
+from orchestrator.config import (
+    MAX_VOICE_SATELLITES,
+    SatelliteDevice,
+    Settings,
+    parse_voice_satellite_devices,
+    settings,
+    voice_satellite_key_ok,
+)
+from orchestrator.log_config import (
+    DropPayloadArgsFilter,
+    configure_logging,
+    quiet_url_logging_libs,
+    request_id_var,
+)
+from orchestrator.service_registry import ServiceRegistry, services
+from orchestrator.tests._helpers import metric_value
 from orchestrator.voice_satellite import EnergyVad, VadConfig
 
 _KEY = base64.b64encode(bytes(range(32))).decode()
 NODE = "atom-echo-test"
 SPEAKER = "media_player.kitchen_test"
 STT = "http://stt.test:8003"
-HA = "http://ha.test:8123"
-STATES = f"{HA}/api/states/"
-PLAY = f"{HA}/api/services/media_player/play_media"
 
 UP = {"stt": True, "model": True, "tts": True}
 DOWN = {"stt": False, "model": False, "tts": False}
@@ -94,30 +110,20 @@ UTTERANCE = _audio((0.0, 200), (0.1, 1000), (0.0, 1400))
 SILENCE_6S = _audio((0.0, 6000))
 
 
-def _value(metric, labels: dict, suffix: str = "_total") -> float:
-    """One sample of one metric (no registry walk)."""
-    for m in metric.collect():
-        for s in m.samples:
-            if s.name.endswith(suffix) and s.labels == labels:
-                return s.value
-    return 0.0
-
-
 def _turns(result: str, wake: str = "hey_jess", helios: str = "unchecked", device: str = NODE) -> float:
-    labels = {"result": result, "wake_word": wake, "helios": helios, "device": device}
-    return _value(metrics.SATELLITE_TURN_TOTAL, labels)
+    return metric_value(metrics.SATELLITE_TURN_TOTAL, result=result, wake_word=wake, helios=helios, device=device)
 
 
 def _turn_seconds_count(helios: str) -> float:
-    return _value(metrics.SATELLITE_TURN_SECONDS, {"helios": helios}, suffix="_count")
+    return metric_value(metrics.SATELLITE_TURN_SECONDS, "_count", helios=helios)
 
 
 def _connects(result: str, device: str = NODE) -> float:
-    return _value(metrics.SATELLITE_CONNECT_TOTAL, {"result": result, "device": device})
+    return metric_value(metrics.SATELLITE_CONNECT_TOTAL, result=result, device=device)
 
 
 def _connected(device: str = NODE) -> float:
-    return _value(metrics.SATELLITE_CONNECTED, {"device": device}, suffix="")
+    return metric_value(metrics.SATELLITE_CONNECTED, device=device)
 
 
 async def _until(cond, steps: int = 1000) -> None:
@@ -263,18 +269,23 @@ def sat(make_sat):
     return make_sat()
 
 
-@pytest.fixture
-def pipeline(sat, monkeypatch):
-    """Helios ready, STT returns words, playback succeeds — all on ``sat``."""
+def _wire(sat, monkeypatch, transcript: str = "what time is it") -> SimpleNamespace:
+    """Helios ready, STT returns words, playback succeeds — on any satellite."""
     p = SimpleNamespace(
         status=AsyncMock(return_value=dict(UP)),
-        stt=AsyncMock(return_value="what time is it"),
+        stt=AsyncMock(return_value=transcript),
         speak=AsyncMock(return_value="ok"),
     )
     monkeypatch.setattr(sat, "_service_status", p.status)
     monkeypatch.setattr(sat, "_transcribe", p.stt)
     monkeypatch.setattr(sat, "_speak", p.speak)
     return p
+
+
+@pytest.fixture
+def pipeline(sat, monkeypatch):
+    """``_wire`` on the ``sat`` fixture."""
+    return _wire(sat, monkeypatch)
 
 
 @pytest.fixture
@@ -632,10 +643,6 @@ def test_frame_rms(frame, expected):
     assert vs.frame_rms(frame) == pytest.approx(expected, abs=1e-4)
 
 
-def test_frame_bytes_is_50ms():
-    assert vs.FRAME_BYTES == 1600
-
-
 def test_pcm_to_wav_roundtrip():
     pcm = _audio((0.1, 100), (0.0, 50))
     with wave.open(io.BytesIO(vs.pcm_to_wav(pcm)), "rb") as w:
@@ -778,7 +785,6 @@ async def test_run_end_goes_out_before_the_turn_starts(sat, pipeline):
 
 async def test_full_pipeline_through_stt_and_announce(sat, monkeypatch):
     """Real _transcribe (respx STT) and real _speak (mocked _announce_voice)."""
-    from orchestrator import reminder_manager, voice_style
 
     monkeypatch.setattr(sat, "_service_status", AsyncMock(return_value=dict(UP)))
     monkeypatch.setattr(vs._settings, "stt_url", STT)
@@ -825,20 +831,6 @@ async def test_audio_is_framed_independently_of_chunk_size(sat):
     assert (run.audio_ms, len(run.pending)) == (0, 1000)
     await sat.handle_audio(bytes(1000))
     assert (run.audio_ms, len(run.pending), len(run.pcm)) == (50, 400, 2000)
-
-
-async def test_no_speech_run(sat, pipeline):
-    before = _turns("no_speech", wake="okay_jess")
-    await sat.handle_start("c", 0, None, "Okay Jess")
-    await _say(sat.handle_audio, SILENCE_6S)
-    await _drain(sat)
-
-    assert sat._client.names == [RUN_START, STT_START, RUN_END, ERROR]
-    assert sat._client.errors == ["jess-no-speech"]
-    assert _turns("no_speech", wake="okay_jess") == before + 1
-    assert pipeline.stt.await_count == 0 and sat._chat.calls == []
-    assert sat._busy is False
-    assert len(sat._turn_starts) == 0  # false wakes don't use up the rate limit
 
 
 async def test_busy_refuses_a_second_wake(sat, pipeline, later):
@@ -905,50 +897,6 @@ async def test_abort_by_device(sat, pipeline):
     assert _turns("aborted") == before + 1
 
 
-async def test_device_stop_with_speech_runs_the_turn(sat, pipeline):
-    await sat.handle_start("c", 0, None, "Hey Jess")
-    await _say(sat.handle_audio, _audio((0.0, 200), (0.1, 600)))
-    await sat.handle_stop(False)
-    await _drain(sat)
-    assert sat._client.names == [RUN_START, STT_START, VAD_START, RUN_END]
-    assert pipeline.speak.await_count == 1
-
-
-async def test_device_stop_without_speech(sat, pipeline):
-    before = _turns("no_speech")
-    await sat.handle_start("c", 0, None, "Hey Jess")
-    await _say(sat.handle_audio, _audio((0.0, 1000)))
-    await sat.handle_stop(False)
-    await _drain(sat)
-    assert sat._client.names == [RUN_START, STT_START, RUN_END, ERROR]
-    assert sat._client.errors == ["jess-no-speech"]
-    assert _turns("no_speech") == before + 1
-    assert pipeline.stt.await_count == 0
-
-
-async def test_no_audio_watchdog(sat, pipeline, monkeypatch):
-    monkeypatch.setattr(vs, "FIRST_AUDIO_TIMEOUT_S", 0.01)
-    before = _turns("no_audio")
-    await sat.handle_start("c", 0, None, "Hey Jess")
-    await sat._run.watcher
-    assert sat._client.names == [RUN_END, ERROR]
-    assert sat._client.errors == ["jess-error"]
-    assert _turns("no_audio") == before + 1
-    assert sat._busy is False and sat._run is None
-
-
-async def test_wall_timeout_processes_what_was_heard(sat, pipeline, monkeypatch):
-    monkeypatch.setattr(vs, "FIRST_AUDIO_TIMEOUT_S", 0.01)
-    monkeypatch.setattr(vs, "RUN_WALL_TIMEOUT_S", 0.02)
-    await sat.handle_start("c", 0, None, "Hey Jess")
-    watcher = sat._run.watcher
-    await _say(sat.handle_audio, _audio((0.0, 200), (0.1, 600)))  # never goes quiet
-    await watcher
-    await _drain(sat)
-    assert sat._client.names == [RUN_START, STT_START, VAD_START, RUN_END]
-    assert pipeline.speak.await_count == 1
-
-
 async def test_vad_end_cancels_the_watcher(sat, pipeline):
     await sat.handle_start("c", 0, None, "Hey Jess")
     watcher = sat._run.watcher
@@ -986,9 +934,7 @@ async def test_max_utterance_still_answers_with_what_was_heard(sat, pipeline):
 
 
 def _listen_ends(device: str = NODE) -> dict[str, float]:
-    return {
-        r: _value(metrics.SATELLITE_LISTEN_END_TOTAL, {"reason": r, "device": device}) for r in vs.LISTEN_END_REASONS
-    }
+    return {r: metric_value(metrics.SATELLITE_LISTEN_END_TOTAL, reason=r, device=device) for r in vs.LISTEN_END_REASONS}
 
 
 async def _ends_speech_end(sat):
@@ -1002,7 +948,7 @@ async def _ends_max_utterance(sat):
 
 
 async def _ends_no_speech(sat):
-    await sat.handle_start("c", 0, None, "Hey Jess")
+    await sat.handle_start("c", 0, None, "Okay Jess")
     await _say(sat.handle_audio, SILENCE_6S)
 
 
@@ -1050,17 +996,54 @@ async def _ends_duplicate(sat):
     await _say(sat.handle_audio, UTTERANCE)
 
 
+_ANSWERED = [RUN_START, STT_START, VAD_START, RUN_END]
+_NO_SPEECH = [RUN_START, STT_START, RUN_END, ERROR]
+
+# How a run ends: the listen_end reason, what the device was sent, the turn's
+# result + wake label, the error code it heard, and whether Jess answered.
 _LISTEN_END_PATHS = [
-    pytest.param(_ends_speech_end, "speech_end", id="speech-end"),
-    pytest.param(_ends_max_utterance, "max_utterance", id="max-utterance"),
-    pytest.param(_ends_no_speech, "no_speech", id="no-speech"),
-    pytest.param(_ends_device_stop, "device_stop", id="device-stop"),
-    pytest.param(_ends_device_stop_quiet, "device_stop", id="device-stop-quiet"),
-    pytest.param(_ends_wall_timeout, "wall_timeout", id="wall-timeout"),
-    pytest.param(_ends_wall_timeout_quiet, "wall_timeout", id="wall-timeout-quiet"),
-    pytest.param(_ends_no_audio, "no_audio", id="no-audio"),
-    pytest.param(_ends_aborted, "aborted", id="aborted"),
-    pytest.param(_ends_duplicate, "duplicate", id="duplicate"),
+    pytest.param(_ends_speech_end, "speech_end", _ANSWERED, ("ok", "hey_jess"), [], True, id="speech-end"),
+    pytest.param(_ends_max_utterance, "max_utterance", _ANSWERED, ("ok", "hey_jess"), [], True, id="max-utterance"),
+    pytest.param(
+        _ends_no_speech, "no_speech", _NO_SPEECH, ("no_speech", "okay_jess"), ["jess-no-speech"], False, id="no-speech"
+    ),
+    pytest.param(_ends_device_stop, "device_stop", _ANSWERED, ("ok", "hey_jess"), [], True, id="device-stop"),
+    pytest.param(
+        _ends_device_stop_quiet,
+        "device_stop",
+        _NO_SPEECH,
+        ("no_speech", "hey_jess"),
+        ["jess-no-speech"],
+        False,
+        id="device-stop-quiet",
+    ),
+    pytest.param(_ends_wall_timeout, "wall_timeout", _ANSWERED, ("ok", "hey_jess"), [], True, id="wall-timeout"),
+    pytest.param(
+        _ends_wall_timeout_quiet,
+        "wall_timeout",
+        _NO_SPEECH,
+        ("no_speech", "hey_jess"),
+        ["jess-no-speech"],
+        False,
+        id="wall-timeout-quiet",
+    ),
+    pytest.param(
+        _ends_no_audio, "no_audio", [RUN_END, ERROR], ("no_audio", "hey_jess"), ["jess-error"], False, id="no-audio"
+    ),
+    # The device ended its own run: nothing goes back to it.
+    pytest.param(
+        _ends_aborted, "aborted", [RUN_START, STT_START, VAD_START], ("aborted", "hey_jess"), [], False, id="aborted"
+    ),
+    # Another room answers: RUN_END alone, no error code (so no sound).
+    pytest.param(
+        _ends_duplicate,
+        "duplicate",
+        [RUN_START, STT_START, RUN_END],
+        ("duplicate", "hey_jess"),
+        [],
+        False,
+        id="duplicate",
+    ),
 ]
 
 # Everything the line may carry: the node, a fixed reason and numbers — no
@@ -1099,19 +1082,29 @@ def _vad_fields(vad: EnergyVad) -> dict[str, str]:
     }
 
 
-@pytest.mark.parametrize("drive, reason", _LISTEN_END_PATHS)
-async def test_listen_end_counts_its_own_reason_once(sat, pipeline, clock, caplog, drive, reason):
+@pytest.mark.parametrize("drive, reason, events, turn, errors, answered", _LISTEN_END_PATHS)
+async def test_listen_end_counts_its_own_reason_once(
+    sat, pipeline, clock, caplog, drive, reason, events, turn, errors, answered
+):
     caplog.set_level(logging.INFO, logger="orchestrator.voice_satellite")
-    before = _listen_ends()
+    result, wake = turn
+    helios = "awake" if answered else "unchecked"
+    before, turns_before = _listen_ends(), _turns(result, wake=wake, helios=helios)
     await drive(sat)
     await _drain(sat)
     # The device's own stop (and stray audio) after we ended the run is not
-    # a second ending.
+    # a second ending, and sends the device nothing more.
     await sat.handle_stop(False)
     await sat.handle_stop(True)
     await sat.handle_audio(_tone(0.1))
     after = _listen_ends()
     assert {r: after[r] - before[r] for r in after} == {r: float(r == reason) for r in after}
+    assert sat._client.names == events and sat._client.errors == errors
+    assert _turns(result, wake=wake, helios=helios) == turns_before + 1
+    assert pipeline.speak.await_count == int(answered)
+    if not answered:  # nothing heard: no STT, no brain, and no turn used up from the rate limit
+        assert pipeline.stt.await_count == 0 and sat._chat.calls == [] and len(sat._turn_starts) == 0
+    assert sat._busy is False and sat._run is None
     lines = _listen_logs(caplog)
     assert all(_LISTEN_LOG.fullmatch(line) for line in lines), lines
     expected = [] if reason == "aborted" else [reason.replace("_", "-")]
@@ -1316,7 +1309,6 @@ async def test_history_is_capped(sat):
 
 
 async def test_turn_context_does_not_leak(sat, pipeline):
-    from orchestrator.log_config import request_id_var
 
     rid = request_id_var.get()
     await _one_turn(sat)
@@ -1353,7 +1345,6 @@ def _statuses(*seq):
 
 @pytest.fixture
 def helios(monkeypatch):
-    from orchestrator import helios_power
 
     h = SimpleNamespace(
         wake=AsyncMock(return_value={"ok": True}),
@@ -1375,59 +1366,190 @@ TTS_ONLY = {"stt": False, "model": False, "tts": True}
 JUPITER_TTS = "http://host.docker.internal:8004"
 
 
-async def test_helios_asleep_tts_on_other_box_wakes(sat, helios, clock, monkeypatch):
-    """TTS on Jupiter answers while Helios sleeps: that must not count as Helios
-    being on — wake it instead of failing as service_down."""
-    monkeypatch.setattr(vs._settings, "tts_url", JUPITER_TTS)
-    monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
-    monkeypatch.setattr(sat, "_service_status", _statuses(TTS_ONLY, UP))
+def _case(id, statuses, *, tts=None, wake=False, plug=False, timeout=None, wake_result=None, **expect):  # noqa: A002
+    """One _ensure_helios case. ``expect``: result (required), helios (run label),
+    wakes / plug_reads (call counts), errors (codes sent), sleeps (the 5 s waits),
+    quiet (nothing sent to the device). A key left out isn't checked."""
+    setup = SimpleNamespace(statuses=statuses, tts=tts, wake=wake, plug=plug, timeout=timeout, wake_result=wake_result)
+    return pytest.param(setup, expect, id=id)
+
+
+_GRACE = [5.0] * int(vs.SERVICE_GRACE_S / 5)
+
+_HELIOS_CASES = [
+    _case("all-up", (UP,), result=None, helios="awake", sleeps=[], quiet=True, wakes=0, plug_reads=0),
+    # STT answered, so Helios is on: no plug read, no wake — wait for the brain.
+    _case(
+        "brain-reloading-then-ready",
+        (MODEL_DOWN, MODEL_DOWN, UP),
+        result=None,
+        helios="woken",
+        sleeps=[5.0, 5.0],
+        errors=["jess-waking"],
+        wakes=0,
+        plug_reads=0,
+    ),
+    _case(
+        "brain-never-ready",
+        (MODEL_DOWN,),
+        result="service_down",
+        helios="unchecked",
+        sleeps=_GRACE,
+        errors=["jess-waking", "jess-error"],
+        wakes=0,
+    ),
+    # Nothing answers yet but the plug says it's on (booting): no wake, just wait.
+    _case(
+        "booting-by-plug-reading",
+        (DOWN, UP),
+        wake=True,
+        plug=True,
+        result=None,
+        helios="woken",
+        errors=["jess-waking"],
+        wakes=0,
+    ),
+    _case("asleep-wake-disabled", (DOWN,), result="helios_asleep", errors=["jess-asleep"], sleeps=[], wakes=0),
+    _case(
+        "woken",
+        (DOWN, DOWN, DOWN, UP),
+        wake=True,
+        result=None,
+        helios="woken",
+        wakes=1,
+        sleeps=[5.0, 5.0, 5.0],
+        errors=["jess-waking"],
+    ),
+    _case(
+        "wake-timeout",
+        (DOWN,),
+        wake=True,
+        timeout=20,
+        result="wake_timeout",
+        sleeps=[5.0] * 4,
+        errors=["jess-waking", "jess-error"],
+    ),
+    _case("negative-timeout-clamped", (DOWN,), wake=True, timeout=-5, result="wake_timeout", sleeps=[]),
+    _case(
+        "wake-call-fails",
+        (DOWN,),
+        wake=True,
+        wake_result={"ok": False, "error": "HTTPError"},
+        result="wake_failed",
+        errors=["jess-error"],
+        sleeps=[],
+    ),
+    # The TTS on Jupiter answers while Helios sleeps: that must not count as
+    # Helios being on — wake it instead of failing as service_down.
+    _case(
+        "tts-elsewhere-asleep-wakes",
+        (TTS_ONLY, UP),
+        tts=JUPITER_TTS,
+        wake=True,
+        result=None,
+        helios="woken",
+        plug_reads=1,
+        wakes=1,
+        errors=["jess-waking"],
+    ),
+    _case(
+        "tts-elsewhere-asleep-wake-off",
+        (TTS_ONLY,),
+        tts=JUPITER_TTS,
+        result="helios_asleep",
+        errors=["jess-asleep"],
+        sleeps=[],
+        plug_reads=1,
+        wakes=0,
+    ),
+    # Helios asleep AND the Jupiter TTS down: a wake can't make the turn work
+    # (and would leave Helios on), so fail as service_down at once. With wake
+    # off too: "error", not "asleep" — waking Helios by hand wouldn't help.
+    *(
+        _case(
+            f"tts-elsewhere-down-asleep-wake-{'on' if w else 'off'}",
+            (DOWN,),
+            tts=JUPITER_TTS,
+            wake=w,
+            result="service_down",
+            wakes=0,
+            errors=["jess-error"],
+            sleeps=[],
+        )
+        for w in (True, False)
+    ),
+    # Plug says on (booting), Jupiter TTS down too: Helios is powered, so no
+    # fail-fast — wait, and go once all answer.
+    _case(
+        "tts-elsewhere-down-booting",
+        (DOWN, UP),
+        tts=JUPITER_TTS,
+        wake=True,
+        plug=True,
+        result=None,
+        helios="woken",
+        plug_reads=1,
+        wakes=0,
+        errors=["jess-waking"],
+        sleeps=[5.0],
+    ),
+    # The most common case with the TTS off Helios: brain reloading, STT up.
+    # STT alone proves Helios is on: grace, no wake, even with wake enabled.
+    _case(
+        "tts-elsewhere-brain-reloading",
+        (MODEL_DOWN, UP),
+        tts=JUPITER_TTS,
+        wake=True,
+        result=None,
+        helios="woken",
+        wakes=0,
+        plug_reads=0,
+        sleeps=[5.0],
+    ),
+    # Brain + STT up, Jupiter TTS down: Helios is on, so no wake — the full
+    # grace wait, then service_down (not the asleep-and-TTS-down fail-fast).
+    _case(
+        "tts-elsewhere-down-helios-on",
+        ({"stt": True, "model": True, "tts": False},),
+        tts=JUPITER_TTS,
+        wake=True,
+        result="service_down",
+        wakes=0,
+        plug_reads=0,
+        sleeps=_GRACE,
+        errors=["jess-waking", "jess-error"],
+    ),
+    # Old layout (TTS on Helios): TTS answering still means Helios is on.
+    _case("tts-on-helios-proves-power", (TTS_ONLY, UP), wake=True, result=None, wakes=0, plug_reads=0),
+]
+
+
+@pytest.mark.parametrize("setup, expect", _HELIOS_CASES)
+async def test_ensure_helios(make_sat, helios, clock, monkeypatch, setup, expect):
+    sat = make_sat() if setup.timeout is None else make_sat(helios_timeout_s=setup.timeout)
+    if setup.tts:
+        monkeypatch.setattr(vs._settings, "tts_url", setup.tts)
+    monkeypatch.setattr(vs._settings, "helios_wake_enabled", setup.wake)
+    helios.running.return_value = setup.plug
+    if setup.wake_result is not None:
+        helios.wake.return_value = setup.wake_result
+    status = _statuses(*setup.statuses)
+    monkeypatch.setattr(sat, "_service_status", status)
     monkeypatch.setattr(sat, "_helios_running", helios.running)
     run = vs._Run(wake_word="hey_jess")
-    assert await sat._ensure_helios(run) is None
-    assert run.helios == "woken"
-    assert helios.running.await_count == 1 and helios.wake.await_count == 1
-    assert sat._client.errors == ["jess-waking"]
 
-
-async def test_helios_asleep_tts_on_other_box_wake_disabled(sat, helios, clock, monkeypatch):
-    monkeypatch.setattr(vs._settings, "tts_url", JUPITER_TTS)
-    monkeypatch.setattr(sat, "_service_status", _statuses(TTS_ONLY))
-    monkeypatch.setattr(sat, "_helios_running", helios.running)
-    assert await sat._ensure_helios(vs._Run(wake_word="hey_jess")) == "helios_asleep"
-    assert sat._client.errors == ["jess-asleep"]
-    assert clock.sleeps == []
-    assert helios.running.await_count == 1 and helios.wake.await_count == 0
-
-
-@pytest.mark.parametrize("wake_enabled", [True, False], ids=["wake-on", "wake-off"])
-async def test_helios_asleep_and_tts_box_down_does_not_wake(sat, helios, clock, monkeypatch, wake_enabled):
-    """Helios asleep AND the Jupiter TTS down: a wake can't make the turn work (and
-    would leave Helios on), so fail as service_down at once. With wake off too:
-    "error", not "asleep" — waking Helios by hand wouldn't help either."""
-    monkeypatch.setattr(vs._settings, "tts_url", JUPITER_TTS)
-    monkeypatch.setattr(vs._settings, "helios_wake_enabled", wake_enabled)
-    monkeypatch.setattr(sat, "_service_status", _statuses(DOWN))
-    monkeypatch.setattr(sat, "_helios_running", helios.running)
-    assert await sat._ensure_helios(vs._Run(wake_word="hey_jess")) == "service_down"
-    assert helios.wake.await_count == 0
-    assert sat._client.errors == ["jess-error"]
-    assert clock.sleeps == []
-
-
-async def test_helios_booting_and_tts_box_down_takes_the_grace_path(sat, helios, clock, monkeypatch):
-    """Nothing on Helios answers yet but the plug says it's on (booting), Jupiter
-    TTS down too: Helios is powered, so no fail-fast — wait, and go once all answer."""
-    monkeypatch.setattr(vs._settings, "tts_url", JUPITER_TTS)
-    monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
-    helios.running.return_value = True
-    monkeypatch.setattr(sat, "_service_status", _statuses(DOWN, UP))
-    monkeypatch.setattr(sat, "_helios_running", helios.running)
-    run = vs._Run(wake_word="hey_jess")
-    assert await sat._ensure_helios(run) is None
-    assert run.helios == "woken"
-    assert helios.running.await_count == 1 and helios.wake.await_count == 0
-    assert sat._client.errors == ["jess-waking"]
-    assert clock.sleeps == [5.0]
+    assert await sat._ensure_helios(run) == expect["result"]
+    assert status.calls[0] == ("stt", "model", "tts")
+    checks = {
+        "helios": run.helios,
+        "wakes": helios.wake.await_count,
+        "plug_reads": helios.running.await_count,
+        "errors": sat._client.errors,
+        "sleeps": clock.sleeps,
+    }
+    assert {k: checks[k] for k in expect if k in checks} == {k: v for k, v in expect.items() if k in checks}
+    if expect.get("quiet"):
+        assert sat._client.events == []
 
 
 async def test_helios_asleep_tts_box_down_turn_metric_and_log(sat, helios, clock, monkeypatch, pipeline, caplog):
@@ -1449,42 +1571,6 @@ async def test_helios_asleep_tts_box_down_turn_metric_and_log(sat, helios, clock
     warn = [r for r in caplog.records if "not waking it" in r.getMessage()]
     assert len(warn) == 1 and warn[0].levelno == logging.WARNING
     assert warn[0].getMessage() == f"[SATELLITE] {NODE}: tts down off Helios; not waking it"
-
-
-async def test_helios_on_brain_reloading_tts_on_other_box(sat, helios, clock, monkeypatch):
-    """Most common case with the TTS off Helios: brain reloading, STT up. STT alone
-    proves Helios is on, so grace and no wake, even with wake enabled."""
-    monkeypatch.setattr(vs._settings, "tts_url", JUPITER_TTS)
-    monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
-    monkeypatch.setattr(sat, "_service_status", _statuses(MODEL_DOWN, UP))
-    monkeypatch.setattr(sat, "_helios_running", helios.running)
-    run = vs._Run(wake_word="hey_jess")
-    assert await sat._ensure_helios(run) is None
-    assert run.helios == "woken"
-    assert helios.wake.await_count == 0 and helios.running.await_count == 0
-    assert clock.sleeps == [5.0]
-
-
-async def test_helios_on_tts_box_down_is_service_down(sat, helios, clock, monkeypatch):
-    """Brain + STT up, Jupiter TTS down: Helios is on, so no wake — grace, then service_down."""
-    monkeypatch.setattr(vs._settings, "tts_url", JUPITER_TTS)
-    monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
-    monkeypatch.setattr(sat, "_service_status", _statuses({"stt": True, "model": True, "tts": False}))
-    monkeypatch.setattr(sat, "_helios_running", helios.running)
-    assert await sat._ensure_helios(vs._Run(wake_word="hey_jess")) == "service_down"
-    assert helios.wake.await_count == 0 and helios.running.await_count == 0
-    # the full grace wait, not the asleep-and-off-host-down fail-fast
-    assert clock.sleeps == [5.0] * int(vs.SERVICE_GRACE_S / 5)
-    assert sat._client.errors == ["jess-waking", "jess-error"]
-
-
-async def test_helios_tts_same_host_still_proves_power(sat, helios, clock, monkeypatch):
-    """Old layout (TTS on Helios): TTS answering still means Helios is on — no wake."""
-    monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
-    monkeypatch.setattr(sat, "_service_status", _statuses(TTS_ONLY, UP))
-    monkeypatch.setattr(sat, "_helios_running", helios.running)
-    assert await sat._ensure_helios(vs._Run(wake_word="hey_jess")) is None
-    assert helios.wake.await_count == 0 and helios.running.await_count == 0
 
 
 @pytest.mark.parametrize(
@@ -1541,105 +1627,6 @@ def test_on_brain_host(monkeypatch, name, model_url, url, expected):
     assert vs.Satellite._on_brain_host("model") is True
 
 
-async def test_helios_all_up(sat, helios, clock, monkeypatch):
-    monkeypatch.setattr(sat, "_service_status", _statuses(UP))
-    monkeypatch.setattr(sat, "_helios_running", helios.running)
-    run = vs._Run(wake_word="hey_jess")
-    assert await sat._ensure_helios(run) is None
-    assert run.helios == "awake"
-    assert clock.sleeps == [] and sat._client.events == []
-    assert helios.running.await_count == 0 and helios.wake.await_count == 0
-
-
-async def test_helios_on_service_reloading_then_ready(sat, helios, clock, monkeypatch):
-    status = _statuses(MODEL_DOWN, MODEL_DOWN, UP)
-    monkeypatch.setattr(sat, "_service_status", status)
-    monkeypatch.setattr(sat, "_helios_running", helios.running)
-    run = vs._Run(wake_word="hey_jess")
-    assert await sat._ensure_helios(run) is None
-    assert run.helios == "woken"
-    assert clock.sleeps == [5.0, 5.0]
-    assert sat._client.errors == ["jess-waking"]
-    # STT answered, so Helios is on: no plug read, no wake
-    assert helios.running.await_count == 0 and helios.wake.await_count == 0
-    assert status.calls[0] == ("stt", "model", "tts")
-
-
-async def test_helios_on_service_never_ready(sat, helios, clock, monkeypatch):
-    monkeypatch.setattr(sat, "_service_status", _statuses(MODEL_DOWN))
-    monkeypatch.setattr(sat, "_helios_running", helios.running)
-    run = vs._Run(wake_word="hey_jess")
-    assert await sat._ensure_helios(run) == "service_down"
-    assert clock.sleeps == [5.0] * int(vs.SERVICE_GRACE_S / 5)
-    assert sat._client.errors == ["jess-waking", "jess-error"]
-    assert helios.wake.await_count == 0
-    assert run.helios == "unchecked"
-
-
-async def test_helios_powered_by_plug_reading(sat, helios, clock, monkeypatch):
-    """Nothing answers yet but the plug says it's on (booting): no wake, just wait."""
-    monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
-    helios.running.return_value = True
-    monkeypatch.setattr(sat, "_service_status", _statuses(DOWN, UP))
-    monkeypatch.setattr(sat, "_helios_running", helios.running)
-    run = vs._Run(wake_word="hey_jess")
-    assert await sat._ensure_helios(run) is None
-    assert run.helios == "woken"
-    assert helios.wake.await_count == 0
-    assert sat._client.errors == ["jess-waking"]
-
-
-async def test_helios_asleep_and_wake_disabled(sat, helios, clock, monkeypatch):
-    monkeypatch.setattr(sat, "_service_status", _statuses(DOWN))
-    monkeypatch.setattr(sat, "_helios_running", helios.running)
-    run = vs._Run(wake_word="hey_jess")
-    assert await sat._ensure_helios(run) == "helios_asleep"
-    assert sat._client.errors == ["jess-asleep"]
-    assert clock.sleeps == [] and helios.wake.await_count == 0
-
-
-async def test_helios_woken(sat, helios, clock, monkeypatch):
-    monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
-    monkeypatch.setattr(sat, "_service_status", _statuses(DOWN, DOWN, DOWN, UP))
-    monkeypatch.setattr(sat, "_helios_running", helios.running)
-    run = vs._Run(wake_word="hey_jess")
-    assert await sat._ensure_helios(run) is None
-    assert run.helios == "woken"
-    assert helios.wake.await_count == 1
-    assert clock.sleeps == [5.0, 5.0, 5.0]
-    assert sat._client.errors == ["jess-waking"]
-
-
-async def test_helios_wake_timeout(make_sat, helios, clock, monkeypatch):
-    sat = make_sat(helios_timeout_s=20)
-    monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
-    monkeypatch.setattr(sat, "_service_status", _statuses(DOWN))
-    monkeypatch.setattr(sat, "_helios_running", helios.running)
-    run = vs._Run(wake_word="hey_jess")
-    assert await sat._ensure_helios(run) == "wake_timeout"
-    assert clock.sleeps == [5.0] * 4
-    assert sat._client.errors == ["jess-waking", "jess-error"]
-
-
-async def test_helios_negative_timeout_is_clamped(make_sat, helios, clock, monkeypatch):
-    sat = make_sat(helios_timeout_s=-5)
-    monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
-    monkeypatch.setattr(sat, "_service_status", _statuses(DOWN))
-    monkeypatch.setattr(sat, "_helios_running", helios.running)
-    assert await sat._ensure_helios(vs._Run(wake_word="hey_jess")) == "wake_timeout"
-    assert clock.sleeps == []
-
-
-async def test_helios_wake_call_fails(sat, helios, clock, monkeypatch):
-    monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
-    helios.wake.return_value = {"ok": False, "error": "HTTPError"}
-    monkeypatch.setattr(sat, "_service_status", _statuses(DOWN))
-    monkeypatch.setattr(sat, "_helios_running", helios.running)
-    assert await sat._ensure_helios(vs._Run(wake_word="hey_jess")) == "wake_failed"
-    assert sat._client.errors == ["jess-error"]
-    assert clock.sleeps == []
-
-
 async def test_woken_turn_metric_label(sat, helios, clock, monkeypatch, pipeline):
     monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
     monkeypatch.setattr(sat, "_service_status", _statuses(DOWN, UP))
@@ -1663,7 +1650,6 @@ async def test_woken_turn_metric_label(sat, helios, clock, monkeypatch, pipeline
     ],
 )
 async def test_helios_running(sat, monkeypatch, result, expected):
-    from orchestrator import helios_power
 
     mock = AsyncMock(side_effect=result) if isinstance(result, Exception) else AsyncMock(return_value=result)
     monkeypatch.setattr(helios_power, "helios_power_status", mock)
@@ -1671,7 +1657,6 @@ async def test_helios_running(sat, monkeypatch, result, expected):
 
 
 async def test_service_status_uses_shared_client_and_3s_probe(sat, monkeypatch):
-    from orchestrator.service_registry import services
 
     seen = []
 
@@ -1698,7 +1683,6 @@ async def test_service_status_uses_shared_client_and_3s_probe(sat, monkeypatch):
 async def test_check_service_honours_timeout_with_a_shared_client():
     """The satellite probes Helios through the shared client (60 s read,
     10 s connect) with timeout=3.0: that budget must reach the request."""
-    from orchestrator.service_registry import ServiceRegistry
 
     reg = ServiceRegistry()
     reg._services["stt"].url = STT
@@ -1773,7 +1757,6 @@ async def test_transcribe_reuses_open_shared_client(sat, stt_env, monkeypatch):
 
 @pytest.fixture
 def announce(monkeypatch):
-    from orchestrator import reminder_manager, voice_style
 
     mock = AsyncMock(return_value={"success": True, "speaker": SPEAKER})
     monkeypatch.setattr(reminder_manager, "_announce_voice", mock)
@@ -1827,196 +1810,11 @@ async def test_speak_timeout(sat, announce, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# reminder_manager._announce_voice: the satellite's new flags
-# ---------------------------------------------------------------------------
-
-
-class _StyleBackend:
-    audio_format = "audio/wav"
-    file_extension = "wav"
-
-    def __init__(self) -> None:
-        self.styles: list[str] = []
-
-    async def synthesize(self, text, voice=None, style=""):
-        self.styles.append(style)
-        return b"\x00\x01"
-
-
-@pytest.fixture
-def ann(monkeypatch):
-    from orchestrator import announcement_routes, reminder_manager
-
-    monkeypatch.setattr(reminder_manager, "HA_URL", HA, raising=False)
-    monkeypatch.setattr(reminder_manager, "HA_TOKEN", "tok", raising=False)
-    monkeypatch.setattr(reminder_manager, "ORCHESTRATOR_URL", "http://orch.test:8888", raising=False)
-    monkeypatch.setattr(reminder_manager, "REMINDER_SPEAKER", "", raising=False)
-    monkeypatch.setattr(reminder_manager, "style_for_announcement", lambda t: f"default-for-{t}")
-    monkeypatch.setattr(shared, "DND_ACTIVE", False, raising=False)
-    monkeypatch.setattr(shared, "is_voice_session_active", lambda *a, **k: False)
-    monkeypatch.setattr(shared, "_http", None, raising=False)
-    backend = _StyleBackend()
-    monkeypatch.setattr(shared, "tts_backend", backend, raising=False)
-    rows: list[dict] = []
-    monkeypatch.setattr(reminder_manager.state_store, "record_announcement", lambda **kw: rows.append(kw))
-    monkeypatch.setattr("os.makedirs", lambda path, exist_ok=False: None)
-    monkeypatch.setattr("builtins.open", mock_open())
-    routes: dict[str, str] = {}
-    monkeypatch.setattr(announcement_routes, "route_for", lambda cat: routes.get((cat or "").lower(), ""))
-    return SimpleNamespace(backend=backend, rows=rows, routes=routes)
-
-
-def _ha(router, states: dict[str, str]):
-    """respx router for HA: entity states + play_media. Returns (play route, probed entities)."""
-    probed: list[str] = []
-
-    def state(request):
-        entity = request.url.path.rsplit("/", 1)[-1]
-        probed.append(entity)
-        return Response(200, json={"entity_id": entity, "state": states.get(entity, "idle")})
-
-    router.get(url__startswith=STATES).mock(side_effect=state)
-    return router.post(PLAY).mock(return_value=Response(200)), probed
-
-
-def _tts_count(success: str, speaker: str = SPEAKER) -> float:
-    return _value(metrics.TTS_ANNOUNCEMENTS_TOTAL, {"type": "voice_reply", "speaker": speaker, "success": success})
-
-
-async def test_announce_defaults_unchanged():
-    import inspect
-
-    from orchestrator.reminder_manager import _announce_voice
-
-    p = inspect.signature(_announce_voice).parameters
-    assert (p["ignore_dnd"].default, p["style"].default) == (False, None)
-    assert (p["allow_fallback"].default, p["record_history"].default) == (True, True)
-
-
-async def test_announce_dnd_suppresses_by_default(ann, monkeypatch):
-    from orchestrator.reminder_manager import _announce_voice
-
-    monkeypatch.setattr(shared, "DND_ACTIVE", True)
-    with respx.mock(assert_all_called=False) as router:
-        play, _ = _ha(router, {})
-        out = await _announce_voice("hi", speaker=SPEAKER, announcement_type="voice_reply")
-    assert out == {"success": True, "suppressed": True, "reason": "dnd_active"}
-    assert not play.called and ann.backend.styles == []
-
-
-async def test_announce_ignore_dnd_plays(ann, monkeypatch):
-    from orchestrator.reminder_manager import _announce_voice
-
-    monkeypatch.setattr(shared, "DND_ACTIVE", True)
-    with respx.mock as router:
-        play, _ = _ha(router, {})
-        out = await _announce_voice("hi", speaker=SPEAKER, announcement_type="voice_reply", ignore_dnd=True)
-    assert out == {"success": True, "speaker": SPEAKER}
-    assert play.call_count == 1
-
-
-async def test_announce_ignore_dnd_keeps_the_voice_session_guard(ann, monkeypatch):
-    from orchestrator.reminder_manager import _announce_voice
-
-    monkeypatch.setattr(shared, "is_voice_session_active", lambda *a, **k: True)
-    out = await _announce_voice("hi", speaker=SPEAKER, announcement_type="voice_reply", ignore_dnd=True)
-    assert out["suppressed"] is True and out["reason"] == "voice_session_active"
-
-
-@pytest.mark.parametrize(
-    "style, expected",
-    [
-        pytest.param(None, "default-for-voice_reply", id="default"),
-        pytest.param("excited", "excited", id="override"),
-        pytest.param("", "", id="explicit-none"),
-    ],
-)
-async def test_announce_style(ann, style, expected):
-    from orchestrator.reminder_manager import _announce_voice
-
-    with respx.mock as router:
-        _ha(router, {})
-        await _announce_voice("hi", speaker=SPEAKER, announcement_type="voice_reply", style=style)
-    assert ann.backend.styles == [expected]
-
-
-async def test_announce_no_fallback_when_disallowed(ann, monkeypatch):
-    from orchestrator import reminder_manager
-    from orchestrator.reminder_manager import _announce_voice
-
-    monkeypatch.setattr(vs._settings, "voice_satellite_speaker", SPEAKER)
-    ann.routes["reminder"] = "media_player.living_room"
-    fallbacks = _value(metrics.ANNOUNCE_FALLBACK_TOTAL, {"type": "voice_reply"})
-    dead = _value(metrics.ANNOUNCE_SPEAKER_UNAVAILABLE_TOTAL, {"speaker": SPEAKER})
-    with respx.mock(assert_all_called=False) as router:
-        play, probed = _ha(router, {SPEAKER: "unavailable"})
-        out = await _announce_voice(
-            "hi", speaker=SPEAKER, announcement_type="voice_reply", allow_fallback=False, record_history=False
-        )
-    assert out["success"] is False and out["unavailable"] == [SPEAKER]
-    assert probed == [SPEAKER]  # the other room's speaker was never even considered
-    assert not play.called and ann.backend.styles == []  # no TTS burned
-    assert _value(metrics.ANNOUNCE_FALLBACK_TOTAL, {"type": "voice_reply"}) == fallbacks
-    # the satellite speaker is a known speaker: it gets its own dead-speaker series
-    assert SPEAKER in reminder_manager._known_speakers()
-    assert _value(metrics.ANNOUNCE_SPEAKER_UNAVAILABLE_TOTAL, {"speaker": SPEAKER}) == dead + 1
-
-
-async def test_announce_falls_back_by_default(ann):
-    from orchestrator.reminder_manager import _announce_voice
-
-    ann.routes["reminder"] = "media_player.living_room"
-    with respx.mock as router:
-        play, _ = _ha(router, {SPEAKER: "unavailable"})
-        out = await _announce_voice("hi", speaker=SPEAKER, announcement_type="voice_reply")
-    assert out["success"] is True and out["fallback"] is True
-    assert out["speaker"] == "media_player.living_room"
-
-
-async def test_announce_record_history_false_keeps_metrics(ann):
-    from orchestrator.reminder_manager import _announce_voice
-
-    ok_before = _tts_count("true")
-    with respx.mock as router:
-        _ha(router, {})
-        out = await _announce_voice("hi", speaker=SPEAKER, announcement_type="voice_reply", record_history=False)
-    assert out["success"] is True
-    assert ann.rows == []
-    assert _tts_count("true") == ok_before + 1
-
-
-async def test_announce_record_history_false_on_failures(ann, monkeypatch):
-    from orchestrator.reminder_manager import _announce_voice
-
-    failed_before = _tts_count("false")
-    with respx.mock(assert_all_called=False) as router:
-        _ha(router, {SPEAKER: "unavailable"})
-        await _announce_voice(
-            "hi", speaker=SPEAKER, announcement_type="voice_reply", allow_fallback=False, record_history=False
-        )
-    monkeypatch.setattr(shared, "tts_backend", None, raising=False)
-    await _announce_voice("hi", speaker=SPEAKER, announcement_type="voice_reply", record_history=False)
-    assert ann.rows == []
-    assert _tts_count("false") == failed_before + 1  # the unavailable one (no-backend has no speaker)
-
-
-async def test_announce_records_history_by_default(ann):
-    from orchestrator.reminder_manager import _announce_voice
-
-    with respx.mock as router:
-        _ha(router, {})
-        await _announce_voice("hello there", speaker=SPEAKER, announcement_type="voice_reply")
-    assert len(ann.rows) == 1
-    assert ann.rows[0]["text"] == "hello there" and ann.rows[0]["success"] is True
-
-
-# ---------------------------------------------------------------------------
 # cloud_brain: satellite turns never schedule auto_learn
 # ---------------------------------------------------------------------------
 
 
 def test_schedule_auto_learn_skipped_for_satellite_turns(monkeypatch):
-    from orchestrator.cloud_brain import CloudBrain
 
     jobs = {}
 
@@ -2068,7 +1866,6 @@ _VALID = {
 def _settings(**overrides):
     # Settings built directly (no module reload) — works from /app and from
     # inside orchestrator/; no .env file and no host env leak in.
-    from orchestrator.config import Settings
 
     env = {"MODEL_URL": "http://localhost:8080/v1", "MODEL_NAME": "m", **_VALID}
     for k, v in overrides.items():
@@ -2179,7 +1976,6 @@ def test_config_helios_timeout_clamp(raw, expected):
     ],
 )
 def test_voice_satellite_key_ok(key, ok):
-    from orchestrator.config import voice_satellite_key_ok
 
     assert voice_satellite_key_ok(key) is ok
 
@@ -2195,7 +1991,6 @@ def _record(name: str, msg: str = "Invalid protobuf message type=%s data=%s", ar
 
 @pytest.mark.parametrize("name", ["aioesphomeapi", "aioesphomeapi.connection", "zeroconf", "zeroconf._engine"])
 def test_payload_args_dropped(name):
-    from orchestrator.log_config import DropPayloadArgsFilter
 
     rec = _record(name)
     assert DropPayloadArgsFilter().filter(rec) is True
@@ -2205,7 +2000,6 @@ def test_payload_args_dropped(name):
 
 @pytest.mark.parametrize("name", ["orchestrator.voice_satellite", "aioesphomeapix", "httpx", "root"])
 def test_other_loggers_keep_their_args(name):
-    from orchestrator.log_config import DropPayloadArgsFilter
 
     rec = _record(name, "count=%d", (3,))
     assert DropPayloadArgsFilter().filter(rec) is True
@@ -2213,7 +2007,6 @@ def test_other_loggers_keep_their_args(name):
 
 
 def test_payload_record_without_args_is_untouched():
-    from orchestrator.log_config import DropPayloadArgsFilter
 
     rec = _record("aioesphomeapi.connection", "Connection lost", None)
     DropPayloadArgsFilter().filter(rec)
@@ -2221,7 +2014,6 @@ def test_payload_record_without_args_is_untouched():
 
 
 def test_configure_logging_drops_payload_args(monkeypatch):
-    from orchestrator.log_config import DropPayloadArgsFilter, configure_logging
 
     root = logging.getLogger()
     monkeypatch.setattr(root, "handlers", list(root.handlers))  # restored afterwards
@@ -2239,7 +2031,6 @@ def test_configure_logging_drops_payload_args(monkeypatch):
 
 
 def test_quiet_libs_include_payload_loggers():
-    from orchestrator.log_config import quiet_url_logging_libs
 
     quiet_url_logging_libs()
     for name in ("httpx", "httpcore", "aioesphomeapi", "zeroconf"):
@@ -2289,7 +2080,6 @@ async def test_new_client_refuses_bad_key(make_sat, key):
 
 
 async def test_new_client_pins_the_device(make_sat):
-    from aioesphomeapi import APIClient
 
     client = make_sat()._new_client()
     assert isinstance(client, APIClient)
@@ -2506,7 +2296,7 @@ async def test_shutdown_cancels_the_bridge(make_sat, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_satellite_loop_seeds_series_and_builds_from_settings(monkeypatch):
+async def test_satellite_loop_builds_from_settings(monkeypatch):
     for attr, value in {
         "voice_satellite_name": "atom-echo-seeded",
         "voice_satellite_host": "10.0.0.77",
@@ -2534,34 +2324,7 @@ async def test_satellite_loop_seeds_series_and_builds_from_settings(monkeypatch)
         SPEAKER,
         90,
     )
-    assert s._chat is chat
-    names = {smp.labels.get("result") for m in metrics.SATELLITE_CONNECT_TOTAL.collect() for smp in m.samples}
-    assert set(vs._CONNECT_RESULTS) <= names
-    gauges = {smp.labels["device"]: smp.value for m in metrics.SATELLITE_CONNECTED.collect() for smp in m.samples}
-    assert gauges["atom-echo-seeded"] == 0
-
-
-async def test_satellite_loop_seeds_every_listen_end_reason(monkeypatch):
-    """Exact, on a fresh counter (other tests increment the real one)."""
-    from prometheus_client import CollectorRegistry, Counter
-
-    fresh = Counter("bgw_satellite_listen_end_total", "test copy", ["reason", "device"], registry=CollectorRegistry())
-    monkeypatch.setattr(metrics, "SATELLITE_LISTEN_END_TOTAL", fresh)
-    monkeypatch.setattr(vs._settings, "voice_satellite_devices", "")
-    monkeypatch.setattr(vs._settings, "voice_satellite_name", "atom-echo-seeded")
-
-    async def fake_run_forever(self):
-        return None
-
-    monkeypatch.setattr(vs.Satellite, "run_forever", fake_run_forever)
-    await vs.satellite_loop(FakeChat())
-    seeded = {
-        (s.labels["reason"], s.labels["device"]): s.value
-        for m in fresh.collect()
-        for s in m.samples
-        if s.name.endswith("_total")
-    }
-    assert seeded == {(r, "atom-echo-seeded"): 0.0 for r in vs.LISTEN_END_REASONS}
+    assert s._chat is chat  # series seeding: test_satellite_loop_seeds_every_series_for_every_device
 
 
 async def test_log_loop_exit(caplog):
@@ -2591,9 +2354,6 @@ async def test_log_loop_exit(caplog):
 
 
 def test_drop_payload_filter_strips_exception_text():
-    import sys
-
-    from orchestrator.log_config import DropPayloadArgsFilter
 
     try:
         raise ValueError("payload bytes here")
@@ -2620,7 +2380,6 @@ TWO_DEVICES = f"{NODE}@10.0.0.50={SPEAKER},{OTHER}@10.0.0.51={OTHER_SPEAKER}"
 
 
 def test_parse_devices_two_rooms():
-    from orchestrator.config import SatelliteDevice, parse_voice_satellite_devices
 
     raw = f" {NODE} @ 10.0.0.50 = {SPEAKER} ,, {OTHER}@fd00::51={OTHER_SPEAKER}"
     devices, problems = parse_voice_satellite_devices(raw)
@@ -2645,25 +2404,32 @@ def test_parse_devices_two_rooms():
         pytest.param("x@10.0.0.60=media_player.a/../b", "speaker that is not", id="speaker-path"),
         pytest.param(f"{NODE}@10.0.0.60=media_player.x", "repeats an earlier device name", id="dup-name"),
         pytest.param("x@10.0.0.50=media_player.x", "repeats an earlier device IP", id="dup-ip"),
+        # repeated or misplaced separators
+        pytest.param("a@b@10.0.0.60=media_player.x", "host that is not", id="two-at"),
+        pytest.param("x@@10.0.0.60=media_player.x", "host that is not", id="at-at"),
+        pytest.param("x@=media_player.x", "host that is not", id="empty-host"),
+        pytest.param("x@10.0.0.60=media_player.x=y", "speaker that is not", id="two-eq"),
+        pytest.param("x@10.0.0.60==media_player.x", "speaker that is not", id="eq-eq"),
+        pytest.param("x@10.0.0.60=", "speaker that is not", id="empty-speaker"),
+        pytest.param("x=y@10.0.0.60=media_player.x", "name that is not", id="eq-in-name"),
+        pytest.param("x=media_player.x@10.0.0.60", "is not name@host=speaker", id="swapped"),
     ],
 )
 def test_parse_devices_skips_a_bad_entry(entry, problem):
-    from orchestrator.config import parse_voice_satellite_devices
 
     devices, problems = parse_voice_satellite_devices(f"{NODE}@10.0.0.50={SPEAKER},{entry}")
     assert [d.name for d in devices] == [NODE]
     assert len(problems) == 1 and problems[0].startswith("entry 2 ") and problem in problems[0]
+    assert "10.0.0.6" not in problems[0]  # named by position, never echoed
 
 
 def test_parse_devices_same_ip_written_differently_is_a_repeat():
-    from orchestrator.config import parse_voice_satellite_devices
 
     devices, problems = parse_voice_satellite_devices("a@fd00::51=media_player.a,b@fd00:0:0::51=media_player.b")
     assert [d.name for d in devices] == ["a"] and "repeats an earlier device IP" in problems[0]
 
 
 def test_parse_devices_limit():
-    from orchestrator.config import MAX_VOICE_SATELLITES, parse_voice_satellite_devices
 
     raw = ",".join(f"d{i}@10.0.1.{i}=media_player.r{i}" for i in range(MAX_VOICE_SATELLITES + 1))
     devices, problems = parse_voice_satellite_devices(raw)
@@ -2738,6 +2504,26 @@ def test_config_single_device_is_the_default_list():
         pytest.param({"VOICE_SATELLITE_DEVICES": TWO_DEVICES, "HA_TOKEN": None}, 1, False, id="list-shared-bad"),
         pytest.param({"VOICE_SATELLITE_ENABLED": "false", "VOICE_SATELLITE_DEVICES": "junk"}, 0, False, id="off"),
         pytest.param({"VOICE_SATELLITE_CONFIG_PROBLEMS": "5"}, 0, True, id="not-settable"),
+        # skipped entries AND a shared-setting failure: both counted
+        pytest.param(
+            {"VOICE_SATELLITE_DEVICES": f"{TWO_DEVICES},junk", "HA_TOKEN": None}, 2, False, id="skip-and-shared"
+        ),
+        pytest.param(
+            {"VOICE_SATELLITE_DEVICES": f"{TWO_DEVICES},junk", "VOICE_SATELLITE_API_KEY": None},
+            2,
+            False,
+            id="skip-and-key",
+        ),
+        pytest.param({"VOICE_SATELLITE_API_KEY": None}, 1, False, id="single-no-key"),
+        pytest.param({"VOICE_SATELLITE_PORT": "0"}, 1, False, id="single-port"),
+        pytest.param({"VOICE_SATELLITE_SPEAKER": None}, 1, False, id="single-no-speaker"),
+        # the env var can't set it, even with the feature off
+        pytest.param(
+            {"VOICE_SATELLITE_ENABLED": "false", "VOICE_SATELLITE_CONFIG_PROBLEMS": "5"},
+            0,
+            False,
+            id="off-not-settable",
+        ),
     ],
 )
 def test_config_problem_count(overrides, problems, enabled):
@@ -2754,8 +2540,6 @@ def test_config_single_device_refuses_an_ipv6_scope_id(host, caplog):
 
 def test_known_speakers_include_every_room(monkeypatch):
     """bgw_announcement_speaker_unavailable_total labels each room's speaker, not "other"."""
-    from orchestrator import reminder_manager
-    from orchestrator.config import settings
 
     monkeypatch.setattr(settings, "voice_satellite_devices", TWO_DEVICES)
     monkeypatch.setattr(settings, "voice_satellite_speaker", "media_player.left_over")
@@ -2822,21 +2606,32 @@ async def test_duplicate_that_never_streamed_gets_the_normal_end(sat, pipeline, 
     assert sat._busy is False
 
 
-async def test_busy_device_keeps_the_wake_word(make_sat, pipeline, later):
-    """A busy room says "busy" rather than the next room answering the question.
-    Real clock: the fake one would run the 4 s no-audio watchdog inside _tick()."""
+@pytest.mark.parametrize("refuse", ["busy", "rate_limited"])
+async def test_refusing_device_keeps_the_wake_word(make_sat, monkeypatch, later, refuse):
+    """A busy or rate-limited room says "busy" and keeps the wake word rather
+    than the next room answering the question. Real clock: the fake one would
+    run the 4 s no-audio watchdog inside _tick()."""
     arbiter = vs.WakeArbiter()
-    busy = make_sat(node_name=OTHER, arbiter=arbiter)
-    busy._busy = True  # mid-turn
-    other_room = make_sat(arbiter=arbiter)
+    first = make_sat(arbiter=arbiter)
+    if refuse == "busy":
+        first._busy = True  # mid-turn
+    else:
+        first._turn_starts.extend([time.monotonic()] * vs.RATE_LIMIT_TURNS)
+    other_room = make_sat(node_name=OTHER, speaker=OTHER_SPEAKER, arbiter=arbiter)
+    p_other = _wire(other_room, monkeypatch)
+    before = (_turns(refuse, device=NODE), _turns("duplicate", device=OTHER))
 
-    await busy.handle_start("c1", 0, None, "Hey Jess")
+    await first.handle_start("c1", 0, None, "Hey Jess")
     await other_room.handle_start("c2", 0, None, "Hey Jess")
     await _tick()
-    assert busy._client.errors == ["jess-busy"]
+    assert first._client.errors == ["jess-busy"] and first._run is None
+    assert arbiter.holder == NODE
     assert other_room._run is not None and other_room._run.duplicate is True
-    await other_room.handle_audio(_tone(0.1))
+    await _say(other_room.handle_audio, UTTERANCE)
+    await _drain(other_room)
     assert other_room._client.names == [RUN_START, STT_START, RUN_END] and other_room._client.errors == []
+    assert p_other.speak.await_count == 0
+    assert (_turns(refuse, device=NODE), _turns("duplicate", device=OTHER)) == (before[0] + 1, before[1] + 1)
 
 
 async def test_two_devices_answer_on_their_own_speakers(make_sat, monkeypatch, clock):
@@ -2891,13 +2686,6 @@ async def test_satellite_loop_runs_every_device(monkeypatch, caplog):
     assert f"Bridge started for {NODE}, {OTHER}" in caplog.text
     assert f"{OTHER}: device loop exited unexpectedly: RuntimeError" in caplog.text
     assert "bug in one room" not in caplog.text
-    seeded = {
-        smp.labels["device"]
-        for m in metrics.SATELLITE_TURN_TOTAL.collect()
-        for smp in m.samples
-        if smp.labels.get("result") == "duplicate"
-    }
-    assert {NODE, OTHER} <= seeded
 
 
 async def test_satellite_loop_shutdown_waits_for_every_device(monkeypatch):
@@ -2955,43 +2743,8 @@ async def test_satellite_loop_one_device_failing_keeps_the_other_running(monkeyp
 THIRD = "atom-echo-third"
 
 
-def _wire(sat, monkeypatch, transcript: str = "what time is it") -> SimpleNamespace:
-    """The ``pipeline`` fixture for any satellite: Helios up, STT words, playback ok."""
-    p = SimpleNamespace(
-        status=AsyncMock(return_value=dict(UP)),
-        stt=AsyncMock(return_value=transcript),
-        speak=AsyncMock(return_value="ok"),
-    )
-    monkeypatch.setattr(sat, "_service_status", p.status)
-    monkeypatch.setattr(sat, "_transcribe", p.stt)
-    monkeypatch.setattr(sat, "_speak", p.speak)
-    return p
-
-
 def _bytes_for(ms: int) -> int:
     return vs.SAMPLE_RATE * vs.SAMPLE_WIDTH * ms // 1000
-
-
-@pytest.mark.parametrize(
-    "entry, problem",
-    [
-        pytest.param("a@b@10.0.0.60=media_player.x", "host that is not", id="two-at"),
-        pytest.param("x@@10.0.0.60=media_player.x", "host that is not", id="at-at"),
-        pytest.param("x@=media_player.x", "host that is not", id="empty-host"),
-        pytest.param("x@10.0.0.60=media_player.x=y", "speaker that is not", id="two-eq"),
-        pytest.param("x@10.0.0.60==media_player.x", "speaker that is not", id="eq-eq"),
-        pytest.param("x@10.0.0.60=", "speaker that is not", id="empty-speaker"),
-        pytest.param("x=y@10.0.0.60=media_player.x", "name that is not", id="eq-in-name"),
-        pytest.param("x=media_player.x@10.0.0.60", "is not name@host=speaker", id="swapped"),
-    ],
-)
-def test_parse_devices_repeated_or_misplaced_separators(entry, problem):
-    from orchestrator.config import parse_voice_satellite_devices
-
-    devices, problems = parse_voice_satellite_devices(f"{NODE}@10.0.0.50={SPEAKER},{entry}")
-    assert [d.name for d in devices] == [NODE]
-    assert len(problems) == 1 and problems[0].startswith("entry 2 ") and problem in problems[0]
-    assert "10.0.0.60" not in problems[0]  # named by position, never echoed
 
 
 @pytest.mark.parametrize(
@@ -3011,33 +2764,8 @@ def test_config_blank_device_list_falls_back_to_the_single_device(raw, enabled, 
     assert "are ignored" not in caplog.text
 
 
-@pytest.mark.parametrize(
-    "overrides, problems",
-    [
-        # skipped entries AND a shared-setting failure: both counted
-        pytest.param({"VOICE_SATELLITE_DEVICES": f"{TWO_DEVICES},junk", "HA_TOKEN": None}, 2, id="skip-and-shared"),
-        pytest.param(
-            {"VOICE_SATELLITE_DEVICES": f"{TWO_DEVICES},junk", "VOICE_SATELLITE_API_KEY": None}, 2, id="skip-and-key"
-        ),
-        pytest.param({"VOICE_SATELLITE_API_KEY": None}, 1, id="single-no-key"),
-        pytest.param({"VOICE_SATELLITE_PORT": "0"}, 1, id="single-port"),
-        pytest.param({"VOICE_SATELLITE_SPEAKER": None}, 1, id="single-no-speaker"),
-        # the env var can't set it, even with the feature off
-        pytest.param(
-            {"VOICE_SATELLITE_ENABLED": "false", "VOICE_SATELLITE_CONFIG_PROBLEMS": "5"}, 0, id="off-not-settable"
-        ),
-    ],
-)
-def test_config_problem_count_more_cases(overrides, problems):
-    s = _settings(**overrides)
-    assert s.voice_satellite_config_problems == problems
-    assert s.voice_satellite_enabled is False
-
-
 def test_known_speakers_leave_out_a_skipped_entrys_speaker(monkeypatch):
     """Only valid entries become speaker labels: a typo'd entry's text never does."""
-    from orchestrator import reminder_manager
-    from orchestrator.config import settings
 
     monkeypatch.setattr(settings, "voice_satellite_devices", f"{TWO_DEVICES},x@echo.local=media_player.typo_room")
     known = reminder_manager._known_speakers()
@@ -3118,28 +2846,6 @@ async def test_duplicate_on_one_device_while_the_other_listens(make_sat, monkeyp
     ends_a, ends_b = _listen_ends(NODE), _listen_ends(OTHER)
     assert {r: ends_a[r] - before["ends"][0][r] for r in ends_a} == {r: float(r == "speech_end") for r in ends_a}
     assert {r: ends_b[r] - before["ends"][1][r] for r in ends_b} == {r: float(r == "duplicate") for r in ends_b}
-
-
-async def test_rate_limited_device_still_claims(make_sat, monkeypatch, later):
-    """Like a busy room: a rate-limited device says "busy" and keeps the wake
-    word — the next room doesn't answer instead."""
-    arbiter = vs.WakeArbiter()
-    limited = make_sat(arbiter=arbiter)
-    limited._turn_starts.extend([time.monotonic()] * vs.RATE_LIMIT_TURNS)
-    other_room = make_sat(node_name=OTHER, speaker=OTHER_SPEAKER, arbiter=arbiter)
-    p_other = _wire(other_room, monkeypatch)
-    before = (_turns("rate_limited", device=NODE), _turns("duplicate", device=OTHER))
-
-    await limited.handle_start("c1", 0, None, "Hey Jess")
-    await other_room.handle_start("c2", 0, None, "Hey Jess")
-    await _tick()
-    assert limited._client.errors == ["jess-busy"] and limited._run is None
-    assert arbiter.holder == NODE
-    await _say(other_room.handle_audio, UTTERANCE)
-    await _drain(other_room)
-    assert other_room._client.names == [RUN_START, STT_START, RUN_END] and other_room._client.errors == []
-    assert p_other.speak.await_count == 0
-    assert (_turns("rate_limited", device=NODE), _turns("duplicate", device=OTHER)) == (before[0] + 1, before[1] + 1)
 
 
 async def test_button_on_another_device_during_a_claim_answers(make_sat, monkeypatch):
@@ -3265,7 +2971,6 @@ async def test_satellite_loop_without_devices_logs_and_returns(monkeypatch, capl
 async def test_satellite_loop_seeds_every_series_for_every_device(monkeypatch):
     """Exact, on fresh metrics: each device gets its connected gauge at 0, every
     connect result, every listen-end reason and the duplicate turn series."""
-    from prometheus_client import CollectorRegistry, Counter, Gauge
 
     reg = CollectorRegistry()
     fresh = {

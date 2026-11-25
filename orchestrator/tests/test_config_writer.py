@@ -2,12 +2,11 @@
 Tests for orchestrator/config_writer.py.
 
 Covers:
-1. atomic_write_yaml happy path — file content matches input dict.
+1. atomic_write_yaml round trip — scalars, nested dicts/lists via yaml.safe_load.
 2. Atomicity — os.replace failure leaves original file intact AND tmpfile cleaned up.
-3. Recursive serialization — nested dicts/lists round-trip via yaml.safe_load.
-4. _redact recursively masks credential-shaped keys (case-insensitive) in dicts
+3. _redact recursively masks credential-shaped keys (case-insensitive) in dicts
    and list-of-dicts; preserves unrelated keys.
-5. log_config_change inserts a row into config_changes with the right panel
+4. log_config_change inserts a row into config_changes with the right panel
    and redacted diff; failure mode: get_db raising must NOT raise upward.
 """
 
@@ -23,19 +22,6 @@ import yaml
 # ---------------------------------------------------------------------------
 # atomic_write_yaml
 # ---------------------------------------------------------------------------
-
-
-def test_atomic_write_yaml_happy_path(tmp_path: Path):
-    from orchestrator.config_writer import atomic_write_yaml
-
-    target = tmp_path / "out.yaml"
-    payload = {"a": 1, "b": "two", "c": [1, 2, 3]}
-    atomic_write_yaml(target, payload)
-
-    assert target.exists()
-    with open(target) as f:
-        loaded = yaml.safe_load(f)
-    assert loaded == payload
 
 
 def test_atomic_write_yaml_creates_parent_dirs(tmp_path: Path):
@@ -76,8 +62,8 @@ def test_atomic_write_yaml_failure_leaves_original_intact_and_cleans_tmp(tmp_pat
     assert leftover_tmps == [], f"leftover tempfiles: {leftover_tmps}"
 
 
-def test_atomic_write_yaml_round_trip_nested_structures(tmp_path: Path):
-    """Nested dicts and lists round-trip cleanly."""
+def test_atomic_write_yaml_round_trip(tmp_path: Path):
+    """Scalars, nested dicts and lists round-trip cleanly."""
     from orchestrator.config_writer import atomic_write_yaml
 
     target = tmp_path / "complex.yaml"
@@ -99,6 +85,9 @@ def test_atomic_write_yaml_round_trip_nested_structures(tmp_path: Path):
             "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
         },
         "list_of_dicts": [{"a": 1}, {"b": [2, 3]}],
+        "a": 1,
+        "b": "two",
+        "c": [1, 2, 3],
     }
     atomic_write_yaml(target, payload)
 

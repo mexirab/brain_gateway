@@ -29,6 +29,7 @@ import pytest
 from orchestrator import calculator, prompt_builder, tool_definitions, tool_handlers
 from orchestrator.calculator import CATEGORIES, evaluate, medication_name_tokens
 from orchestrator.metrics import CALCULATE_TOTAL
+from orchestrator.tests._helpers import metric_value
 from orchestrator.tool_registry import execute_tool
 from orchestrator.unified_loop import TERMINAL_TOOLS
 
@@ -645,14 +646,13 @@ def test_medication_name_tokens_reads_every_bucket():
 
 
 def _count(result: str) -> float:
-    return CALCULATE_TOTAL.labels(result=result)._value.get()
+    return metric_value(CALCULATE_TOTAL, result=result)
 
 
 def test_metric_labels_match_categories():
     assert {key[0] for key in CALCULATE_TOTAL._metrics} == set(CATEGORIES)
 
 
-@pytest.mark.asyncio
 async def test_handler_returns_text_and_counts(monkeypatch):
     monkeypatch.setattr(tool_handlers, "get_medications", lambda: {})
     before = _count("ok")
@@ -661,7 +661,6 @@ async def test_handler_returns_text_and_counts(monkeypatch):
     assert _count("ok") == before + 1
 
 
-@pytest.mark.asyncio
 async def test_handler_accepts_expression_alias_and_line_lists(monkeypatch):
     monkeypatch.setattr(tool_handlers, "get_medications", lambda: {})
     assert await execute_tool("calculate", {"expression": "2 + 2"}) == "result: 4"
@@ -669,7 +668,6 @@ async def test_handler_accepts_expression_alias_and_line_lists(monkeypatch):
     assert out.splitlines()[0] == "result: 6"
 
 
-@pytest.mark.asyncio
 async def test_handler_uses_the_local_zone(monkeypatch):
     monkeypatch.setattr(tool_handlers, "get_medications", lambda: {})
     monkeypatch.setattr(tool_handlers.shared, "TIMEZONE", "America/Chicago")
@@ -680,7 +678,6 @@ async def test_handler_uses_the_local_zone(monkeypatch):
     assert out == "result: 12 hours"  # bad TZ setting: clock-time fallback, no crash
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("tz", ["", "../etc/localtime"])
 async def test_handler_falls_back_on_a_malformed_zone_key(monkeypatch, tz):
     # ZoneInfo raises ValueError (not ZoneInfoNotFoundError/KeyError) for these.
@@ -692,7 +689,6 @@ async def test_handler_falls_back_on_a_malformed_zone_key(monkeypatch, tz):
     assert _count("ok") == before + 1
 
 
-@pytest.mark.asyncio
 async def test_handler_refuses_the_users_medication_names(monkeypatch):
     monkeypatch.setattr(tool_handlers, "get_medications", lambda: {"as_needed": [{"name": "Exampleamine"}]})
     before = _count("refused_med_name")
@@ -701,7 +697,6 @@ async def test_handler_refuses_the_users_medication_names(monkeypatch):
     assert _count("refused_med_name") == before + 1
 
 
-@pytest.mark.asyncio
 async def test_handler_reports_errors_without_raising(monkeypatch):
     monkeypatch.setattr(tool_handlers, "get_medications", lambda: {})
     before = _count("not_allowed")
@@ -714,7 +709,6 @@ async def test_handler_reports_errors_without_raising(monkeypatch):
     assert _count("empty") == before + 2
 
 
-@pytest.mark.asyncio
 async def test_handler_logs_no_program_content(monkeypatch, caplog):
     monkeypatch.setattr(tool_handlers, "get_medications", lambda: {"as_needed": [{"name": "Exampleamine"}]})
     caplog.set_level(logging.DEBUG)

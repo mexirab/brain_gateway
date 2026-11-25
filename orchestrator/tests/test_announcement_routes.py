@@ -20,6 +20,18 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import yaml
 
+from orchestrator import announcement_routes as ar
+from orchestrator import shared
+from orchestrator.announcement_routes import (
+    CATEGORIES,
+    _validate,
+    _validate_speaker_string,
+    discover_ha_speakers,
+    load_routes,
+    route_for,
+    save_routes,
+)
+
 # ---------------------------------------------------------------------------
 # Fixtures: redirect the YAML path + reset module state per test
 # ---------------------------------------------------------------------------
@@ -33,8 +45,6 @@ def _isolate_announcement_routes(monkeypatch, tmp_path):
 
     # Force the module to re-read the env var by reassigning ROUTES_PATH at
     # import time. The module captures `os.environ.get(...)` at module-load.
-    from orchestrator import announcement_routes as ar
-
     monkeypatch.setattr(ar, "ROUTES_PATH", str(yaml_path))
     # Reset the cache between tests
     monkeypatch.setattr(ar, "_cache", None)
@@ -68,47 +78,35 @@ def stub_legacy_env(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_validate_speaker_accepts_single_entity_id():
-    from orchestrator.announcement_routes import _validate_speaker_string
-
-    assert _validate_speaker_string("media_player.office_max", "x") == "media_player.office_max"
-
-
-def test_validate_speaker_accepts_comma_list():
-    from orchestrator.announcement_routes import _validate_speaker_string
-
-    out = _validate_speaker_string("media_player.a,media_player.b , media_player.c", "x")
-    assert out == "media_player.a,media_player.b,media_player.c"
-
-
-def test_validate_speaker_accepts_empty():
-    from orchestrator.announcement_routes import _validate_speaker_string
-
-    assert _validate_speaker_string("", "x") == ""
-    assert _validate_speaker_string(None, "x") == ""
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        pytest.param("media_player.office_max", "media_player.office_max", id="single"),
+        pytest.param(
+            "media_player.a,media_player.b , media_player.c",
+            "media_player.a,media_player.b,media_player.c",
+            id="comma-list",
+        ),
+        pytest.param("", "", id="empty"),
+        pytest.param(None, "", id="none"),
+    ],
+)
+def test_validate_speaker_accepts(raw, expected):
+    assert _validate_speaker_string(raw, "x") == expected
 
 
-def test_validate_speaker_rejects_non_string():
-    from orchestrator.announcement_routes import _validate_speaker_string
-
-    with pytest.raises(ValueError, match="must be a string"):
-        _validate_speaker_string(42, "routes.x")
-
-
-def test_validate_speaker_rejects_missing_dot():
-    from orchestrator.announcement_routes import _validate_speaker_string
-
-    with pytest.raises(ValueError, match="must look like"):
-        _validate_speaker_string("office_max", "x")
-
-
-def test_validate_speaker_rejects_embedded_whitespace():
-    from orchestrator.announcement_routes import _validate_speaker_string
-
-    # Strict entity regex (2026-10-02) replaced the separate whitespace check;
-    # the rejection itself is unchanged.
-    with pytest.raises(ValueError, match="must look like"):
-        _validate_speaker_string("media player.office", "x")
+@pytest.mark.parametrize(
+    "raw, match",
+    [
+        pytest.param(42, "must be a string", id="non-string"),
+        pytest.param("office_max", "must look like", id="missing-dot"),
+        # The strict entity regex (2026-10-02) replaced a separate whitespace check.
+        pytest.param("media player.office", "must look like", id="embedded-whitespace"),
+    ],
+)
+def test_validate_speaker_rejects(raw, match):
+    with pytest.raises(ValueError, match=match):
+        _validate_speaker_string(raw, "routes.x")
 
 
 # ---------------------------------------------------------------------------
@@ -116,32 +114,18 @@ def test_validate_speaker_rejects_embedded_whitespace():
 # ---------------------------------------------------------------------------
 
 
-def test_validate_rejects_non_dict():
-    from orchestrator.announcement_routes import _validate
-
-    with pytest.raises(ValueError, match="must be an object"):
-        _validate([])
-
-
-def test_validate_rejects_routes_not_dict():
-    from orchestrator.announcement_routes import _validate
-
-    with pytest.raises(ValueError, match="routes must be an object"):
-        _validate({"routes": []})
-
-
-def test_validate_rejects_blank_category_name():
-    from orchestrator.announcement_routes import _validate
-
-    with pytest.raises(ValueError, match="category id"):
-        _validate({"routes": {"": "media_player.x"}})
-
-
-def test_validate_strips_per_category_invalid_speaker():
-    from orchestrator.announcement_routes import _validate
-
-    with pytest.raises(ValueError, match="routes.selfcare"):
-        _validate({"routes": {"selfcare": "no-dot-here"}})
+@pytest.mark.parametrize(
+    "payload, match",
+    [
+        pytest.param([], "must be an object", id="non-dict"),
+        pytest.param({"routes": []}, "routes must be an object", id="routes-not-dict"),
+        pytest.param({"routes": {"": "media_player.x"}}, "category id", id="blank-category"),
+        pytest.param({"routes": {"selfcare": "no-dot-here"}}, "routes.selfcare", id="bad-speaker-named"),
+    ],
+)
+def test_validate_rejects(payload, match):
+    with pytest.raises(ValueError, match=match):
+        _validate(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -150,8 +134,6 @@ def test_validate_strips_per_category_invalid_speaker():
 
 
 def test_load_routes_returns_defaults_when_file_missing(stub_legacy_env):
-    from orchestrator.announcement_routes import CATEGORIES, load_routes
-
     data = load_routes()
     assert set(data["routes"].keys()) == set(CATEGORIES)
     assert data["routes"]["briefing"] == stub_legacy_env["briefing"]
@@ -160,8 +142,6 @@ def test_load_routes_returns_defaults_when_file_missing(stub_legacy_env):
 
 
 def test_save_routes_round_trip(_isolate_announcement_routes, stub_legacy_env):
-    from orchestrator.announcement_routes import load_routes, save_routes
-
     saved = save_routes({"routes": {"selfcare": "media_player.office_max"}})
     assert saved["routes"]["selfcare"] == "media_player.office_max"
 
@@ -180,8 +160,6 @@ def test_save_routes_round_trip(_isolate_announcement_routes, stub_legacy_env):
 def test_save_routes_empty_value_falls_back_to_legacy(_isolate_announcement_routes, stub_legacy_env):
     """The killer edge case: user clears a field. Backend should fall back
     to the legacy default, not silence the category with an empty string."""
-    from orchestrator.announcement_routes import save_routes
-
     # First set a custom value
     save_routes({"routes": {"selfcare": "media_player.office_max"}})
     # Then clear it
@@ -191,8 +169,6 @@ def test_save_routes_empty_value_falls_back_to_legacy(_isolate_announcement_rout
 
 
 def test_load_routes_returns_defaults_on_corrupt_yaml(_isolate_announcement_routes, stub_legacy_env):
-    from orchestrator.announcement_routes import load_routes
-
     _isolate_announcement_routes.write_text("not: [valid: yaml")
     data = load_routes()
     # Should fall back to defaults, not raise
@@ -200,8 +176,6 @@ def test_load_routes_returns_defaults_on_corrupt_yaml(_isolate_announcement_rout
 
 
 def test_save_routes_invalidates_cache(_isolate_announcement_routes, stub_legacy_env):
-    from orchestrator import announcement_routes as ar
-
     # Prime the cache
     ar.load_routes()
     assert ar._cache is not None
@@ -217,83 +191,74 @@ def test_save_routes_invalidates_cache(_isolate_announcement_routes, stub_legacy
 # ---------------------------------------------------------------------------
 
 
-def test_route_for_returns_per_category_value(_isolate_announcement_routes, stub_legacy_env):
-    from orchestrator.announcement_routes import route_for, save_routes
-
-    save_routes({"routes": {"selfcare": "media_player.office_max"}})
-    assert route_for("selfcare") == "media_player.office_max"
+_REMINDER = {"reminder": "media_player.reminder_target"}
 
 
-def test_route_for_falls_back_to_default_key(_isolate_announcement_routes, stub_legacy_env):
-    """When a category has no entry but a `default` is configured, default wins."""
-    from orchestrator.announcement_routes import route_for, save_routes
-
-    # selfcare gets cleared, default gets set
-    save_routes({"routes": {"selfcare": "", "default": "media_player.fallback_a"}})
-    # An announcement_type the categories list doesn't know about should hit `default`
-    assert route_for("unknown_category") == "media_player.fallback_a"
-
-
-def test_route_for_falls_back_to_reminder_when_default_missing(_isolate_announcement_routes, stub_legacy_env):
-    from orchestrator.announcement_routes import route_for, save_routes
-
-    save_routes({"routes": {"reminder": "media_player.reminder_target"}})
-    # An unknown category with no `default` falls through to `reminder`
-    assert route_for("zzz_unknown") == "media_player.reminder_target"
-
-
-def test_route_for_falls_back_to_legacy_when_nothing_configured(stub_legacy_env):
-    from orchestrator.announcement_routes import route_for
-
-    # No save calls — everything is at legacy fallbacks
-    assert route_for("briefing") == stub_legacy_env["briefing"]
-    assert route_for("focus") == stub_legacy_env["focus"]
-    assert route_for("selfcare") == stub_legacy_env["reminder"]
-
-
-def test_route_for_handles_none_announcement_type(stub_legacy_env):
-    from orchestrator.announcement_routes import route_for
-
-    # None / "" should still return a usable speaker (legacy reminder fallback)
-    assert route_for(None) == stub_legacy_env["reminder"]
-    assert route_for("") == stub_legacy_env["reminder"]
+@pytest.mark.parametrize(
+    "saved, category, expected",
+    [
+        pytest.param({"selfcare": "media_player.office_max"}, "selfcare", "media_player.office_max", id="per-category"),
+        # A category the panel doesn't know: `default` wins when set...
+        pytest.param(
+            {"selfcare": "", "default": "media_player.fallback_a"},
+            "unknown_category",
+            "media_player.fallback_a",
+            id="unknown-uses-default",
+        ),
+        # ...else `reminder`.
+        pytest.param(_REMINDER, "zzz_unknown", "media_player.reminder_target", id="unknown-uses-reminder"),
+        # Nothing saved: the legacy env-var speakers.
+        pytest.param(None, "briefing", "media_player.briefing_default", id="legacy-briefing"),
+        pytest.param(None, "focus", "media_player.focus_default", id="legacy-focus"),
+        pytest.param(None, "selfcare", "media_player.generic_default", id="legacy-selfcare"),
+        pytest.param(None, None, "media_player.generic_default", id="legacy-none-type"),
+        pytest.param(None, "", "media_player.generic_default", id="legacy-empty-type"),
+        # `temperature` was added after the panel shipped: left unset it must keep
+        # following the panel's default/reminder route, not jump to the legacy speaker.
+        pytest.param(_REMINDER, "temperature", "media_player.reminder_target", id="temperature-follows-reminder"),
+        pytest.param(
+            {"default": "media_player.default_target", **_REMINDER},
+            "temperature",
+            "media_player.default_target",
+            id="temperature-follows-default",
+        ),
+        pytest.param(
+            {**_REMINDER, "temperature": "media_player.closet_target"},
+            "temperature",
+            "media_player.closet_target",
+            id="temperature-own-route",
+        ),
+        pytest.param(
+            {**_REMINDER, "temperature": "media_player.closet_target"},
+            "reminder",
+            "media_player.reminder_target",
+            id="temperature-route-leaves-reminder",
+        ),
+        pytest.param(None, "temperature", "media_player.generic_default", id="temperature-legacy"),
+    ],
+)
+def test_route_for(stub_legacy_env, saved, category, expected):
+    if saved is not None:
+        save_routes({"routes": saved})
+    assert route_for(category) == expected
 
 
 # ---------------------------------------------------------------------------
 # discover_ha_speakers
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
 async def test_discover_returns_empty_when_ha_client_none(monkeypatch):
     """Frontend can degrade gracefully if HA isn't reachable."""
-    import sys
-
-    fake_shared = MagicMock()
-    fake_shared.ha_client = None
-    monkeypatch.setitem(sys.modules, "orchestrator.shared", fake_shared)
-
-    from orchestrator.announcement_routes import discover_ha_speakers
-
+    monkeypatch.setattr(shared, "ha_client", None)
     assert await discover_ha_speakers() == []
 
 
-@pytest.mark.asyncio
 async def test_discover_returns_sorted_friendly_names(monkeypatch):
-    import sys
-
     e1 = MagicMock(entity_id="media_player.zebra", friendly_name="Zebra room", state="off")
     e2 = MagicMock(entity_id="media_player.alpha", friendly_name="Alpha room", state="playing")
-
     fake_client = MagicMock()
     fake_client.refresh_entities = AsyncMock()
     fake_client.get_entities_by_domain.return_value = [e1, e2]
-
-    fake_shared = MagicMock()
-    fake_shared.ha_client = fake_client
-    monkeypatch.setitem(sys.modules, "orchestrator.shared", fake_shared)
-
-    from orchestrator.announcement_routes import discover_ha_speakers
+    monkeypatch.setattr(shared, "ha_client", fake_client)
 
     out = await discover_ha_speakers()
     assert [s["entity_id"] for s in out] == ["media_player.alpha", "media_player.zebra"]
@@ -301,48 +266,8 @@ async def test_discover_returns_sorted_friendly_names(monkeypatch):
     assert out[0]["state"] == "playing"
 
 
-@pytest.mark.asyncio
 async def test_discover_swallows_exceptions(monkeypatch):
-    import sys
-
     fake_client = MagicMock()
     fake_client.refresh_entities = AsyncMock(side_effect=RuntimeError("HA down"))
-
-    fake_shared = MagicMock()
-    fake_shared.ha_client = fake_client
-    monkeypatch.setitem(sys.modules, "orchestrator.shared", fake_shared)
-
-    from orchestrator.announcement_routes import discover_ha_speakers
-
-    # Swallows exception, returns empty list
+    monkeypatch.setattr(shared, "ha_client", fake_client)
     assert await discover_ha_speakers() == []
-
-
-def test_unset_temperature_follows_panel_reminder_route(_isolate_announcement_routes, stub_legacy_env):
-    """`temperature` was added after the panel shipped: left unset it must keep
-    following the panel's reminder route, not jump to the legacy env speaker."""
-    from orchestrator.announcement_routes import route_for, save_routes
-
-    save_routes({"routes": {"reminder": "media_player.reminder_target"}})
-    assert route_for("temperature") == "media_player.reminder_target"
-
-
-def test_unset_temperature_follows_panel_default_route(_isolate_announcement_routes, stub_legacy_env):
-    from orchestrator.announcement_routes import route_for, save_routes
-
-    save_routes({"routes": {"default": "media_player.default_target", "reminder": "media_player.reminder_target"}})
-    assert route_for("temperature") == "media_player.default_target"
-
-
-def test_temperature_route_can_be_set_on_its_own(_isolate_announcement_routes, stub_legacy_env):
-    from orchestrator.announcement_routes import route_for, save_routes
-
-    save_routes({"routes": {"reminder": "media_player.reminder_target", "temperature": "media_player.closet_target"}})
-    assert route_for("temperature") == "media_player.closet_target"
-    assert route_for("reminder") == "media_player.reminder_target"
-
-
-def test_temperature_with_nothing_configured_uses_legacy_reminder(stub_legacy_env):
-    from orchestrator.announcement_routes import route_for
-
-    assert route_for("temperature") == stub_legacy_env["reminder"]

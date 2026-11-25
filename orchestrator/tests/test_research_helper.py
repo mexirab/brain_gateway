@@ -27,6 +27,7 @@ from prometheus_client import REGISTRY
 
 from orchestrator import prompt_builder, shared, tool_definitions, web_search
 from orchestrator import research_helper as rh
+from orchestrator.tests._helpers import metric_value
 
 QUESTION = "How do I read a cookie in Next.js middleware?"
 _OPEN_RE = re.compile(r"^BEGIN UNTRUSTED RESEARCH RESULT \[id ([0-9a-f]{8})\]")
@@ -261,7 +262,7 @@ async def test_per_round_and_total_source_caps(enabled, sources, monkeypatch):
 
 
 def _outcome(result):
-    return rh.RESEARCH_LOOKUPS_TOTAL.labels(topic="coding", result=result)._value.get()
+    return metric_value(rh.RESEARCH_LOOKUPS_TOTAL, topic="coding", result=result)
 
 
 async def test_brain_error_and_empty_answer(enabled, monkeypatch):
@@ -377,11 +378,11 @@ def _patch_call_model(monkeypatch, fake):
 
 
 def _brain_errors(error_type):
-    return rh.BACKGROUND_LLM_ERRORS.labels(caller="research_helper", error_type=error_type)._value.get()
+    return metric_value(rh.BACKGROUND_LLM_ERRORS, caller="research_helper", error_type=error_type)
 
 
 def _brain_calls():
-    return rh.LLM_CALL_COUNT.labels(model="primary", purpose="research_helper")._value.get()
+    return metric_value(rh.LLM_CALL_COUNT, model="primary", purpose="research_helper")
 
 
 def _brain_latency_count():
@@ -875,7 +876,7 @@ def _use_search_client(monkeypatch, client):
 
 
 def _source_count(tool, result):
-    return rh.RESEARCH_SOURCE_CALLS_TOTAL.labels(tool=tool, result=result)._value.get()
+    return metric_value(rh.RESEARCH_SOURCE_CALLS_TOTAL, tool=tool, result=result)
 
 
 async def test_web_search_lists_at_most_six_results_framed(monkeypatch):

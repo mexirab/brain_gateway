@@ -324,7 +324,7 @@ Each phase is independently useful and shippable behind `PANTRY_ENABLED`.
 - [x] Receipt prompt + parsing, `pantry_aliases` learning, dedup guard (`orchestrator/receipt_scanner.py`)
 - [x] `/pantry` Stock-take tab "Receipt" kind + receipt review screen
 - [x] Grafana: scans by kind, "Receipt Lines (/7d)", "Scan Latency p95 by Kind"
-- [x] Tests: `test_receipt_scanner.py`, `test_receipt_routes.py`
+- [x] Tests: `test_receipt_scanner.py`, receipt routes in `test_pantry_routes.py`
 - [ ] Telegram photo caption routing (`receipt`, `fridge`) — deferred (touches `telegram_bot.py`)
 
 **Phase 3 as built — deviations from the spec above:**

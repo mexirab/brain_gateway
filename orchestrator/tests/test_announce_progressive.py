@@ -11,7 +11,8 @@ audio_stream.py stream URL while the rest is still being synthesized.
     with a secrets.token_urlsafe(18) name
   - the volume floor still runs before play_media on the stream path
 
-HA is mocked with respx; TTS is a fake WAV backend. No real network.
+HA is mocked with respx; TTS is a fake WAV backend; setup is
+``ha_voice_announce_env``. No real network.
 """
 
 from __future__ import annotations
@@ -19,8 +20,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import struct
-from unittest.mock import mock_open
 
 import httpx
 import pytest
@@ -28,6 +27,7 @@ import respx
 from httpx import Response
 
 from orchestrator import audio_stream
+from orchestrator.tests.fixtures_ha_voice import build_wav, ha_state_handler
 
 HA = "http://ha.test:8123"
 ORCH = "http://orch.test:8888"
@@ -48,10 +48,7 @@ SHORT = "Okay, the kitchen light is on now."
 
 
 def _wav(seconds: float, rate: int = 8000) -> bytes:
-    pcm = b"\x01\x00" * int(seconds * rate)
-    fmt = struct.pack("<HHIIHH", 1, 1, rate, rate * 2, 2, 16)
-    body = b"WAVE" + b"fmt " + struct.pack("<I", 16) + fmt + b"data" + struct.pack("<I", len(pcm)) + pcm
-    return b"RIFF" + struct.pack("<I", len(body)) + body
+    return build_wav(b"\x01\x00" * int(seconds * rate), rate=rate)
 
 
 class _WavBackend:
@@ -93,21 +90,9 @@ async def _streams(monkeypatch):
 
 
 @pytest.fixture
-def env(monkeypatch):
-    """Pin HA / orchestrator URLs, stub history + routing. Returns a dict the
-    test fills with the backend; spies on mark_cast/abort and the counter."""
-    from orchestrator import announcement_routes, reminder_manager, shared
-
-    monkeypatch.setattr(reminder_manager, "HA_URL", HA, raising=False)
-    monkeypatch.setattr(reminder_manager, "HA_TOKEN", "tok", raising=False)
-    monkeypatch.setattr(reminder_manager, "ORCHESTRATOR_URL", ORCH, raising=False)
-    monkeypatch.setattr(reminder_manager, "REMINDER_SPEAKER", "", raising=False)
-    monkeypatch.setattr(shared, "DND_ACTIVE", False, raising=False)
-    monkeypatch.setattr(shared, "is_voice_session_active", lambda *a, **k: False)
-    monkeypatch.setattr(shared, "_http", None, raising=False)
-    monkeypatch.setattr(reminder_manager, "_record_announcement", lambda *a, **k: None)
-    monkeypatch.setattr(announcement_routes, "route_for", lambda cat: "")
-
+def env(ha_voice_announce_env, monkeypatch):
+    """The shared announce setup plus spies on mark_cast/abort and the outcome
+    counter. Returns a dict; the test installs its backend with ``use``."""
     calls: list[tuple] = []
     orig_mark, orig_abort = audio_stream.AudioStream.mark_cast, audio_stream.AudioStream.abort
 
@@ -123,25 +108,12 @@ def env(monkeypatch):
     monkeypatch.setattr(audio_stream.AudioStream, "abort", abort)
     counted: list[str] = []
     monkeypatch.setattr(audio_stream, "_count", counted.append)
-
-    def use(backend):
-        monkeypatch.setattr(shared, "tts_backend", backend, raising=False)
-        return backend
-
-    return {"calls": calls, "counted": counted, "use": use}
-
-
-@pytest.fixture
-def no_file_writes(monkeypatch):
-    """The one-clip path writes /tmp/brain_audio/<name>; make it a no-op."""
-    monkeypatch.setattr("os.makedirs", lambda path, exist_ok=False: None)
-    monkeypatch.setattr("builtins.open", mock_open())
+    return {"calls": calls, "counted": counted, "use": ha_voice_announce_env.use}
 
 
 def _ha(mock: respx.MockRouter, play=None):
-    mock.get(url__startswith=f"{HA}/api/states/").mock(
-        return_value=Response(200, json={"state": "idle", "attributes": {"volume_level": 0.1}})
-    )
+    states, _ = ha_state_handler(default="idle", attributes={"volume_level": 0.1})
+    mock.get(url__startswith=f"{HA}/api/states/").mock(side_effect=states)
     if play is None:
         play = Response(200, json=[])
     route = mock.post(PLAY)
@@ -266,7 +238,7 @@ async def test_first_chunk_tts_failure_is_reported_like_one_clip(env):
     assert env["calls"] == [] and env["counted"] == []
 
 
-async def test_short_reply_uses_one_clip_with_token_name(env, no_file_writes):
+async def test_short_reply_uses_one_clip_with_token_name(env):
     backend = env["use"](_WavBackend(hold=False))
     with respx.mock(assert_all_called=False) as mock:
         play = _ha(mock)
@@ -280,7 +252,7 @@ async def test_short_reply_uses_one_clip_with_token_name(env, no_file_writes):
     assert env["calls"] == [] and env["counted"] == [] and audio_stream._STREAMS == {}
 
 
-async def test_non_wav_backend_uses_one_clip_and_counts_not_wav(env, no_file_writes):
+async def test_non_wav_backend_uses_one_clip_and_counts_not_wav(env):
     backend = env["use"](_Mp3Backend())
     with respx.mock(assert_all_called=False) as mock:
         play = _ha(mock)
@@ -293,7 +265,7 @@ async def test_non_wav_backend_uses_one_clip_and_counts_not_wav(env, no_file_wri
     assert env["counted"] == ["not_wav"]
 
 
-async def test_progressive_off_keeps_one_clip(env, no_file_writes):
+async def test_progressive_off_keeps_one_clip(env):
     backend = env["use"](_WavBackend(hold=False))
     with respx.mock(assert_all_called=False) as mock:
         play = _ha(mock)
@@ -318,7 +290,7 @@ async def test_volume_floor_runs_before_stream_play(env):
     assert STREAM_URL.match(_played(play)[0]["media_content_id"])
 
 
-async def test_next_reply_on_same_speaker_supersedes_the_last(env, no_file_writes):
+async def test_next_reply_on_same_speaker_supersedes_the_last(env):
     env["use"](_WavBackend())
     with respx.mock(assert_all_called=False) as mock:
         play = _ha(mock)

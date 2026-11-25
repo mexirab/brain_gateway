@@ -5,34 +5,21 @@ summaries, personal bests, and API data functions.
 Uses a temporary SQLite database for isolation.
 """
 
-import os
 from datetime import date, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Setup: patch DB_PATH before importing progress_tracker
-# ---------------------------------------------------------------------------
+from orchestrator import progress_tracker
+from orchestrator.tests._helpers import metric_value
 
 
 @pytest.fixture(autouse=True)
-def tmp_db(tmp_path):
-    """Use a temporary database for each test."""
-    db_path = str(tmp_path / "test_progress.db")
-    with patch.dict(os.environ, {"PROGRESS_DB_PATH": db_path}):
-        from orchestrator import progress_tracker
-
-        progress_tracker.DB_PATH = db_path
-        progress_tracker.init_db()
-        yield progress_tracker
-        # Reset module-level DB_PATH back for safety
-        progress_tracker.DB_PATH = db_path
-
-
-@pytest.fixture
-def tracker(tmp_db):
-    return tmp_db
+def tracker(tmp_path, monkeypatch):
+    """progress_tracker on a fresh database; monkeypatch restores DB_PATH after."""
+    monkeypatch.setattr(progress_tracker, "DB_PATH", str(tmp_path / "test_progress.db"))
+    progress_tracker.init_db()
+    return progress_tracker
 
 
 # ---------------------------------------------------------------------------
@@ -41,19 +28,20 @@ def tracker(tmp_db):
 
 
 class TestRecordEvent:
-    def test_task_done_increments(self, tracker):
-        tracker.record_event("task_done")
-        stats = tracker.get_today_stats()
-        assert stats["tasks_completed"] == 1
-
-        tracker.record_event("task_done")
-        stats = tracker.get_today_stats()
-        assert stats["tasks_completed"] == 2
-
-    def test_brain_dump_increments(self, tracker):
-        tracker.record_event("brain_dump", {"count": 3})
-        stats = tracker.get_today_stats()
-        assert stats["brain_dumps"] == 1  # count is metadata, column increments by 1
+    @pytest.mark.parametrize(
+        ("event", "meta", "column"),
+        [
+            pytest.param("task_done", None, "tasks_completed", id="task"),
+            # count is metadata; the column increments by 1 per dump
+            pytest.param("brain_dump", {"count": 3}, "brain_dumps", id="brain-dump"),
+            pytest.param("reminder_done", None, "reminders_done", id="reminder"),
+        ],
+    )
+    def test_counter_events_increment(self, tracker, event, meta, column):
+        tracker.record_event(event, meta)
+        assert tracker.get_today_stats()[column] == 1
+        tracker.record_event(event, meta)
+        assert tracker.get_today_stats()[column] == 2
 
     def test_focus_complete(self, tracker):
         tracker.record_event("focus_complete", {"minutes": 25, "sprints": 1})
@@ -66,11 +54,6 @@ class TestRecordEvent:
         stats = tracker.get_today_stats()
         assert stats["focus_sessions"] == 0  # no session increment
         assert stats["focus_minutes"] == 12
-
-    def test_reminder_done(self, tracker):
-        tracker.record_event("reminder_done")
-        stats = tracker.get_today_stats()
-        assert stats["reminders_done"] == 1
 
     def test_unknown_event_type_ignored(self, tracker):
         tracker.record_event("unknown_type")
@@ -148,49 +131,15 @@ class TestStreaks:
 
 
 # ---------------------------------------------------------------------------
-# Streak announcements
-# ---------------------------------------------------------------------------
-
-
-class TestStreakAnnouncements:
-    def test_milestone_reached(self, tracker):
-        """Verify streak reaches a milestone value that would trigger announcement."""
-        today = date.today()
-        yesterday = (today - timedelta(days=1)).isoformat()
-
-        # Set up streak at 2 (will become 3 = milestone)
-        with tracker.get_db() as conn:
-            conn.execute(
-                "INSERT INTO streaks (category, current_streak, longest_streak, last_active_date, updated_at) "
-                "VALUES (?, 2, 2, ?, ?)",
-                ("task", yesterday, yesterday),
-            )
-
-        tracker.record_event("task_done")  # streak -> 3
-
-        streaks = tracker.get_streaks()
-        task_streak = next(s for s in streaks["streaks"] if s["category"] == "task")
-        assert task_streak["current"] == 3
-        assert 3 in tracker.STREAK_MILESTONES
-
-    def test_non_milestone_not_triggered(self, tracker):
-        """Streak at 2 or 4 should not be a milestone."""
-        assert 2 not in tracker.STREAK_MILESTONES
-        assert 4 not in tracker.STREAK_MILESTONES
-
-
-# ---------------------------------------------------------------------------
 # Daily/weekly summaries
 # ---------------------------------------------------------------------------
 
 
 class TestSummaries:
-    @pytest.mark.asyncio
     async def test_daily_summary_empty_day(self, tracker):
         summary = await tracker.daily_summary()
         assert "quiet day" in summary
 
-    @pytest.mark.asyncio
     async def test_daily_summary_with_activity(self, tracker):
         tracker.record_event("task_done")
         tracker.record_event("task_done")
@@ -199,12 +148,10 @@ class TestSummaries:
         assert "2 tasks" in summary
         assert "25 minutes" in summary
 
-    @pytest.mark.asyncio
     async def test_weekly_summary_empty(self, tracker):
         summary = await tracker.weekly_summary()
         assert "quiet" in summary
 
-    @pytest.mark.asyncio
     async def test_weekly_summary_with_data(self, tracker):
         tracker.record_event("task_done")
         tracker.record_event("brain_dump")
@@ -218,30 +165,20 @@ class TestSummaries:
 
 
 class TestAPIData:
-    def test_get_today_stats_empty(self, tracker):
+    def test_empty_database(self, tracker):
         stats = tracker.get_today_stats()
         assert stats["date"] == date.today().isoformat()
         assert stats["tasks_completed"] == 0
-
-    def test_get_week_stats_backfill(self, tracker):
         week = tracker.get_week_stats()
-        assert len(week["days"]) == 7
+        assert len(week["days"]) == 7  # backfilled
         assert all(d["tasks_completed"] == 0 for d in week["days"])
-
-    def test_get_week_stats_trend_flat_when_empty(self, tracker):
-        week = tracker.get_week_stats()
         assert week["trend"] == "flat"
         assert week["best_day"] is None
-
-    def test_get_streaks_empty(self, tracker):
-        streaks = tracker.get_streaks()
-        assert streaks["streaks"] == []
+        assert tracker.get_streaks()["streaks"] == []
 
     def test_init_db_idempotent(self, tracker):
-        # Calling init_db again should not error
-        tracker.init_db()
-        stats = tracker.get_today_stats()
-        assert stats["date"] == date.today().isoformat()
+        tracker.init_db()  # second call must not error
+        assert tracker.get_today_stats()["date"] == date.today().isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -259,20 +196,69 @@ class TestPersonalBest:
         assert result is None  # no historical data to compare against
 
     def test_best_when_exceeds_average(self, tracker):
+        """Same weekday, each of the past 4 weeks at 3 tasks: 10 today is a best."""
         today = date.today()
-        # Insert historical data for same weekday over past 4 weeks
-        weekday_num = today.strftime("%w")
-        for i in range(1, 5):
-            past_date = today - timedelta(weeks=i)
-            # Only use days that match the same weekday
-            if past_date.strftime("%w") == weekday_num:
-                with tracker.get_db() as conn:
-                    conn.execute(
-                        "INSERT INTO daily_stats (date, tasks_completed, updated_at) VALUES (?, ?, ?)",
-                        (past_date.isoformat(), 3, past_date.isoformat()),
-                    )
+        with tracker.get_db() as conn:
+            for weeks in range(1, 5):
+                past = (today - timedelta(weeks=weeks)).isoformat()
+                conn.execute(
+                    "INSERT INTO daily_stats (date, tasks_completed, updated_at) VALUES (?, ?, ?)",
+                    (past, 3, past),
+                )
 
-        # Check if 10 is a personal best (should be, average is 3)
         result = tracker._personal_best_check("tasks_completed", 10, today.strftime("%A"))
-        if result:  # depends on whether same-weekday data was found
-            assert "best" in result.lower()
+        assert result is not None
+        assert "best" in result.lower()
+        assert today.strftime("%A") in result
+        # Not above the average (+10 %): no best.
+        assert tracker._personal_best_check("tasks_completed", 3, today.strftime("%A")) is None
+
+
+# ---------------------------------------------------------------------------
+# Streak milestone announcements
+# ---------------------------------------------------------------------------
+
+
+class TestStreakAnnouncements:
+    async def test_announces_each_milestone_once(self, tracker, tmp_db, monkeypatch):
+        """Only today's streaks that sit on a milestone are spoken, each once."""
+        from orchestrator import reminder_manager
+        from orchestrator.metrics import PROGRESS_STREAK_MILESTONES
+
+        today = date.today().isoformat()
+        with tracker.get_db() as conn:
+            conn.executemany(
+                "INSERT INTO streaks (category, current_streak, longest_streak, last_active_date, updated_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    ("focus_sessions", 3, 3, today, today),  # milestone, active today
+                    ("tasks_completed", 4, 4, today, today),  # not a milestone
+                    ("brain_dumps", 5, 5, "2000-01-01", today),  # milestone, but not today
+                ],
+            )
+        announce = AsyncMock()
+        monkeypatch.setattr(reminder_manager, "_announce_voice", announce)
+        before = metric_value(PROGRESS_STREAK_MILESTONES, category="focus_sessions")
+
+        await tracker.check_and_announce_streaks()
+        await tracker.check_and_announce_streaks()  # already notified: silent
+
+        announce.assert_awaited_once_with("focus sessions streak: 3 days in a row!", announcement_type="progress")
+        assert metric_value(PROGRESS_STREAK_MILESTONES, category="focus_sessions") == before + 1
+
+    async def test_failed_announcement_is_retried_next_time(self, tracker, tmp_db, monkeypatch):
+        from orchestrator import reminder_manager
+
+        today = date.today().isoformat()
+        with tracker.get_db() as conn:
+            conn.execute(
+                "INSERT INTO streaks (category, current_streak, longest_streak, last_active_date, updated_at) "
+                "VALUES ('focus_sessions', 7, 7, ?, ?)",
+                (today, today),
+            )
+        monkeypatch.setattr(reminder_manager, "_announce_voice", AsyncMock(side_effect=RuntimeError("speaker down")))
+        await tracker.check_and_announce_streaks()  # must not raise
+        announce = AsyncMock()
+        monkeypatch.setattr(reminder_manager, "_announce_voice", announce)
+        await tracker.check_and_announce_streaks()
+        announce.assert_awaited_once()

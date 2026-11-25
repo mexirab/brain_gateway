@@ -1,163 +1,73 @@
-"""Tests for orchestrator/config.py — Settings class."""
+"""Tests for orchestrator/config.py — Settings defaults, coercion and validators.
 
-import os
-from unittest.mock import patch
+Every Settings here comes from ``make_settings`` (fixtures_memory.py): built
+from exactly the given env, with no host env and no deployed /app/.env, and
+without reloading the module (the shared ``settings`` singleton stays intact).
+"""
 
 import pytest
 
-
-class TestSettingsDefaults:
-    """Settings loads with sane defaults when no env vars are set."""
-
-    def _make_settings(self, env_overrides=None):
-        """Create a Settings instance with optional env overrides."""
-        env = {
-            "MODEL_URL": "http://localhost:8080/v1",
-            "MODEL_NAME": "test-model",
-        }
-        if env_overrides:
-            env.update(env_overrides)
-        # Full isolation from a configured host box (these "defaults" tests run
-        # in the orchestrator container, which both exports every compose var
-        # AND ships /app/.env):
-        #   - clear=True       → no host process env leaks in
-        #   - patch dotenv     → config.py's module-scope load_dotenv("/app/.env")
-        #                        is a no-op on reload, so .env keys aren't pushed
-        #                        back into the cleared environ
-        #   - _env_file=None   → Settings() itself doesn't re-read /app/.env
-        with patch.dict(os.environ, env, clear=True), patch("dotenv.load_dotenv"):
-            # Import inside to pick up patched env
-            from importlib import import_module, reload
-
-            mod = import_module("config")
-            reload(mod)
-            return mod.Settings(_env_file=None)
-
-    def test_default_model_url(self):
-        s = self._make_settings()
-        assert s.model_url == "http://localhost:8080/v1"
-
-    def test_default_max_tool_rounds(self):
-        s = self._make_settings()
-        assert s.max_tool_rounds == 5
-
-    def test_default_booleans(self):
-        s = self._make_settings()
-        assert s.selfcare_enabled is True
-        assert s.vision_enabled is False
-
-    def test_default_empty_strings(self):
-        s = self._make_settings()
-        assert s.ha_url == ""
-        assert s.tts_url == ""
-        assert s.fallback_model_url == ""
+from orchestrator.tests.fixtures_memory import make_settings
 
 
-class TestTypeCoercion:
-    """Pydantic coerces string env vars to typed fields."""
-
-    def _make_settings(self, env_overrides):
-        env = {"MODEL_URL": "http://localhost:8080/v1", "MODEL_NAME": "m"}
-        env.update(env_overrides)
-        # Isolate from host process env + the deployed /app/.env (see the
-        # TestSettingsDefaults._make_settings comment for the three-part guard).
-        with patch.dict(os.environ, env, clear=True), patch("dotenv.load_dotenv"):
-            from importlib import import_module, reload
-
-            mod = import_module("config")
-            reload(mod)
-            return mod.Settings(_env_file=None)
-
-    def test_int_from_string(self):
-        s = self._make_settings({"MAX_TOOL_ROUNDS": "10"})
-        assert s.max_tool_rounds == 10
-        assert isinstance(s.max_tool_rounds, int)
-
-    def test_float_from_string(self):
-        s = self._make_settings({"MIN_COS": "0.55"})
-        assert s.min_cos == pytest.approx(0.55)
-
-    def test_bool_from_string(self):
-        s = self._make_settings({"SELFCARE_ENABLED": "false"})
-        assert s.selfcare_enabled is False
-
-    def test_positive_int_validator_clamps_zero(self):
-        s = self._make_settings({"CALENDAR_POLL_INTERVAL": "0"})
-        assert s.calendar_poll_interval == 1
-
-    def test_positive_int_validator_allows_valid(self):
-        s = self._make_settings({"CALENDAR_POLL_INTERVAL": "15"})
-        assert s.calendar_poll_interval == 15
+def test_defaults():
+    s = make_settings()
+    assert s.max_tool_rounds == 5
+    assert s.selfcare_enabled is True
+    assert s.vision_enabled is False
+    assert s.ha_url == ""
+    assert s.tts_url == ""
+    assert s.fallback_model_url == ""
 
 
-class TestAlertTiers:
-    """alert_tiers property parses comma-separated string into list[int]."""
-
-    def _make_settings(self, env_overrides=None):
-        env = {"MODEL_URL": "http://localhost:8080/v1", "MODEL_NAME": "m"}
-        if env_overrides:
-            env.update(env_overrides)
-        # Isolate from host process env + the deployed /app/.env (see the
-        # TestSettingsDefaults._make_settings comment for the three-part guard).
-        with patch.dict(os.environ, env, clear=True), patch("dotenv.load_dotenv"):
-            from importlib import import_module, reload
-
-            mod = import_module("config")
-            reload(mod)
-            return mod.Settings(_env_file=None)
-
-    def test_default_tiers(self):
-        s = self._make_settings()
-        assert s.alert_tiers == [60, 30, 15, 5]
-
-    def test_custom_tiers(self):
-        s = self._make_settings({"CALENDAR_ALERT_TIERS": "90,45,10"})
-        assert s.alert_tiers == [90, 45, 10]
-
-    def test_invalid_tiers_returns_fallback(self):
-        s = self._make_settings({"CALENDAR_ALERT_TIERS": "bad,data"})
-        assert s.alert_tiers == [60, 30, 15, 5]
-
-    def test_single_tier(self):
-        s = self._make_settings({"CALENDAR_ALERT_TIERS": "5"})
-        assert s.alert_tiers == [5]
+@pytest.mark.parametrize(
+    "env,attr,expected",
+    [
+        pytest.param({"MAX_TOOL_ROUNDS": "10"}, "max_tool_rounds", 10, id="int"),
+        pytest.param({"MIN_COS": "0.55"}, "min_cos", pytest.approx(0.55), id="float"),
+        pytest.param({"SELFCARE_ENABLED": "false"}, "selfcare_enabled", False, id="bool"),
+        pytest.param({"CALENDAR_POLL_INTERVAL": "0"}, "calendar_poll_interval", 1, id="positive-int-clamps-zero"),
+        pytest.param({"CALENDAR_POLL_INTERVAL": "15"}, "calendar_poll_interval", 15, id="positive-int-valid"),
+    ],
+)
+def test_type_coercion(env, attr, expected):
+    value = getattr(make_settings(**env), attr)
+    assert value == expected
+    if isinstance(expected, int):  # bool included: coerced, not just equal
+        assert type(value) is type(expected)
 
 
-class TestPiholeUrlList:
-    """pihole_url_list property splits comma-separated URLs."""
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        pytest.param(None, [60, 30, 15, 5], id="default"),
+        pytest.param("90,45,10", [90, 45, 10], id="custom"),
+        pytest.param("bad,data", [60, 30, 15, 5], id="invalid-falls-back"),
+        pytest.param("5", [5], id="single"),
+    ],
+)
+def test_alert_tiers(raw, expected):
+    env = {} if raw is None else {"CALENDAR_ALERT_TIERS": raw}
+    assert make_settings(**env).alert_tiers == expected
 
-    def _make_settings(self, env_overrides=None):
-        env = {"MODEL_URL": "http://localhost:8080/v1", "MODEL_NAME": "m"}
-        if env_overrides:
-            env.update(env_overrides)
-        # Isolate from host process env + the deployed /app/.env (see the
-        # TestSettingsDefaults._make_settings comment for the three-part guard).
-        with patch.dict(os.environ, env, clear=True), patch("dotenv.load_dotenv"):
-            from importlib import import_module, reload
 
-            mod = import_module("config")
-            reload(mod)
-            return mod.Settings(_env_file=None)
-
-    def test_empty_returns_empty_list(self):
-        s = self._make_settings({"PIHOLE_URLS": ""})
-        assert s.pihole_url_list == []
-
-    def test_single_url(self):
-        s = self._make_settings({"PIHOLE_URLS": "http://pi.hole:8053"})
-        assert s.pihole_url_list == ["http://pi.hole:8053"]
-
-    def test_multiple_urls(self):
-        s = self._make_settings({"PIHOLE_URLS": "http://10.0.0.248:8053, http://10.0.0.58:8053"})
-        assert s.pihole_url_list == ["http://10.0.0.248:8053", "http://10.0.0.58:8053"]
-
-    def test_trailing_comma_ignored(self):
-        s = self._make_settings({"PIHOLE_URLS": "http://a:8053,"})
-        assert s.pihole_url_list == ["http://a:8053"]
-
-    def test_not_set_returns_empty(self):
-        s = self._make_settings()
-        assert s.pihole_url_list == []
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        pytest.param(None, [], id="not-set"),
+        pytest.param("", [], id="empty"),
+        pytest.param("http://pi.hole:8053", ["http://pi.hole:8053"], id="single"),
+        pytest.param(
+            "http://10.0.0.248:8053, http://10.0.0.58:8053",
+            ["http://10.0.0.248:8053", "http://10.0.0.58:8053"],
+            id="multiple",
+        ),
+        pytest.param("http://a:8053,", ["http://a:8053"], id="trailing-comma"),
+    ],
+)
+def test_pihole_url_list(raw, expected):
+    env = {} if raw is None else {"PIHOLE_URLS": raw}
+    assert make_settings(**env).pihole_url_list == expected
 
 
 class TestSelfAuditInvestigatorConfig:
@@ -165,22 +75,10 @@ class TestSelfAuditInvestigatorConfig:
     and the short-webhook-token drop (generate-configs.sh mirrors the 24-char
     rule, so the two must agree)."""
 
-    def _make_settings(self, env_overrides):
-        env = {
-            "MODEL_URL": "http://localhost:8080/v1",
-            "MODEL_NAME": "m",
-            "SELF_AUDIT_ENABLED": "true",
-            "SELF_AUDIT_LOKI_URL": "http://loki:3100",
-        }
-        env.update(env_overrides)
-        # Instantiate Settings directly — no module reload, so the shared
-        # `settings` singleton other tests hold is never replaced. Importing
-        # as orchestrator.config also works in the image layout, where a bare
-        # `import config` resolves to the /app/config directory.
-        from orchestrator.config import Settings
+    BASE = {"SELF_AUDIT_ENABLED": "true", "SELF_AUDIT_LOKI_URL": "http://loki:3100"}
 
-        with patch.dict(os.environ, env, clear=True):
-            return Settings(_env_file=None)
+    def _make_settings(self, env_overrides):
+        return make_settings(**self.BASE, **env_overrides)
 
     def test_defaults_are_inside_the_clamps(self):
         s = self._make_settings({})
@@ -210,13 +108,12 @@ class TestSelfAuditInvestigatorConfig:
         s = self._make_settings({"SELF_AUDIT_INVESTIGATE_MAX_SECONDS": "900"})
         assert s.self_audit_investigate_max_seconds == 900
 
-    def test_short_webhook_token_is_dropped(self):
-        s = self._make_settings({"SELF_AUDIT_WEBHOOK_TOKEN": "x" * 23})
-        assert s.self_audit_webhook_token == ""
-
-    def test_webhook_token_of_24_chars_is_kept(self):
-        s = self._make_settings({"SELF_AUDIT_WEBHOOK_TOKEN": "x" * 24})
-        assert s.self_audit_webhook_token == "x" * 24
+    @pytest.mark.parametrize(
+        "length,kept", [pytest.param(23, False, id="23-dropped"), pytest.param(24, True, id="24-kept")]
+    )
+    def test_webhook_token_minimum_length(self, length, kept):
+        s = self._make_settings({"SELF_AUDIT_WEBHOOK_TOKEN": "x" * length})
+        assert s.self_audit_webhook_token == ("x" * length if kept else "")
 
 
 class TestVoiceThinkingConfig:
@@ -224,22 +121,12 @@ class TestVoiceThinkingConfig:
     via env, re-exported as shared.VOICE_THINKING_ENABLED (read per voice turn
     by unified_loop)."""
 
-    def _make_settings(self, env_overrides):
-        env = {"MODEL_URL": "http://localhost:8080/v1", "MODEL_NAME": "m"}
-        env.update(env_overrides)
-        # Same isolation as TestSelfAuditInvestigatorConfig: no module reload,
-        # and orchestrator.config resolves in the image layout too.
-        from orchestrator.config import Settings
-
-        with patch.dict(os.environ, env, clear=True):
-            return Settings(_env_file=None)
-
     def test_default_is_off(self):
-        assert self._make_settings({}).voice_thinking_enabled is False
+        assert make_settings().voice_thinking_enabled is False
 
     @pytest.mark.parametrize("raw, expected", [("true", True), ("1", True), ("false", False), ("0", False)])
     def test_env_coercion(self, raw, expected):
-        assert self._make_settings({"VOICE_THINKING_ENABLED": raw}).voice_thinking_enabled is expected
+        assert make_settings(VOICE_THINKING_ENABLED=raw).voice_thinking_enabled is expected
 
     def test_shared_reexports_setting(self):
         from orchestrator import shared

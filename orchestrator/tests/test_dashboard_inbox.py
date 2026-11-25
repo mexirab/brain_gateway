@@ -6,21 +6,34 @@ Covers:
   - selfcare_manager.record_selfcare dispatch + inbox resolution on log
   - routes_inbox via TestClient over the api_routes router
   - tool_handlers.deliver_reminder_job creating an inbox card
+  - informational "message" cards (morning/evening briefing digest, missed-
+    reminder recap, self-audit): inbox.add_message_item / post_message, their
+    always-generic Web Push text, Done refused / Dismiss works, and
+    jobs_calendar._mirror_message + its call sites (Telegram kept for installs
+    that still run the bot)
 
 The shared AsyncIOScheduler is never started; add_job/get_job work on a stopped
-scheduler, and clean_scheduler scrubs reminder_* jobs around each test.
+scheduler, and delivery_clean_scheduler scrubs reminder_* jobs around each test.
 """
 
-import asyncio
-import contextlib
 from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 # Import shared at module scope (embedding model load), same convention as
 # test_ntfy_feedback / test_telegram_bot.
-from orchestrator import inbox, reminder_actions, selfcare_manager, shared, state_store  # noqa: F401
+from orchestrator import (  # noqa: F401
+    inbox,
+    jobs_calendar,
+    reminder_actions,
+    selfcare_manager,
+    shared,
+    state_store,
+    webpush_manager,
+)
 from orchestrator.config import settings
+from orchestrator.tests.fixtures_delivery import drain_tasks
 
 
 def _noop_job(*a, **kw):
@@ -34,21 +47,6 @@ def _fresh_selfcare_state(monkeypatch):
     and restore the original afterwards, so later suites (test_selfcare_bridge
     asserts the gates start empty) don't see our timestamps."""
     monkeypatch.setattr(selfcare_manager, "_state", selfcare_manager.SelfCareState())
-
-
-@pytest.fixture
-def clean_scheduler():
-    from orchestrator.shared import scheduler
-
-    def _purge():
-        for job in list(scheduler.get_jobs()):
-            if job.id.startswith("reminder_"):
-                with contextlib.suppress(Exception):
-                    scheduler.remove_job(job.id)
-
-    _purge()
-    yield scheduler
-    _purge()
 
 
 @pytest.fixture
@@ -103,10 +101,10 @@ class TestAckReminder:
         out = await reminder_actions.ack_reminder("nope", via="dashboard")
         assert out == {"status": "not_found"}
 
-    async def test_ok_cancels_retry_bridges_water_and_resolves_card(self, tmp_db, clean_scheduler):
+    async def test_ok_cancels_retry_bridges_water_and_resolves_card(self, tmp_db, delivery_clean_scheduler):
         state_store.save_reminder("r-water", "drink water", "2026-10-19T09:00:00")
         card = inbox.add_reminder_item("r-water", "drink water")
-        clean_scheduler.add_job(
+        delivery_clean_scheduler.add_job(
             _noop_job, trigger="date", run_date=datetime.now() + timedelta(hours=1), id="reminder_r-water_retry"
         )
 
@@ -114,7 +112,7 @@ class TestAckReminder:
 
         assert out["status"] == "ok"
         assert out["action"] == "water"
-        assert clean_scheduler.get_job("reminder_r-water_retry") is None
+        assert delivery_clean_scheduler.get_job("reminder_r-water_retry") is None
         assert len(_selfcare_rows("water")) == 1
         item = inbox.get_item(card["id"])
         assert item["resolution"] == "done"
@@ -177,16 +175,16 @@ class TestAckReminder:
 
 
 class TestSnoozeReminder:
-    async def test_unknown_returns_not_found(self, tmp_db, clean_scheduler):
+    async def test_unknown_returns_not_found(self, tmp_db, delivery_clean_scheduler):
         out = await reminder_actions.snooze_reminder("nope", 10, via="dashboard")
         assert out == {"status": "not_found"}
-        assert clean_scheduler.get_job("reminder_nope") is None
+        assert delivery_clean_scheduler.get_job("reminder_nope") is None
 
-    async def test_ok_reschedules_reopens_counts_and_resolves(self, tmp_db, clean_scheduler, snooze_limit):
+    async def test_ok_reschedules_reopens_counts_and_resolves(self, tmp_db, delivery_clean_scheduler, snooze_limit):
         state_store.save_reminder("r-s", "stretch", "2026-10-19T09:00:00")
         state_store.complete_reminder("r-s")
         card = inbox.add_reminder_item("r-s", "stretch")
-        clean_scheduler.add_job(
+        delivery_clean_scheduler.add_job(
             _noop_job, trigger="date", run_date=datetime.now() + timedelta(hours=1), id="reminder_r-s_retry"
         )
 
@@ -195,10 +193,10 @@ class TestSnoozeReminder:
         assert out["status"] == "ok"
         assert out["minutes"] == 15
         assert out["snooze_count"] == 1
-        job = clean_scheduler.get_job("reminder_r-s")
+        job = delivery_clean_scheduler.get_job("reminder_r-s")
         assert job is not None
         assert job.args == ("r-s",)
-        assert clean_scheduler.get_job("reminder_r-s_retry") is None
+        assert delivery_clean_scheduler.get_job("reminder_r-s_retry") is None
         rem = state_store.get_reminder("r-s")
         assert rem["status"] == "pending"
         assert rem["snooze_count"] == 1
@@ -207,7 +205,7 @@ class TestSnoozeReminder:
         assert item["resolved_via"] == "dashboard"
 
     @pytest.mark.parametrize("given,expected", [(0, 1), (-5, 1), (999, 120), (120, 120), (1, 1)])
-    async def test_minutes_clamped(self, tmp_db, clean_scheduler, snooze_limit, given, expected):
+    async def test_minutes_clamped(self, tmp_db, delivery_clean_scheduler, snooze_limit, given, expected):
         state_store.save_reminder("r-c", "stretch", "2026-10-19T09:00:00")
         out = await reminder_actions.snooze_reminder("r-c", given, via="dashboard")
         assert out["status"] == "ok"
@@ -215,7 +213,7 @@ class TestSnoozeReminder:
         delta = (out["run_at"] - datetime.now(out["run_at"].tzinfo)).total_seconds()
         assert expected * 60 - 30 <= delta <= expected * 60 + 1
 
-    async def test_limit_reached(self, tmp_db, clean_scheduler, snooze_limit):
+    async def test_limit_reached(self, tmp_db, delivery_clean_scheduler, snooze_limit):
         state_store.save_reminder("r-l", "stretch", "2026-10-19T09:00:00")
         for _ in range(snooze_limit):
             state_store.increment_snooze_count("r-l")
@@ -224,7 +222,7 @@ class TestSnoozeReminder:
         out = await reminder_actions.snooze_reminder("r-l", 10, via="dashboard")
 
         assert out == {"status": "limit", "snooze_count": snooze_limit}
-        assert clean_scheduler.get_job("reminder_r-l") is None
+        assert delivery_clean_scheduler.get_job("reminder_r-l") is None
         assert state_store.get_reminder("r-l")["snooze_count"] == snooze_limit
         assert inbox.get_item(card["id"])["resolved_at"] is None  # card stays open
 
@@ -428,37 +426,25 @@ class TestSelfcareRecord:
 # ===========================================================================
 
 
-@pytest.fixture
-def client():
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    from orchestrator.api_routes import router
-
-    app = FastAPI()
-    app.include_router(router)
-    return TestClient(app)
-
-
 class TestInboxRoutes:
-    def test_list_shape(self, client, tmp_db):
+    def test_list_shape(self, delivery_api_client, tmp_db):
         inbox.add_reminder_item("r1", "stretch")
         inbox.add_selfcare_item("water", "drink")
-        r = client.get("/api/inbox")
+        r = delivery_api_client.get("/api/inbox")
         assert r.status_code == 200
         body = r.json()
         assert body["ok"] is True
         assert isinstance(body["items"], list) and len(body["items"]) == 2
         assert {i["kind"] for i in body["items"]} == {"reminder", "selfcare"}
 
-    def test_list_empty(self, client, tmp_db):
-        r = client.get("/api/inbox")
+    def test_list_empty(self, delivery_api_client, tmp_db):
+        r = delivery_api_client.get("/api/inbox")
         assert r.json() == {"ok": True, "items": []}
 
-    def test_done_reminder_card_acks_via_dashboard(self, client, tmp_db, record_spy):
+    def test_done_reminder_card_acks_via_dashboard(self, delivery_api_client, tmp_db, record_spy):
         state_store.save_reminder("r-d", "drink water", "2026-10-19T09:00:00")
         card = inbox.add_reminder_item("r-d", "drink water")
-        r = client.post(f"/api/inbox/{card['id']}/done")
+        r = delivery_api_client.post(f"/api/inbox/{card['id']}/done")
         assert r.status_code == 200
         assert r.json() == {"ok": True, "logged": "water"}
         rem = state_store.get_reminder("r-d")
@@ -467,133 +453,135 @@ class TestInboxRoutes:
         assert inbox.get_item(card["id"])["resolution"] == "done"
         assert record_spy == [("water", "reminder:drink water")]
 
-    def test_done_reminder_card_reminder_gone(self, client, tmp_db):
+    def test_done_reminder_card_reminder_gone(self, delivery_api_client, tmp_db):
         card = inbox.add_reminder_item("r-deleted", "x")
-        r = client.post(f"/api/inbox/{card['id']}/done")
+        r = delivery_api_client.post(f"/api/inbox/{card['id']}/done")
         assert r.status_code == 404
         assert r.json()["error"] == "reminder_gone"
         assert inbox.get_item(card["id"])["resolution"] == "dismissed"
 
-    def test_done_selfcare_logs_once_double_tap(self, client, tmp_db, record_spy):
+    def test_done_selfcare_logs_once_double_tap(self, delivery_api_client, tmp_db, record_spy):
         card = inbox.add_selfcare_item("meal", "eat something")
-        r1 = client.post(f"/api/inbox/{card['id']}/done")
+        r1 = delivery_api_client.post(f"/api/inbox/{card['id']}/done")
         assert r1.status_code == 200
         assert r1.json() == {"ok": True, "logged": "meal"}
-        r2 = client.post(f"/api/inbox/{card['id']}/done")
+        r2 = delivery_api_client.post(f"/api/inbox/{card['id']}/done")
         assert r2.status_code == 200
         assert r2.json()["already_resolved"] is True
         assert record_spy == [("meal", "dashboard:meal nudge")]
         item = inbox.get_item(card["id"])
         assert item["resolution"] == "done" and item["resolved_via"] == "dashboard"
 
-    def test_done_selfcare_real_log_writes_row(self, client, tmp_db):
+    def test_done_selfcare_real_log_writes_row(self, delivery_api_client, tmp_db):
         card = inbox.add_selfcare_item("water", "drink")
-        r = client.post(f"/api/inbox/{card['id']}/done")
+        r = delivery_api_client.post(f"/api/inbox/{card['id']}/done")
         assert r.status_code == 200
         assert len(_selfcare_rows("water")) == 1
         # attributed to the dashboard, not overwritten by record_*'s own resolve
         assert inbox.get_item(card["id"])["resolved_via"] == "dashboard"
 
-    def test_done_selfcare_log_failure_reopens_card(self, client, tmp_db, monkeypatch):
+    def test_done_selfcare_log_failure_reopens_card(self, delivery_api_client, tmp_db, monkeypatch):
         def _boom(kind, label):
             raise RuntimeError("db locked")
 
         monkeypatch.setattr(selfcare_manager, "record_selfcare", _boom)
         card = inbox.add_selfcare_item("water", "drink")
-        r = client.post(f"/api/inbox/{card['id']}/done")
+        r = delivery_api_client.post(f"/api/inbox/{card['id']}/done")
         assert r.status_code == 500
         assert r.json() == {"ok": False, "error": "log_failed"}
         assert inbox.get_item(card["id"])["resolved_at"] is None
         assert card["id"] in [i["id"] for i in inbox.list_pending()]
 
-    def test_snooze_reminder_card(self, client, tmp_db, clean_scheduler, snooze_limit):
+    def test_snooze_reminder_card(self, delivery_api_client, tmp_db, delivery_clean_scheduler, snooze_limit):
         state_store.save_reminder("r-sn", "stretch", "2026-10-19T09:00:00")
         state_store.complete_reminder("r-sn")
         card = inbox.add_reminder_item("r-sn", "stretch")
-        r = client.post(f"/api/inbox/{card['id']}/snooze", json={"minutes": 20})
+        r = delivery_api_client.post(f"/api/inbox/{card['id']}/snooze", json={"minutes": 20})
         assert r.status_code == 200
         body = r.json()
         assert body["ok"] is True and body["minutes"] == 20 and body["snooze_count"] == 1
         datetime.fromisoformat(body["rescheduled_for"])
-        assert clean_scheduler.get_job("reminder_r-sn") is not None
+        assert delivery_clean_scheduler.get_job("reminder_r-sn") is not None
         assert inbox.get_item(card["id"])["resolution"] == "snoozed"
 
-    def test_snooze_default_minutes_without_body(self, client, tmp_db, clean_scheduler, snooze_limit):
+    def test_snooze_default_minutes_without_body(
+        self, delivery_api_client, tmp_db, delivery_clean_scheduler, snooze_limit
+    ):
         state_store.save_reminder("r-sn2", "stretch", "2026-10-19T09:00:00")
         card = inbox.add_reminder_item("r-sn2", "stretch")
-        r = client.post(f"/api/inbox/{card['id']}/snooze")
+        r = delivery_api_client.post(f"/api/inbox/{card['id']}/snooze")
         assert r.status_code == 200
         assert r.json()["minutes"] == 15
 
-    def test_snooze_limit_409(self, client, tmp_db, clean_scheduler, snooze_limit):
+    def test_snooze_limit_409(self, delivery_api_client, tmp_db, delivery_clean_scheduler, snooze_limit):
         state_store.save_reminder("r-lim", "stretch", "2026-10-19T09:00:00")
         for _ in range(snooze_limit):
             state_store.increment_snooze_count("r-lim")
         card = inbox.add_reminder_item("r-lim", "stretch")
-        r = client.post(f"/api/inbox/{card['id']}/snooze", json={"minutes": 10})
+        r = delivery_api_client.post(f"/api/inbox/{card['id']}/snooze", json={"minutes": 10})
         assert r.status_code == 409
         assert r.json()["error"] == "max_snoozes_reached"
 
-    def test_snooze_selfcare_card_not_snoozable(self, client, tmp_db):
+    def test_snooze_selfcare_card_not_snoozable(self, delivery_api_client, tmp_db):
         card = inbox.add_selfcare_item("water", "drink")
-        r = client.post(f"/api/inbox/{card['id']}/snooze", json={"minutes": 10})
+        r = delivery_api_client.post(f"/api/inbox/{card['id']}/snooze", json={"minutes": 10})
         assert r.status_code == 400
         assert r.json()["error"] == "not_snoozable"
         assert inbox.get_item(card["id"])["resolved_at"] is None
 
     @pytest.mark.parametrize("body", [{"minutes": "x"}, {"minutes": None}, {"minutes": [1]}])
-    def test_snooze_bad_minutes(self, client, tmp_db, body):
+    def test_snooze_bad_minutes(self, delivery_api_client, tmp_db, body):
         card = inbox.add_reminder_item("r1", "x")
-        r = client.post(f"/api/inbox/{card['id']}/snooze", json=body)
+        r = delivery_api_client.post(f"/api/inbox/{card['id']}/snooze", json=body)
         assert r.status_code == 400
         assert r.json()["error"] == "bad_minutes"
 
-    def test_snooze_infinity_minutes(self, client, tmp_db):
+    def test_snooze_infinity_minutes(self, delivery_api_client, tmp_db):
         card = inbox.add_reminder_item("r1", "x")
-        r = client.post(
+        r = delivery_api_client.post(
             f"/api/inbox/{card['id']}/snooze",
             content=b'{"minutes": Infinity}',
             headers={"content-type": "application/json"},
         )
         assert r.status_code == 400
 
-    def test_snooze_non_dict_body(self, client, tmp_db):
+    def test_snooze_non_dict_body(self, delivery_api_client, tmp_db):
         card = inbox.add_reminder_item("r1", "x")
-        r = client.post(f"/api/inbox/{card['id']}/snooze", json=[1, 2])
+        r = delivery_api_client.post(f"/api/inbox/{card['id']}/snooze", json=[1, 2])
         assert r.status_code == 400
         assert r.json()["error"] == "bad_body"
 
     @pytest.mark.parametrize("bad", ["abc", "G" * 32, "a" * 31, "a" * 33, "A" * 32])
     @pytest.mark.parametrize("action", ["done", "snooze", "dismiss"])
-    def test_bad_id_400(self, client, tmp_db, bad, action):
-        r = client.post(f"/api/inbox/{bad}/{action}", json={})
+    def test_bad_id_400(self, delivery_api_client, tmp_db, bad, action):
+        r = delivery_api_client.post(f"/api/inbox/{bad}/{action}", json={})
         assert r.status_code == 400
         assert r.json()["error"] == "bad_id"
 
     @pytest.mark.parametrize("action", ["done", "snooze", "dismiss"])
-    def test_unknown_id_404(self, client, tmp_db, action):
-        r = client.post(f"/api/inbox/{'a' * 32}/{action}", json={})
+    def test_unknown_id_404(self, delivery_api_client, tmp_db, action):
+        r = delivery_api_client.post(f"/api/inbox/{'a' * 32}/{action}", json={})
         assert r.status_code == 404
         assert r.json()["error"] == "not_found"
 
-    def test_dismiss(self, client, tmp_db, record_spy):
+    def test_dismiss(self, delivery_api_client, tmp_db, record_spy):
         state_store.save_reminder("r-dis", "drink water", "2026-10-19T09:00:00")
         card = inbox.add_reminder_item("r-dis", "drink water")
-        r = client.post(f"/api/inbox/{card['id']}/dismiss")
+        r = delivery_api_client.post(f"/api/inbox/{card['id']}/dismiss")
         assert r.status_code == 200 and r.json() == {"ok": True}
         item = inbox.get_item(card["id"])
         assert item["resolution"] == "dismissed" and item["resolved_via"] == "dashboard"
         assert record_spy == []  # dismiss logs nothing
         assert state_store.get_reminder("r-dis")["ack_at"] is None
         # acting on a resolved card is a no-op
-        r2 = client.post(f"/api/inbox/{card['id']}/done")
+        r2 = delivery_api_client.post(f"/api/inbox/{card['id']}/done")
         assert r2.json()["already_resolved"] is True
         assert record_spy == []
 
-    def test_get_is_side_effect_free(self, client, tmp_db):
+    def test_get_is_side_effect_free(self, delivery_api_client, tmp_db):
         card = inbox.add_selfcare_item("water", "drink")
-        client.get("/api/inbox")
-        client.get("/api/inbox")
+        delivery_api_client.get("/api/inbox")
+        delivery_api_client.get("/api/inbox")
         assert inbox.get_item(card["id"])["resolved_at"] is None
 
 
@@ -602,47 +590,32 @@ class TestInboxRoutes:
 # ===========================================================================
 
 
-@pytest.fixture
-def quiet_delivery(monkeypatch):
-    async def _ok(*a, **kw):
-        return {"success": True}
-
-    monkeypatch.setattr("orchestrator.tool_handlers._announce_voice", _ok)
-    monkeypatch.setattr("orchestrator.tool_handlers._send_notification", _ok)
-    for flag in ("ntfy_enabled", "pushover_enabled", "telegram_enabled", "webpush_enabled"):
-        monkeypatch.setattr(settings, flag, False, raising=False)
-
-
-async def _drain():
-    pending = [t for t in asyncio.all_tasks() if not t.done() and t is not asyncio.current_task()]
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
-
-
 class TestDeliverReminderJobInbox:
-    async def test_phone_delivery_creates_card(self, tmp_db, quiet_delivery, clean_scheduler):
+    async def test_phone_delivery_creates_card(self, tmp_db, delivery_quiet, delivery_clean_scheduler):
         from orchestrator.tool_handlers import deliver_reminder_job
 
         state_store.save_reminder("r-card", "take the bins out", "2026-10-19T09:00:00", target="phone")
         await deliver_reminder_job("r-card")
-        await _drain()
+        await drain_tasks()
 
         cards = _open_cards(kind="reminder", ref="r-card")
         assert len(cards) == 1
         assert cards[0]["text"] == "take the bins out"
         assert state_store.get_reminder("r-card")["status"] == "completed"
 
-    async def test_snoozed_redelivery_supersedes_old_card(self, tmp_db, quiet_delivery, clean_scheduler):
+    async def test_snoozed_redelivery_supersedes_old_card(self, tmp_db, delivery_quiet, delivery_clean_scheduler):
         from orchestrator.tool_handlers import deliver_reminder_job
 
         state_store.save_reminder("r-re", "stretch", "2026-10-19T09:00:00", target="phone")
         await deliver_reminder_job("r-re")
         state_store.reopen_reminder("r-re")
         await deliver_reminder_job("r-re")
-        await _drain()
+        await drain_tasks()
         assert len(_open_cards(kind="reminder", ref="r-re")) == 1
 
-    async def test_inbox_failure_does_not_block_delivery(self, tmp_db, quiet_delivery, clean_scheduler, monkeypatch):
+    async def test_inbox_failure_does_not_block_delivery(
+        self, tmp_db, delivery_quiet, delivery_clean_scheduler, monkeypatch
+    ):
         from orchestrator.tool_handlers import deliver_reminder_job
 
         def _boom(*a, **kw):
@@ -651,11 +624,11 @@ class TestDeliverReminderJobInbox:
         monkeypatch.setattr(inbox, "add_reminder_item", _boom)
         state_store.save_reminder("r-f", "stretch", "2026-10-19T09:00:00", target="phone")
         await deliver_reminder_job("r-f")
-        await _drain()
+        await drain_tasks()
         assert state_store.get_reminder("r-f")["status"] == "completed"
 
     async def test_webpush_subscriber_counts_as_phone_delivery(
-        self, tmp_db, quiet_delivery, clean_scheduler, monkeypatch
+        self, tmp_db, delivery_quiet, delivery_clean_scheduler, monkeypatch
     ):
         """HA push fails and every other channel is off: a healthy Web Push
         device still counts as delivery (reminder completes, no retry)."""
@@ -670,11 +643,11 @@ class TestDeliverReminderJobInbox:
         monkeypatch.setattr(webpush_manager, "fire_inbox_push", lambda item: None)
         state_store.save_reminder("r-wp", "stretch", "2026-10-19T09:00:00", target="phone")
         await deliver_reminder_job("r-wp")
-        await _drain()
+        await drain_tasks()
         assert state_store.get_reminder("r-wp")["status"] == "completed"
-        assert clean_scheduler.get_job("reminder_r-wp_retry") is None
+        assert delivery_clean_scheduler.get_job("reminder_r-wp_retry") is None
 
-    async def test_no_phone_channel_retries(self, tmp_db, quiet_delivery, clean_scheduler, monkeypatch):
+    async def test_no_phone_channel_retries(self, tmp_db, delivery_quiet, delivery_clean_scheduler, monkeypatch):
         from orchestrator import webpush_manager
         from orchestrator.tool_handlers import deliver_reminder_job
 
@@ -685,11 +658,11 @@ class TestDeliverReminderJobInbox:
         monkeypatch.setattr(webpush_manager, "has_subscribers", lambda: False)
         state_store.save_reminder("r-nowp", "stretch", "2026-10-19T09:00:00", target="phone")
         await deliver_reminder_job("r-nowp")
-        await _drain()
+        await drain_tasks()
         assert state_store.get_reminder("r-nowp")["status"] == "pending"
-        assert clean_scheduler.get_job("reminder_r-nowp_retry") is not None
+        assert delivery_clean_scheduler.get_job("reminder_r-nowp_retry") is not None
 
-    async def test_new_card_fires_web_push(self, tmp_db, quiet_delivery, clean_scheduler, monkeypatch):
+    async def test_new_card_fires_web_push(self, tmp_db, delivery_quiet, delivery_clean_scheduler, monkeypatch):
         from orchestrator import webpush_manager
         from orchestrator.tool_handlers import deliver_reminder_job
 
@@ -697,7 +670,7 @@ class TestDeliverReminderJobInbox:
         monkeypatch.setattr(webpush_manager, "fire_inbox_push", lambda item: seen.append(item))
         state_store.save_reminder("r-push", "stretch", "2026-10-19T09:00:00", target="phone")
         await deliver_reminder_job("r-push")
-        await _drain()
+        await drain_tasks()
         assert len(seen) == 1
         assert seen[0]["kind"] == "reminder" and seen[0]["ref"] == "r-push"
 
@@ -717,7 +690,184 @@ class TestSelfcareNudgeInbox:
         monkeypatch.setattr("orchestrator.telegram_bot.fire_selfcare_nudge", lambda *a, **kw: None)
         await selfcare_manager._dispatch_nudge("water", "time for water")
         await selfcare_manager._dispatch_nudge("water", "time for water again")
-        await _drain()
+        await drain_tasks()
         cards = _open_cards(kind="selfcare", ref="water")
         assert len(cards) == 1
         assert cards[0]["text"] == "time for water again"
+
+
+# ===========================================================================
+# Informational "message" cards (kind "message")
+# ===========================================================================
+
+
+class TestAddMessageItem:
+    def test_adds_card(self, tmp_db):
+        item = inbox.add_message_item("morning_briefing", "Good morning.")
+        assert item["kind"] == "message" and item["ref"] == "morning_briefing"
+        assert inbox.list_pending()[0]["id"] == item["id"]
+
+    def test_self_audit_ref_accepted_and_superseded(self, tmp_db):
+        """The self-audit digest posts under ref "self_audit"; an unlisted ref
+        would silently drop the card. Each audit replaces the previous one."""
+        old = inbox.add_message_item("self_audit", "2 high")
+        new = inbox.add_message_item("self_audit", "All clean")
+        assert old is not None and new is not None
+        assert inbox.get_item(old["id"])["resolution"] == "superseded"
+        assert [i["id"] for i in inbox.list_pending()] == [new["id"]]
+
+    @pytest.mark.parametrize("ref", ["", "reminder", "sneaky", "medication"])
+    def test_unknown_ref_ignored(self, tmp_db, ref):
+        assert inbox.add_message_item(ref, "text") is None
+        assert inbox.list_pending() == []
+
+    @pytest.mark.parametrize("text", ["", "   ", None])
+    def test_empty_text_ignored(self, tmp_db, text):
+        assert inbox.add_message_item("evening_briefing", text) is None
+
+    def test_supersedes_same_ref_only(self, tmp_db):
+        old = inbox.add_message_item("morning_briefing", "yesterday")
+        recap = inbox.add_message_item("missed_recap", "recap")
+        new = inbox.add_message_item("morning_briefing", "today")
+        assert inbox.get_item(old["id"])["resolution"] == "superseded"
+        assert inbox.get_item(old["id"])["resolved_via"] == "renewed"
+        assert {i["id"] for i in inbox.list_pending()} == {new["id"], recap["id"]}
+
+    def test_longer_cap_than_reminders(self, tmp_db):
+        item = inbox.add_message_item("evening_briefing", "x" * 5000)
+        assert len(inbox.get_item(item["id"])["text"]) == inbox._MAX_MESSAGE_TEXT
+        # reminders keep the short cap
+        r = inbox.add_reminder_item("r1", "y" * 5000)
+        assert len(inbox.get_item(r["id"])["text"]) == inbox._MAX_TEXT
+
+    def test_does_not_touch_reminder_or_selfcare_cards(self, tmp_db):
+        r = inbox.add_reminder_item("morning_briefing", "same ref string")
+        s = inbox.add_selfcare_item("water", "drink")
+        inbox.add_message_item("morning_briefing", "brief")
+        assert inbox.get_item(r["id"])["resolved_at"] is None
+        assert inbox.get_item(s["id"])["resolved_at"] is None
+
+
+class TestPostMessage:
+    async def test_adds_and_notifies(self, tmp_db, monkeypatch):
+        seen = []
+        monkeypatch.setattr(inbox, "notify", lambda item: seen.append(item))
+        item = await inbox.post_message("missed_recap", "• thing")
+        assert item is not None and seen == [item]
+
+    async def test_push_false_skips_notify(self, tmp_db, monkeypatch):
+        notify = MagicMock()
+        monkeypatch.setattr(inbox, "notify", notify)
+        item = await inbox.post_message("missed_recap", "• thing", push=False)
+        assert item is not None
+        notify.assert_not_called()
+
+    async def test_db_failure_never_raises(self, tmp_db, monkeypatch):
+        def _boom(*a, **kw):
+            raise RuntimeError("db locked")
+
+        notify = MagicMock()
+        monkeypatch.setattr(inbox, "add_message_item", _boom)
+        monkeypatch.setattr(inbox, "notify", notify)
+        assert await inbox.post_message("morning_briefing", "x") is None
+        notify.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "ref,body",
+    [
+        ("morning_briefing", "Morning briefing ready"),
+        ("evening_briefing", "Evening wrap-up ready"),
+        ("missed_recap", "Some reminders didn't reach you"),
+        ("self_audit", "Jess system check ready"),
+        ("unknown_ref", "Message from Jess"),
+    ],
+)
+async def test_message_push_is_generic_even_with_show_text(delivery_capture_push, monkeypatch, ref, body):
+    monkeypatch.setattr(settings, "webpush_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "webpush_show_text", True, raising=False)
+    monkeypatch.setattr(webpush_manager, "_subscriber_count", 1)
+    webpush_manager.fire_inbox_push({"id": "m1", "kind": "message", "ref": ref, "text": "Take DrugName at 9"})
+    await drain_tasks()
+    assert delivery_capture_push == [{"title": "Jess", "body": body, "url": "/chat", "tag": "m1"}]
+
+
+class TestMessageRoutes:
+    def test_listed(self, delivery_api_client, tmp_db):
+        card = inbox.add_message_item("evening_briefing", "Tomorrow: nothing early.")
+        items = delivery_api_client.get("/api/inbox").json()["items"]
+        assert items[0]["id"] == card["id"] and items[0]["kind"] == "message"
+
+    def test_done_refused_and_card_stays_open(self, delivery_api_client, tmp_db, monkeypatch):
+        record = MagicMock()
+        monkeypatch.setattr(selfcare_manager, "record_selfcare", record)
+        card = inbox.add_message_item("morning_briefing", "brief")
+        r = delivery_api_client.post(f"/api/inbox/{card['id']}/done")
+        assert r.status_code == 400 and r.json()["error"] == "not_actionable"
+        record.assert_not_called()
+        assert inbox.get_item(card["id"])["resolved_at"] is None
+
+    def test_snooze_refused(self, delivery_api_client, tmp_db):
+        card = inbox.add_message_item("morning_briefing", "brief")
+        r = delivery_api_client.post(f"/api/inbox/{card['id']}/snooze", json={"minutes": 15})
+        assert r.status_code == 400 and r.json()["error"] == "not_snoozable"
+
+    def test_dismiss(self, delivery_api_client, tmp_db):
+        card = inbox.add_message_item("missed_recap", "recap")
+        r = delivery_api_client.post(f"/api/inbox/{card['id']}/dismiss")
+        assert r.status_code == 200 and r.json() == {"ok": True}
+        item = inbox.get_item(card["id"])
+        assert item["resolution"] == "dismissed" and item["resolved_via"] == "dashboard"
+
+
+class TestMirrorMessage:
+    async def test_posts_to_inbox_and_telegram(self, tmp_db, no_webpush):
+        with patch("orchestrator.telegram_bot.fire_system_message") as tg:
+            await jobs_calendar._mirror_message("evening_briefing", "wrap-up", "🌙 wrap-up")
+        tg.assert_called_once_with("🌙 wrap-up")
+        items = inbox.list_pending()
+        assert len(items) == 1 and items[0]["ref"] == "evening_briefing" and items[0]["text"] == "wrap-up"
+
+    @pytest.mark.parametrize("dnd,pushed", [(False, True), (True, False)])
+    async def test_dnd_posts_card_without_push(self, tmp_db, monkeypatch, dnd, pushed):
+        monkeypatch.setattr(shared, "DND_ACTIVE", dnd)
+        notify = MagicMock()
+        monkeypatch.setattr(inbox, "notify", notify)
+        with patch("orchestrator.telegram_bot.fire_system_message"):
+            await jobs_calendar._mirror_message("missed_recap", "• one", "⚠️ • one")
+        assert [i["ref"] for i in inbox.list_pending()] == ["missed_recap"]
+        assert notify.called is pushed
+
+    async def test_inbox_failure_still_sends_telegram(self, tmp_db, monkeypatch):
+        monkeypatch.setattr(inbox, "post_message", AsyncMock(side_effect=RuntimeError("x")))
+        with patch("orchestrator.telegram_bot.fire_system_message") as tg:
+            await jobs_calendar._mirror_message("morning_briefing", "brief", "☀️ brief")
+        tg.assert_called_once()
+
+    async def test_telegram_failure_still_posts_card(self, tmp_db, no_webpush):
+        with patch("orchestrator.telegram_bot.fire_system_message", side_effect=RuntimeError("no loop")):
+            await jobs_calendar._mirror_message("morning_briefing", "brief", "☀️ brief")
+        assert [i["ref"] for i in inbox.list_pending()] == ["morning_briefing"]
+
+    async def test_telegram_disabled_card_still_posted(self, tmp_db, no_webpush, monkeypatch):
+        """The owner's setup: TELEGRAM_ENABLED=false must not drop the message."""
+        monkeypatch.setattr(settings, "telegram_enabled", False, raising=False)
+        await jobs_calendar._mirror_message("missed_recap", "• one", "⚠️ • one")
+        await drain_tasks()  # let the no-op telegram task run
+        assert [i["ref"] for i in inbox.list_pending()] == ["missed_recap"]
+
+
+def test_call_sites_use_mirror_with_known_refs():
+    """Each former Telegram-only send goes through _mirror_message with a ref
+    the inbox accepts (an unknown ref would silently drop the card)."""
+    import inspect
+    import re
+
+    src = inspect.getsource(jobs_calendar)
+    refs = re.findall(r'_mirror_message\("([a-z_]+)"', src)
+    # Set, not list: the evening briefing mirrors from two places (normal
+    # night + routine-active night), and that's intended.
+    assert set(refs) == {"evening_briefing", "missed_recap", "morning_briefing"}
+    assert all(r in inbox.MESSAGE_REFS for r in refs)
+    # fire_system_message is only reached via the helper now.
+    assert src.count("fire_system_message(") == 1

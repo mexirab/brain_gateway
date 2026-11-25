@@ -8,11 +8,10 @@ Covers:
   - routes_paperless.POST /api/paperless/upload (via FastAPI TestClient)
   - config.validate_paperless_config model_validator (auto-disable semantics)
 
-Mocks settings via monkeypatch on the live module-level singleton (same
-pattern as F-011's test_ntfy_feedback). Mocks HTTP via respx so no real
-network calls leak out of the container. Per-tag file uploads are staged
-into a tmp_path inbox so symlink / basename rules can be exercised
-concretely.
+Settings are flipped on the live singleton (``memory_paperless_on``,
+fixtures_memory.py). HTTP is mocked via respx so no real network calls leak
+out of the container. Per-test file uploads are staged into a tmp_path inbox
+so symlink / basename rules can be exercised concretely.
 
 Metric-consistency invariant (prod-support flagged): every upload_file
 exit path must bump PAPERLESS_UPLOAD_TOTAL exactly once. Asserted on
@@ -21,30 +20,24 @@ each branch below via before/after delta.
 
 from __future__ import annotations
 
+import logging
 import os
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 import respx
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from httpx import Response
 
-# ---------------------------------------------------------------------------
-# Settings fixtures — flip the live singleton; restore via monkeypatch undo.
-# ---------------------------------------------------------------------------
+from orchestrator.metrics import PAPERLESS_UPLOAD_TOTAL
+from orchestrator.paperless_manager import _default_tags_list, _sanitize_body, upload_file
+from orchestrator.tests._helpers import metric_value
+from orchestrator.tests.fixtures_memory import PAPERLESS_BASE, make_settings
+from orchestrator.tool_handlers import _reg_paperless_save
 
-
-@pytest.fixture
-def paperless_on(monkeypatch):
-    """Enable paperless on the live settings singleton with known endpoint."""
-    from orchestrator.config import settings
-
-    monkeypatch.setattr(settings, "paperless_enabled", True, raising=False)
-    monkeypatch.setattr(settings, "paperless_url", "http://paperless.test:8777", raising=False)
-    monkeypatch.setattr(settings, "paperless_api_token", "tok-abcdefgh", raising=False)
-    monkeypatch.setattr(settings, "paperless_default_tags", "", raising=False)
-    monkeypatch.setattr(settings, "paperless_upload_timeout_seconds", 30, raising=False)
-    return settings
+UPLOAD_PATH = "/api/documents/post_document/"
 
 
 @pytest.fixture
@@ -65,77 +58,45 @@ def paperless_inbox(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _counter_value(result: str, reason: str) -> float:
-    """Read current PAPERLESS_UPLOAD_TOTAL{result,reason} — 0 if never emitted."""
-    from orchestrator.metrics import PAPERLESS_UPLOAD_TOTAL
-
-    return PAPERLESS_UPLOAD_TOTAL.labels(result=result, reason=reason)._value.get()
+def _uploads(result: str, reason: str) -> float:
+    return metric_value(PAPERLESS_UPLOAD_TOTAL, result=result, reason=reason)
 
 
 # ===========================================================================
-# _default_tags_list (pure unit)
+# _default_tags_list / _sanitize_body (pure unit)
 # ===========================================================================
 
 
-class TestDefaultTagsList:
-    def test_empty_returns_empty(self, monkeypatch):
-        from orchestrator.config import settings
-        from orchestrator.paperless_manager import _default_tags_list
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        pytest.param("", [], id="empty"),
+        pytest.param("receipts", ["receipts"], id="single"),
+        pytest.param(" a , b ,,  c,  ", ["a", "b", "c"], id="csv-trims-and-drops-blanks"),
+    ],
+)
+def test_default_tags_list(monkeypatch, raw, expected):
+    from orchestrator.config import settings
 
-        monkeypatch.setattr(settings, "paperless_default_tags", "", raising=False)
-        assert _default_tags_list() == []
-
-    def test_single(self, monkeypatch):
-        from orchestrator.config import settings
-        from orchestrator.paperless_manager import _default_tags_list
-
-        monkeypatch.setattr(settings, "paperless_default_tags", "receipts", raising=False)
-        assert _default_tags_list() == ["receipts"]
-
-    def test_csv_trims_and_filters_blanks(self, monkeypatch):
-        from orchestrator.config import settings
-        from orchestrator.paperless_manager import _default_tags_list
-
-        monkeypatch.setattr(settings, "paperless_default_tags", " a , b ,,  c,  ", raising=False)
-        assert _default_tags_list() == ["a", "b", "c"]
+    monkeypatch.setattr(settings, "paperless_default_tags", raw, raising=False)
+    assert _default_tags_list() == expected
 
 
-# ===========================================================================
-# _sanitize_body (pure unit)
-# ===========================================================================
-
-
-class TestSanitizeBody:
-    def test_empty_string_returns_empty(self):
-        from orchestrator.paperless_manager import _sanitize_body
-
-        assert _sanitize_body("") == ""
-
-    def test_none_returns_empty(self):
-        from orchestrator.paperless_manager import _sanitize_body
-
-        assert _sanitize_body(None) == ""  # type: ignore[arg-type]
-
-    def test_plain_text_preserved(self):
-        from orchestrator.paperless_manager import _sanitize_body
-
-        assert _sanitize_body("hello world") == "hello world"
-
-    def test_strips_control_chars(self):
-        from orchestrator.paperless_manager import _sanitize_body
-
-        # \x01 (SOH) and \x1f (US) are below 0x20 → stripped
-        # \x7f (DEL) is >=0x7F → stripped
-        # \t (0x09) and \n (0x0a) are whitelisted → kept
-        dirty = "ok\x01bad\x1fstuff\x7fend\ttab\nline"
-        cleaned = _sanitize_body(dirty)
-        assert cleaned == "okbadstuffend\ttab\nline"
-
-    def test_caps_at_limit(self):
-        from orchestrator.paperless_manager import _sanitize_body
-
-        assert _sanitize_body("x" * 500) == "x" * 300
-        assert _sanitize_body("x" * 50, limit=10) == "x" * 10
+@pytest.mark.parametrize(
+    "raw,kwargs,expected",
+    [
+        pytest.param("", {}, "", id="empty"),
+        pytest.param(None, {}, "", id="none"),
+        pytest.param("hello world", {}, "hello world", id="plain"),
+        # \x01 (SOH) and \x1f (US) are below 0x20 → stripped; \x7f (DEL) is
+        # >=0x7F → stripped; \t (0x09) and \n (0x0a) are whitelisted → kept.
+        pytest.param("ok\x01bad\x1fstuff\x7fend\ttab\nline", {}, "okbadstuffend\ttab\nline", id="control-chars"),
+        pytest.param("x" * 500, {}, "x" * 300, id="default-cap-300"),
+        pytest.param("x" * 50, {"limit": 10}, "x" * 10, id="custom-cap"),
+    ],
+)
+def test_sanitize_body(raw, kwargs, expected):
+    assert _sanitize_body(raw, **kwargs) == expected
 
 
 # ===========================================================================
@@ -144,100 +105,55 @@ class TestSanitizeBody:
 
 
 class TestUploadFile:
-    @pytest.mark.asyncio
-    async def test_disabled_returns_skipped_without_http(self, paperless_off):
-        from orchestrator.paperless_manager import upload_file
-
-        before = _counter_value("skipped", "disabled")
+    @pytest.mark.parametrize(
+        "attr,value,reason",
+        [
+            pytest.param("paperless_enabled", False, "disabled", id="disabled"),
+            pytest.param("paperless_url", "", "missing_url", id="missing-url"),
+            pytest.param("paperless_api_token", "", "missing_token", id="missing-token"),
+        ],
+    )
+    async def test_skipped_without_http(self, memory_paperless_on, monkeypatch, attr, value, reason):
+        monkeypatch.setattr(memory_paperless_on, attr, value, raising=False)
+        before = _uploads("skipped", reason)
         with respx.mock:  # no routes → any HTTP would error
             result = await upload_file(b"pdf-bytes", "a.pdf")
-        assert result == {"success": False, "skipped": True, "reason": "disabled"}
-        assert _counter_value("skipped", "disabled") == before + 1
+        assert result == {"success": False, "skipped": True, "reason": reason}
+        assert _uploads("skipped", reason) == before + 1
 
-    @pytest.mark.asyncio
-    async def test_missing_url_skipped(self, paperless_on, monkeypatch):
-        from orchestrator.config import settings
-        from orchestrator.paperless_manager import upload_file
-
-        monkeypatch.setattr(settings, "paperless_url", "", raising=False)
-        before = _counter_value("skipped", "missing_url")
-        with respx.mock:
-            result = await upload_file(b"x", "a.pdf")
-        assert result["success"] is False
-        assert result["skipped"] is True
-        assert result["reason"] == "missing_url"
-        assert _counter_value("skipped", "missing_url") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_missing_token_skipped(self, paperless_on, monkeypatch):
-        from orchestrator.config import settings
-        from orchestrator.paperless_manager import upload_file
-
-        monkeypatch.setattr(settings, "paperless_api_token", "", raising=False)
-        before = _counter_value("skipped", "missing_token")
-        with respx.mock:
-            result = await upload_file(b"x", "a.pdf")
-        assert result["success"] is False
-        assert result["reason"] == "missing_token"
-        assert _counter_value("skipped", "missing_token") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_success_200_string_task_id(self, paperless_on):
-        from orchestrator.paperless_manager import upload_file
-
-        before = _counter_value("ok", "ok")
-        with respx.mock(base_url="http://paperless.test:8777") as mock:
-            route = mock.post("/api/documents/post_document/").mock(return_value=Response(200, json="task-uuid-123"))
+    async def test_success_200_string_task_id(self, memory_paperless_on):
+        before = _uploads("ok", "ok")
+        with respx.mock(base_url=PAPERLESS_BASE) as mock:
+            route = mock.post(UPLOAD_PATH).mock(return_value=Response(200, json="task-uuid-123"))
             result = await upload_file(b"pdf", "receipt.pdf", title="Groceries")
         assert route.called
-        # Auth header present
-        req = route.calls[0].request
-        assert req.headers["Authorization"] == "Token tok-abcdefgh"
+        assert route.calls[0].request.headers["Authorization"] == "Token tok-abcdefgh"
         assert result["success"] is True
         assert result["task_id"] == "task-uuid-123"
         assert "latency_ms" in result
-        assert _counter_value("ok", "ok") == before + 1
+        assert _uploads("ok", "ok") == before + 1
 
-    @pytest.mark.asyncio
-    async def test_success_201_dict_task_id_key(self, paperless_on):
-        from orchestrator.paperless_manager import upload_file
-
-        with respx.mock(base_url="http://paperless.test:8777") as mock:
-            mock.post("/api/documents/post_document/").mock(return_value=Response(201, json={"task_id": "abc-999"}))
+    @pytest.mark.parametrize(
+        "response,task_id",
+        [
+            pytest.param(Response(201, json={"task_id": "abc-999"}), "abc-999", id="201-task-id-key"),
+            pytest.param(Response(202, json={"id": "id-777"}), "id-777", id="202-id-fallback"),
+            # A non-JSON-looking body: resp.json() still parses "plain-task-9"
+            # as a JSON string, so task_id is the string itself.
+            pytest.param(Response(200, text="plain-task-9"), "plain-task-9", id="200-raw-text"),
+        ],
+    )
+    async def test_success_task_id_shapes(self, memory_paperless_on, response, task_id):
+        with respx.mock(base_url=PAPERLESS_BASE) as mock:
+            mock.post(UPLOAD_PATH).mock(return_value=response)
             result = await upload_file(b"x", "a.pdf")
         assert result["success"] is True
-        assert result["task_id"] == "abc-999"
+        assert result["task_id"] == task_id
 
-    @pytest.mark.asyncio
-    async def test_success_202_dict_id_fallback(self, paperless_on):
-        from orchestrator.paperless_manager import upload_file
-
-        with respx.mock(base_url="http://paperless.test:8777") as mock:
-            mock.post("/api/documents/post_document/").mock(return_value=Response(202, json={"id": "id-777"}))
-            result = await upload_file(b"x", "a.pdf")
-        assert result["success"] is True
-        assert result["task_id"] == "id-777"
-
-    @pytest.mark.asyncio
-    async def test_success_200_raw_text_fallback(self, paperless_on):
-        """Paperless returned 200 with non-JSON body → task_id falls back to resp.text[:60]."""
-        from orchestrator.paperless_manager import upload_file
-
-        with respx.mock(base_url="http://paperless.test:8777") as mock:
-            mock.post("/api/documents/post_document/").mock(return_value=Response(200, text="plain-task-9"))
-            result = await upload_file(b"x", "a.pdf")
-        assert result["success"] is True
-        # resp.json() parses "plain-task-9" as JSON string successfully — so
-        # task_id comes out as the string itself, not via text[:60].
-        assert result["task_id"] == "plain-task-9"
-
-    @pytest.mark.asyncio
-    async def test_4xx_returns_fail_with_sanitized_body(self, paperless_on):
-        from orchestrator.paperless_manager import upload_file
-
-        before = _counter_value("fail", "http_4xx")
-        with respx.mock(base_url="http://paperless.test:8777") as mock:
-            mock.post("/api/documents/post_document/").mock(return_value=Response(400, text="bad\x01request\x7ftext"))
+    async def test_4xx_returns_fail_with_sanitized_body(self, memory_paperless_on):
+        before = _uploads("fail", "http_4xx")
+        with respx.mock(base_url=PAPERLESS_BASE) as mock:
+            mock.post(UPLOAD_PATH).mock(return_value=Response(400, text="bad\x01request\x7ftext"))
             result = await upload_file(b"x", "a.pdf")
         assert result["success"] is False
         assert result["status_code"] == 400
@@ -245,71 +161,40 @@ class TestUploadFile:
         assert "\x01" not in result["body"]
         assert "\x7f" not in result["body"]
         assert "bad" in result["body"]
-        assert _counter_value("fail", "http_4xx") == before + 1
+        assert _uploads("fail", "http_4xx") == before + 1
 
-    @pytest.mark.asyncio
-    async def test_5xx_returns_fail(self, paperless_on):
-        from orchestrator.paperless_manager import upload_file
-
-        before = _counter_value("fail", "http_5xx")
-        with respx.mock(base_url="http://paperless.test:8777") as mock:
-            mock.post("/api/documents/post_document/").mock(return_value=Response(503, text="overloaded"))
+    @pytest.mark.parametrize(
+        "mock_kwargs,reason,field,expected",
+        [
+            pytest.param({"return_value": Response(503, text="overloaded")}, "http_5xx", "status_code", 503, id="5xx"),
+            pytest.param(
+                {"side_effect": httpx.TimeoutException("slow")}, "timeout", "error", "TimeoutException", id="timeout"
+            ),
+            pytest.param(
+                {"side_effect": httpx.ConnectError("dns")}, "connect_error", "error", "ConnectError", id="connect-error"
+            ),
+            pytest.param({"side_effect": ValueError("weird")}, "other", "error", "ValueError", id="other-exception"),
+        ],
+    )
+    async def test_failure_swallowed_and_counted(self, memory_paperless_on, mock_kwargs, reason, field, expected):
+        before = _uploads("fail", reason)
+        with respx.mock(base_url=PAPERLESS_BASE) as mock:
+            mock.post(UPLOAD_PATH).mock(**mock_kwargs)
             result = await upload_file(b"x", "a.pdf")
         assert result["success"] is False
-        assert result["status_code"] == 503
-        assert _counter_value("fail", "http_5xx") == before + 1
+        if field == "status_code":
+            assert result["status_code"] == expected
+        else:
+            assert expected in result["error"]
+        assert _uploads("fail", reason) == before + 1
 
-    @pytest.mark.asyncio
-    async def test_timeout_swallowed(self, paperless_on):
-        from orchestrator.paperless_manager import upload_file
-
-        before = _counter_value("fail", "timeout")
-        with respx.mock(base_url="http://paperless.test:8777") as mock:
-            mock.post("/api/documents/post_document/").mock(side_effect=httpx.TimeoutException("slow"))
-            result = await upload_file(b"x", "a.pdf")
-        assert result["success"] is False
-        assert "TimeoutException" in result["error"]
-        assert _counter_value("fail", "timeout") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_connect_error_swallowed(self, paperless_on):
-        from orchestrator.paperless_manager import upload_file
-
-        before = _counter_value("fail", "connect_error")
-        with respx.mock(base_url="http://paperless.test:8777") as mock:
-            mock.post("/api/documents/post_document/").mock(side_effect=httpx.ConnectError("dns"))
-            result = await upload_file(b"x", "a.pdf")
-        assert result["success"] is False
-        assert "ConnectError" in result["error"]
-        assert _counter_value("fail", "connect_error") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_generic_exception_swallowed(self, paperless_on):
-        from orchestrator.paperless_manager import upload_file
-
-        before = _counter_value("fail", "other")
-        with respx.mock(base_url="http://paperless.test:8777") as mock:
-            mock.post("/api/documents/post_document/").mock(side_effect=ValueError("weird"))
-            result = await upload_file(b"x", "a.pdf")
-        assert result["success"] is False
-        assert "ValueError" in result["error"]
-        assert _counter_value("fail", "other") == before + 1
-
-    @pytest.mark.asyncio
-    async def test_tags_merged_deduped_and_capped(self, paperless_on, monkeypatch):
+    async def test_tags_merged_deduped_and_capped(self, memory_paperless_on, monkeypatch):
         """Tool-supplied + env-default tags are merged, deduplicated, and each capped at 256 chars."""
-        from orchestrator.config import settings
-        from orchestrator.paperless_manager import upload_file
-
-        monkeypatch.setattr(settings, "paperless_default_tags", "env-a, env-b, dup", raising=False)
+        monkeypatch.setattr(memory_paperless_on, "paperless_default_tags", "env-a, env-b, dup", raising=False)
         long_tag = "z" * 500
-        with respx.mock(base_url="http://paperless.test:8777") as mock:
-            route = mock.post("/api/documents/post_document/").mock(return_value=Response(200, json="ok"))
-            await upload_file(
-                b"x",
-                "a.pdf",
-                tags=["tool-x", "dup", long_tag],
-            )
+        with respx.mock(base_url=PAPERLESS_BASE) as mock:
+            route = mock.post(UPLOAD_PATH).mock(return_value=Response(200, json="ok"))
+            await upload_file(b"x", "a.pdf", tags=["tool-x", "dup", long_tag])
         body = route.calls[0].request.content.decode("utf-8", errors="replace")
         # tool tag "tool-x" present, dup only once, long_tag truncated to 256
         assert "tool-x" in body
@@ -320,19 +205,10 @@ class TestUploadFile:
         assert "z" * 256 in body
         assert "z" * 257 not in body
 
-    @pytest.mark.asyncio
-    async def test_title_correspondent_doctype_capped(self, paperless_on):
-        from orchestrator.paperless_manager import upload_file
-
-        with respx.mock(base_url="http://paperless.test:8777") as mock:
-            route = mock.post("/api/documents/post_document/").mock(return_value=Response(200, json="ok"))
-            await upload_file(
-                b"x",
-                "a.pdf",
-                title="T" * 500,
-                correspondent="C" * 500,
-                document_type="D" * 500,
-            )
+    async def test_title_correspondent_doctype_capped(self, memory_paperless_on):
+        with respx.mock(base_url=PAPERLESS_BASE) as mock:
+            route = mock.post(UPLOAD_PATH).mock(return_value=Response(200, json="ok"))
+            await upload_file(b"x", "a.pdf", title="T" * 500, correspondent="C" * 500, document_type="D" * 500)
         body = route.calls[0].request.content.decode("utf-8", errors="replace")
         # Each metadata field capped at 256
         assert "T" * 256 in body and "T" * 257 not in body
@@ -345,61 +221,45 @@ class TestUploadFile:
 # ===========================================================================
 
 
-class TestPaperlessSaveTool:
-    @pytest.mark.asyncio
-    async def test_disabled_returns_friendly(self, paperless_off):
-        from orchestrator.tool_handlers import _reg_paperless_save
+def _queued(result=None):
+    """Patch paperless_manager.upload_file (the symbol the handler imports)."""
+    return patch(
+        "orchestrator.paperless_manager.upload_file",
+        new=AsyncMock(return_value=result or {"success": True, "task_id": "t", "latency_ms": 1}),
+    )
 
+
+class TestPaperlessSaveTool:
+    async def test_disabled_returns_friendly(self, paperless_off):
         out = await _reg_paperless_save({"filename": "a.pdf"})
         assert "disabled" in out.lower()
         assert "PAPERLESS_ENABLED" in out
 
-    @pytest.mark.asyncio
-    async def test_empty_filename(self, paperless_on):
-        from orchestrator.tool_handlers import _reg_paperless_save
-
-        out = await _reg_paperless_save({"filename": ""})
+    @pytest.mark.parametrize("args", [pytest.param({"filename": ""}, id="empty"), pytest.param({}, id="missing-key")])
+    async def test_no_filename_asks_which(self, memory_paperless_on, args):
+        out = await _reg_paperless_save(args)
         assert "which filename" in out.lower()
 
-    @pytest.mark.asyncio
-    async def test_missing_filename_key(self, paperless_on):
-        from orchestrator.tool_handlers import _reg_paperless_save
-
-        out = await _reg_paperless_save({})
-        assert "which filename" in out.lower()
-
-    @pytest.mark.asyncio
-    async def test_null_byte_refused(self, paperless_on):
-        from orchestrator.tool_handlers import _reg_paperless_save
-
+    async def test_null_byte_refused(self, memory_paperless_on):
         out = await _reg_paperless_save({"filename": "evil\x00.pdf"})
         assert "null byte" in out.lower()
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "bad",
         ["sub/file.pdf", "..\\escape.pdf", "../etc/passwd", "a/../b.pdf"],
     )
-    async def test_path_traversal_refused(self, paperless_on, bad):
-        from orchestrator.tool_handlers import _reg_paperless_save
-
+    async def test_path_traversal_refused(self, memory_paperless_on, bad):
         out = await _reg_paperless_save({"filename": bad})
         assert out.startswith("Refused filename")
         assert "basename" in out.lower()
 
-    @pytest.mark.asyncio
-    async def test_absolute_path_refused(self, paperless_on):
-        from orchestrator.tool_handlers import _reg_paperless_save
-
+    async def test_absolute_path_refused(self, memory_paperless_on):
         out = await _reg_paperless_save({"filename": "/etc/passwd"})
         # /etc/passwd hits the "/" in filename check first — either wording is acceptable
         assert "refused" in out.lower()
 
-    @pytest.mark.asyncio
-    async def test_symlink_escape_refused(self, paperless_on, paperless_inbox, tmp_path):
+    async def test_symlink_escape_refused(self, memory_paperless_on, paperless_inbox, tmp_path):
         """Symlink inside the inbox pointing outside must be rejected via resolve()+relative_to()."""
-        from orchestrator.tool_handlers import _reg_paperless_save
-
         # Stash a real file OUTSIDE the inbox
         outside = tmp_path.parent / "outside-target.pdf"
         outside.write_bytes(b"secret")
@@ -413,48 +273,29 @@ class TestPaperlessSaveTool:
         out = await _reg_paperless_save({"filename": "innocent.pdf"})
         assert "escapes" in out.lower() or "refused" in out.lower()
 
-    @pytest.mark.asyncio
-    async def test_file_not_present(self, paperless_on, paperless_inbox):
-        from orchestrator.tool_handlers import _reg_paperless_save
-
+    async def test_file_not_present(self, memory_paperless_on, paperless_inbox):
         out = await _reg_paperless_save({"filename": "ghost.pdf"})
         assert "no file named" in out.lower()
         assert "ghost.pdf" in out
 
-    @pytest.mark.asyncio
-    async def test_file_too_large_refused_and_metric(self, paperless_on, paperless_inbox, monkeypatch):
-        from orchestrator.tool_handlers import _reg_paperless_save
-
+    async def test_file_too_large_refused_and_metric(self, memory_paperless_on, paperless_inbox, monkeypatch):
         # Cap at 1 MB for this test via env var (tool reads it fresh each call)
         monkeypatch.setenv("DOCUMENT_MAX_SIZE_MB", "1")
-        # Write 2 MB
         big = paperless_inbox / "huge.pdf"
         big.write_bytes(b"\x00" * (2 * 1024 * 1024))
 
-        before = _counter_value("skipped", "file_too_large")
+        before = _uploads("skipped", "file_too_large")
         out = await _reg_paperless_save({"filename": "huge.pdf"})
         assert out.startswith("Refused")
         assert "MB" in out
-        assert _counter_value("skipped", "file_too_large") == before + 1
+        assert _uploads("skipped", "file_too_large") == before + 1
 
-    @pytest.mark.asyncio
-    async def test_happy_path_queues_upload(self, paperless_on, paperless_inbox):
-        from orchestrator.tool_handlers import _reg_paperless_save
+    async def test_happy_path_queues_upload(self, memory_paperless_on, paperless_inbox):
+        (paperless_inbox / "receipt.pdf").write_bytes(b"%PDF-fake-bytes")
 
-        f = paperless_inbox / "receipt.pdf"
-        f.write_bytes(b"%PDF-fake-bytes")
-
-        # Mock the paperless_manager.upload_file symbol the handler imports
-        with patch(
-            "orchestrator.paperless_manager.upload_file",
-            new=AsyncMock(return_value={"success": True, "task_id": "t-42", "latency_ms": 12}),
-        ) as mocked:
+        with _queued({"success": True, "task_id": "t-42", "latency_ms": 12}) as mocked:
             out = await _reg_paperless_save(
-                {
-                    "filename": "receipt.pdf",
-                    "title": "March receipt",
-                    "tags": ["receipts", "march"],
-                }
+                {"filename": "receipt.pdf", "title": "March receipt", "tags": ["receipts", "march"]}
             )
         assert "Queued" in out
         assert "receipt.pdf" in out
@@ -467,62 +308,30 @@ class TestPaperlessSaveTool:
         assert kwargs["tags"] == ["receipts", "march"]
         assert kwargs["content"] == b"%PDF-fake-bytes"
 
-    @pytest.mark.asyncio
-    async def test_comma_string_tags_get_split(self, paperless_on, paperless_inbox):
+    async def test_comma_string_tags_get_split(self, memory_paperless_on, paperless_inbox):
         """Defensive path: LLM passed a CSV string instead of a list."""
-        from orchestrator.tool_handlers import _reg_paperless_save
-
-        f = paperless_inbox / "a.pdf"
-        f.write_bytes(b"x")
-
-        with patch(
-            "orchestrator.paperless_manager.upload_file",
-            new=AsyncMock(return_value={"success": True, "task_id": "t", "latency_ms": 1}),
-        ) as mocked:
+        (paperless_inbox / "a.pdf").write_bytes(b"x")
+        with _queued() as mocked:
             await _reg_paperless_save({"filename": "a.pdf", "tags": "a, b , c"})
         assert mocked.call_args.kwargs["tags"] == ["a", "b", "c"]
 
-    @pytest.mark.asyncio
-    async def test_upload_fail_surfaces_status_code(self, paperless_on, paperless_inbox):
-        from orchestrator.tool_handlers import _reg_paperless_save
-
-        f = paperless_inbox / "a.pdf"
-        f.write_bytes(b"x")
-
-        with patch(
-            "orchestrator.paperless_manager.upload_file",
-            new=AsyncMock(
-                return_value={
-                    "success": False,
-                    "status_code": 400,
-                    "body": "bad request",
-                }
+    @pytest.mark.parametrize(
+        "result,needles",
+        [
+            pytest.param(
+                {"success": False, "status_code": 400, "body": "bad request"},
+                ("rejected", "400", "bad request"),
+                id="http-fail",
             ),
-        ):
+            pytest.param({"success": False, "error": "ConnectError: dns"}, ("failed", "ConnectError"), id="error"),
+        ],
+    )
+    async def test_upload_failure_surfaces_details(self, memory_paperless_on, paperless_inbox, result, needles):
+        (paperless_inbox / "a.pdf").write_bytes(b"x")
+        with _queued(result):
             out = await _reg_paperless_save({"filename": "a.pdf"})
-        assert "rejected" in out.lower()
-        assert "400" in out
-        assert "bad request" in out
-
-    @pytest.mark.asyncio
-    async def test_upload_error_surfaces_message(self, paperless_on, paperless_inbox):
-        from orchestrator.tool_handlers import _reg_paperless_save
-
-        f = paperless_inbox / "a.pdf"
-        f.write_bytes(b"x")
-
-        with patch(
-            "orchestrator.paperless_manager.upload_file",
-            new=AsyncMock(
-                return_value={
-                    "success": False,
-                    "error": "ConnectError: dns",
-                }
-            ),
-        ):
-            out = await _reg_paperless_save({"filename": "a.pdf"})
-        assert "failed" in out.lower()
-        assert "ConnectError" in out
+        for needle in needles:
+            assert needle.lower() in out.lower()
 
 
 # ===========================================================================
@@ -532,9 +341,6 @@ class TestPaperlessSaveTool:
 
 @pytest.fixture
 def client():
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
     from orchestrator.routes_paperless import router
 
     app = FastAPI()
@@ -542,36 +348,27 @@ def client():
     return TestClient(app)
 
 
+def _upload_returns(result):
+    return patch("orchestrator.routes_paperless._upload_to_paperless", new=AsyncMock(return_value=result))
+
+
 class TestPaperlessRoute:
     def test_disabled_returns_503(self, client, paperless_off):
-        r = client.post(
-            "/api/paperless/upload",
-            files={"file": ("a.pdf", b"x", "application/pdf")},
-        )
+        r = client.post("/api/paperless/upload", files={"file": ("a.pdf", b"x", "application/pdf")})
         assert r.status_code == 503
         body = r.json()
         assert body["ok"] is False
         assert body["error"] == "paperless_disabled"
 
-    def test_success_returns_200_with_task_id(self, client, paperless_on):
-        with patch(
-            "orchestrator.routes_paperless._upload_to_paperless",
-            new=AsyncMock(
-                return_value={
-                    "success": True,
-                    "task_id": "t-777",
-                    "latency_ms": 88,
-                }
-            ),
-        ) as mocked:
+    def test_success_returns_200_with_task_id(self, client, memory_paperless_on):
+        with _upload_returns({"success": True, "task_id": "t-777", "latency_ms": 88}) as mocked:
             r = client.post(
                 "/api/paperless/upload",
                 files={"file": ("scan.pdf", b"bytes", "application/pdf")},
                 data={"title": "Scan", "tags": ["invoice", "2026"]},
             )
         assert r.status_code == 200
-        body = r.json()
-        assert body == {"ok": True, "task_id": "t-777", "latency_ms": 88}
+        assert r.json() == {"ok": True, "task_id": "t-777", "latency_ms": 88}
         # underlying upload_file got the fields
         kwargs = mocked.call_args.kwargs
         assert kwargs["filename"] == "scan.pdf"
@@ -579,67 +376,33 @@ class TestPaperlessRoute:
         assert kwargs["tags"] == ["invoice", "2026"]
         assert kwargs["content"] == b"bytes"
 
-    def test_upstream_skipped_returns_503(self, client, paperless_on):
-        with patch(
-            "orchestrator.routes_paperless._upload_to_paperless",
-            new=AsyncMock(
-                return_value={
-                    "success": False,
-                    "skipped": True,
-                    "reason": "missing_url",
-                }
+    @pytest.mark.parametrize(
+        "result,status,error_part,extra",
+        [
+            pytest.param(
+                {"success": False, "skipped": True, "reason": "missing_url"}, 503, "missing_url", {}, id="skipped-503"
             ),
-        ):
-            r = client.post(
-                "/api/paperless/upload",
-                files={"file": ("a.pdf", b"x", "application/pdf")},
-            )
-        assert r.status_code == 503
+            pytest.param(
+                {"success": False, "status_code": 400, "body": "bad request"},
+                502,
+                "400",
+                {"body": "bad request"},
+                id="http-fail-502",
+            ),
+            pytest.param({"success": False, "error": "ConnectError: dns"}, 502, "ConnectError", {}, id="network-502"),
+        ],
+    )
+    def test_upstream_failure(self, client, memory_paperless_on, result, status, error_part, extra):
+        with _upload_returns(result):
+            r = client.post("/api/paperless/upload", files={"file": ("a.pdf", b"x", "application/pdf")})
+        assert r.status_code == status
         body = r.json()
         assert body["ok"] is False
-        assert body["error"] == "missing_url"
+        assert error_part in body["error"]
+        for key, value in extra.items():
+            assert body[key] == value
 
-    def test_upstream_http_fail_returns_502(self, client, paperless_on):
-        with patch(
-            "orchestrator.routes_paperless._upload_to_paperless",
-            new=AsyncMock(
-                return_value={
-                    "success": False,
-                    "status_code": 400,
-                    "body": "bad request",
-                }
-            ),
-        ):
-            r = client.post(
-                "/api/paperless/upload",
-                files={"file": ("a.pdf", b"x", "application/pdf")},
-            )
-        assert r.status_code == 502
-        body = r.json()
-        assert body["ok"] is False
-        assert "400" in body["error"]
-        assert body["body"] == "bad request"
-
-    def test_upstream_network_error_returns_502(self, client, paperless_on):
-        with patch(
-            "orchestrator.routes_paperless._upload_to_paperless",
-            new=AsyncMock(
-                return_value={
-                    "success": False,
-                    "error": "ConnectError: dns",
-                }
-            ),
-        ):
-            r = client.post(
-                "/api/paperless/upload",
-                files={"file": ("a.pdf", b"x", "application/pdf")},
-            )
-        assert r.status_code == 502
-        body = r.json()
-        assert body["ok"] is False
-        assert "ConnectError" in body["error"]
-
-    def test_missing_file_field_returns_422(self, client, paperless_on):
+    def test_missing_file_field_returns_422(self, client, memory_paperless_on):
         """FastAPI's File(...) is required — omitting it yields a 422 validation error."""
         r = client.post("/api/paperless/upload", data={"title": "no file"})
         assert r.status_code == 422
@@ -650,71 +413,36 @@ class TestPaperlessRoute:
 # ===========================================================================
 
 
-class TestConfigAutoDisable:
-    def test_enabled_with_short_token_disables(self, caplog):
-        """PAPERLESS_ENABLED=true + token <8 chars → auto-disabled, ERROR logged, NO raise."""
-        import logging
-
-        from orchestrator.config import Settings
-
-        env = {
-            "PAPERLESS_ENABLED": "true",
-            "PAPERLESS_URL": "http://paperless.test:8777",
-            "PAPERLESS_API_TOKEN": "short",  # 5 chars, <8
-            "HA_TOKEN": "x",
-            "API_TOKEN": "x",
-            "PIHOLE_PASSWORD": "x",
-        }
-        with patch.dict(os.environ, env, clear=False), caplog.at_level(logging.ERROR, logger="orchestrator.config"):
-            s = Settings()
-        assert s.paperless_enabled is False
+@pytest.mark.parametrize(
+    "env,enabled",
+    [
+        # PAPERLESS_ENABLED=true + token <8 chars → auto-disabled, ERROR logged, NO raise.
+        pytest.param(
+            {"PAPERLESS_ENABLED": "true", "PAPERLESS_URL": PAPERLESS_BASE, "PAPERLESS_API_TOKEN": "short"},
+            False,
+            id="short-token",
+        ),
+        pytest.param(
+            {"PAPERLESS_ENABLED": "true", "PAPERLESS_URL": "", "PAPERLESS_API_TOKEN": "valid-long-token"},
+            False,
+            id="missing-url",
+        ),
+        pytest.param(
+            {"PAPERLESS_ENABLED": "true", "PAPERLESS_URL": PAPERLESS_BASE, "PAPERLESS_API_TOKEN": "valid-long-token"},
+            True,
+            id="valid",
+        ),
+        # Feature off: missing URL/token don't even matter.
+        pytest.param(
+            {"PAPERLESS_ENABLED": "false", "PAPERLESS_URL": "", "PAPERLESS_API_TOKEN": ""}, False, id="disabled"
+        ),
+    ],
+)
+def test_config_auto_disable(caplog, env, enabled):
+    with caplog.at_level(logging.ERROR, logger="orchestrator.config"):
+        s = make_settings(**env)
+    assert s.paperless_enabled is enabled
+    if enabled:
+        assert s.paperless_url == PAPERLESS_BASE
+    if env["PAPERLESS_API_TOKEN"] == "short":
         assert any("PAPERLESS_ENABLED=true" in r.getMessage() for r in caplog.records)
-
-    def test_enabled_with_missing_url_disables(self, caplog):
-        import logging
-
-        from orchestrator.config import Settings
-
-        env = {
-            "PAPERLESS_ENABLED": "true",
-            "PAPERLESS_URL": "",
-            "PAPERLESS_API_TOKEN": "valid-long-token",
-            "HA_TOKEN": "x",
-            "API_TOKEN": "x",
-            "PIHOLE_PASSWORD": "x",
-        }
-        with patch.dict(os.environ, env, clear=False), caplog.at_level(logging.ERROR, logger="orchestrator.config"):
-            s = Settings()
-        assert s.paperless_enabled is False
-
-    def test_valid_config_stays_enabled(self):
-        from orchestrator.config import Settings
-
-        env = {
-            "PAPERLESS_ENABLED": "true",
-            "PAPERLESS_URL": "http://paperless.test:8777",
-            "PAPERLESS_API_TOKEN": "valid-long-token",
-            "HA_TOKEN": "x",
-            "API_TOKEN": "x",
-            "PIHOLE_PASSWORD": "x",
-        }
-        with patch.dict(os.environ, env, clear=False):
-            s = Settings()
-        assert s.paperless_enabled is True
-        assert s.paperless_url == "http://paperless.test:8777"
-
-    def test_disabled_feature_never_raises_on_bad_config(self):
-        """If the feature flag is off, missing URL/token shouldn't even matter."""
-        from orchestrator.config import Settings
-
-        env = {
-            "PAPERLESS_ENABLED": "false",
-            "PAPERLESS_URL": "",
-            "PAPERLESS_API_TOKEN": "",
-            "HA_TOKEN": "x",
-            "API_TOKEN": "x",
-            "PIHOLE_PASSWORD": "x",
-        }
-        with patch.dict(os.environ, env, clear=False):
-            s = Settings()
-        assert s.paperless_enabled is False

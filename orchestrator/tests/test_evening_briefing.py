@@ -10,77 +10,39 @@ Covers:
 - Evening meds line (confirmed vs. unconfirmed).
 - DND: parks silently, no announce, no mirror.
 - Active routine: parks, no announce, digest mirrored (inbox card + Telegram).
-- Morning pickup: parked item announced, cleared only on successful announce.
 
-Runs inside the brain-orchestrator container (full deps available). Skips
-gracefully when orchestrator dependencies are unavailable locally.
+The morning half (parked item announced, cleared only once heard) is in
+test_morning_briefing.
 """
 
 import logging
+import sys
+import time
+from contextlib import ExitStack
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
-
-def _can_import():
-    try:
-        from orchestrator import jobs_calendar  # noqa: F401
-
-        return True
-    except (ImportError, ModuleNotFoundError):
-        return False
-
-
-_skip_no_deps = pytest.mark.skipif(
-    not _can_import(),
-    reason="jobs_calendar requires chromadb and full orchestrator dependencies",
-)
-
+from orchestrator import inbox, jobs_calendar, routine_manager, shared
+from orchestrator.config import settings
+from orchestrator.metrics import EVENING_BRIEFING_OUTCOME_TOTAL
+from orchestrator.shared import TIMEZONE
+from orchestrator.tests._helpers import metric_value
+from orchestrator.tests.calendar_fakes import fake_client, make_event, patched_calendar
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-def _skip_without_deps():
-    if not _can_import():
-        pytest.skip("jobs_calendar deps unavailable")
-
-
 @pytest.fixture
-def reset_shared(tmp_db, monkeypatch):
-    """Reset the shared state evening_briefing reads: phone cache, DND, focus.
-    Also points the inbox mirror at tmp_db with Web Push off."""
-    from orchestrator import shared
-    from orchestrator.config import settings
-
+def reset_shared(delivery_reset_shared, tmp_db, monkeypatch):
+    """Phone cache empty, DND off, no focus session; the inbox mirror goes to
+    tmp_db with Web Push off."""
     monkeypatch.setattr(settings, "webpush_enabled", False, raising=False)
-
-    orig_events = shared._phone_calendar_events
-    orig_time = shared._phone_calendar_sync_time
-    orig_dnd = shared.DND_ACTIVE
-    orig_focus = shared.current_focus_session.to_dict()
-    shared._phone_calendar_events = []
-    shared._phone_calendar_sync_time = 0.0
-    _orig_source = shared._phone_calendar_source
-    shared._phone_calendar_source = "exchange"
-    shared.DND_ACTIVE = False
-    shared.current_focus_session.reset()
-    yield shared
-    shared._phone_calendar_events = orig_events
-    shared._phone_calendar_sync_time = orig_time
-    shared._phone_calendar_source = _orig_source
-    shared.DND_ACTIVE = orig_dnd
-    shared.current_focus_session.update(orig_focus)
-
-
-@pytest.fixture
-def fresh_phone_sync_time():
-    import time as _time
-
-    return _time.time()
+    return delivery_reset_shared
 
 
 @pytest.fixture
@@ -100,8 +62,6 @@ def patch_evening_deps():
         open_tasks=None,
         announce_result=None,
     ):
-        from orchestrator.tests.calendar_fakes import fake_client, patched_calendar
-
         mock_client = fake_client(configured=google_configured, success=google_success, events=google_events)
 
         patches = {
@@ -126,44 +86,26 @@ def patch_evening_deps():
 
 
 def _tomorrow_phone_event(title, hour=9, minute=0, all_day=False, location=""):
-    from zoneinfo import ZoneInfo
-
-    from orchestrator.shared import TIMEZONE
-
     day = datetime.now(ZoneInfo(TIMEZONE)).date() + timedelta(days=1)
     start_str = datetime(day.year, day.month, day.day, hour, minute).strftime("%b %d, %Y %I:%M %p")
     return {"title": title, "start": start_str, "all_day": all_day, "location": location}
 
 
 def _today_phone_event(title, hour=10):
-    from zoneinfo import ZoneInfo
-
-    from orchestrator.shared import TIMEZONE
-
     day = datetime.now(ZoneInfo(TIMEZONE)).date()
     start_str = datetime(day.year, day.month, day.day, hour, 0).strftime("%b %d, %Y %I:%M %p")
     return {"title": title, "start": start_str, "all_day": False, "location": ""}
 
 
 def _google_event(title, day_offset, hour=9, all_day=False, location=""):
-    from zoneinfo import ZoneInfo
-
-    from orchestrator.shared import TIMEZONE
-
     tz = ZoneInfo(TIMEZONE)
     day = datetime.now(tz).date() + timedelta(days=day_offset)
-    from orchestrator.tests.calendar_fakes import make_event
-
     return make_event(
         title, datetime(day.year, day.month, day.day, hour, 0, tzinfo=tz), all_day=all_day, location=location
     )
 
 
 async def _run_evening(patches):
-    from contextlib import ExitStack
-
-    from orchestrator import jobs_calendar
-
     with ExitStack() as stack:
         mocks = {name: stack.enter_context(p) for name, p in patches.items()}
         await jobs_calendar.evening_briefing()
@@ -180,9 +122,7 @@ def _spoken(mocks):
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_phone_tomorrow_event_selected_today_excluded(reset_shared, fresh_phone_sync_time, patch_evening_deps):
+async def test_phone_tomorrow_event_selected_today_excluded(reset_shared, patch_evening_deps):
     """Phone cache holds today's and tomorrow's events -> only tomorrow's first
     timed event is spoken."""
     shared = reset_shared
@@ -191,7 +131,7 @@ async def test_phone_tomorrow_event_selected_today_excluded(reset_shared, fresh_
         _tomorrow_phone_event("Dentist", hour=14),
         _tomorrow_phone_event("Gym", hour=8, minute=30),
     ]
-    shared._phone_calendar_sync_time = fresh_phone_sync_time
+    shared._phone_calendar_sync_time = time.time()
 
     mock_client, patches = patch_evening_deps(google_configured=False)
     mocks = await _run_evening(patches)
@@ -202,8 +142,6 @@ async def test_phone_tomorrow_event_selected_today_excluded(reset_shared, fresh_
     assert "Plus 1 more event" in text
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_google_fallback_filters_to_tomorrow(reset_shared, patch_evening_deps):
     """No phone push -> Google answers; only tomorrow's events are used."""
     mock_client, patches = patch_evening_deps(
@@ -220,15 +158,9 @@ async def test_google_fallback_filters_to_tomorrow(reset_shared, patch_evening_d
     assert "Today thing" not in text
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_tonights_late_event_is_not_tomorrows_first_thing(reset_shared, patch_evening_deps):
     """An event tonight that runs past midnight overlaps tomorrow but must not be
     announced as tomorrow's first thing (or get a leave-by in the past)."""
-    from zoneinfo import ZoneInfo
-
-    from orchestrator.shared import TIMEZONE
-    from orchestrator.tests.calendar_fakes import make_event
 
     tz = ZoneInfo(TIMEZONE)
     today = datetime.now(tz).date()
@@ -238,8 +170,6 @@ async def test_tonights_late_event_is_not_tomorrows_first_thing(reset_shared, pa
     assert "Dentist" in text and "Late show" not in text
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_unreachable_calendar_is_not_a_clear_tomorrow(reset_shared, patch_evening_deps):
     _, patches = patch_evening_deps(google_success=False)
     text = _spoken(await _run_evening(patches))
@@ -247,30 +177,21 @@ async def test_unreachable_calendar_is_not_a_clear_tomorrow(reset_shared, patch_
     assert "I couldn't reach your Google calendar, so I can't tell you what's on tomorrow" in text
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_evening_never_sends_work_locations_to_maps(
-    reset_shared, fresh_phone_sync_time, patch_evening_deps, monkeypatch
-):
+async def test_evening_never_sends_work_locations_to_maps(reset_shared, patch_evening_deps, monkeypatch):
     """Tomorrow's first thing is a work meeting (pushed from the iPhone, source
     exchange): its invite location must not go to Google Maps."""
-    from orchestrator import shared
 
     monkeypatch.setattr(shared, "GOOGLE_MAPS_API_KEY", "test-key", raising=False)
     monkeypatch.setattr(shared, "HOME_ADDRESS", "1 Example St", raising=False)
     reset_shared._phone_calendar_events = [_tomorrow_phone_event("Meeting", hour=10, location="Conference Room 4")]
-    reset_shared._phone_calendar_sync_time = fresh_phone_sync_time
+    reset_shared._phone_calendar_sync_time = time.time()
     _, patches = patch_evening_deps(google_configured=False)
     mocks = await _run_evening(patches)
     assert "Meeting" in _spoken(mocks)
     mocks["travel"].assert_not_awaited()
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_evening_personal_location_still_gets_travel_time(reset_shared, patch_evening_deps, monkeypatch):
-    from orchestrator import shared
-
     monkeypatch.setattr(shared, "GOOGLE_MAPS_API_KEY", "test-key", raising=False)
     monkeypatch.setattr(shared, "HOME_ADDRESS", "1 Example St", raising=False)
     _, patches = patch_evening_deps(google_events=[_google_event("Dentist", 1, hour=10, location="2 Example Ave")])
@@ -278,8 +199,6 @@ async def test_evening_personal_location_still_gets_travel_time(reset_shared, pa
     mocks["travel"].assert_awaited_once()
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_clear_tomorrow_still_delivers(reset_shared, patch_evening_deps):
     """No events at all -> 'nothing on the calendar' but the ritual still runs."""
     _, patches = patch_evening_deps(google_events=[])
@@ -293,8 +212,6 @@ async def test_clear_tomorrow_still_delivers(reset_shared, patch_evening_deps):
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_parks_top_backlog_task(reset_shared, patch_evening_deps):
     """No focus session -> top open backlog task is parked and spoken."""
     _, patches = patch_evening_deps(open_tasks=[{"text": "email the landlord"}, {"text": "other"}])
@@ -305,8 +222,6 @@ async def test_parks_top_backlog_task(reset_shared, patch_evening_deps):
     assert "parking one thing" in text and "email the landlord" in text
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_active_focus_task_wins_over_backlog(reset_shared, patch_evening_deps):
     """An active focus session's task is parked instead of the backlog top."""
     shared = reset_shared
@@ -321,8 +236,6 @@ async def test_active_focus_task_wins_over_backlog(reset_shared, patch_evening_d
     assert "middle of the OAuth flow" in text
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_nothing_to_park(reset_shared, patch_evening_deps):
     """Empty backlog and no focus -> explicit 'nothing left to park' line."""
     _, patches = patch_evening_deps(open_tasks=[])
@@ -336,58 +249,27 @@ async def test_nothing_to_park(reset_shared, patch_evening_deps):
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_meds_unconfirmed_line(reset_shared, patch_evening_deps):
-    _, patches = patch_evening_deps(meds_status={"names": ["Naltrexone"], "confirmed": False})
-    mocks = await _run_evening(patches)
-    assert "haven't logged" in _spoken(mocks)
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_meds_confirmed_line(reset_shared, patch_evening_deps):
-    _, patches = patch_evening_deps(meds_status={"names": ["Naltrexone"], "confirmed": True})
-    mocks = await _run_evening(patches)
-    assert "meds are logged" in _spoken(mocks)
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_meds_none_says_nothing(reset_shared, patch_evening_deps):
-    _, patches = patch_evening_deps(meds_status=None)
-    mocks = await _run_evening(patches)
-    text = _spoken(mocks)
-    assert "meds" not in text.lower()
+@pytest.mark.parametrize(
+    "meds_status,phrase,present",
+    [
+        pytest.param({"names": ["Naltrexone"], "confirmed": False}, "haven't logged", True, id="unconfirmed"),
+        pytest.param({"names": ["Naltrexone"], "confirmed": True}, "meds are logged", True, id="confirmed"),
+        pytest.param(None, "meds", False, id="none-says-nothing"),
+    ],
+)
+async def test_meds_line(reset_shared, patch_evening_deps, meds_status, phrase, present):
+    _, patches = patch_evening_deps(meds_status=meds_status)
+    text = _spoken(await _run_evening(patches))
+    assert (phrase in text.lower()) is present
 
 
 # ---------------------------------------------------------------------------
-# DND: park silently
+# DND, active routine, outcome metric
 # ---------------------------------------------------------------------------
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_dnd_parks_silently(reset_shared, patch_evening_deps, caplog):
-    """DND active -> the parked item is persisted but nothing is announced or
-    mirrored to Telegram."""
-    shared = reset_shared
-    shared.DND_ACTIVE = True
-
-    _, patches = patch_evening_deps(open_tasks=[{"text": "email the landlord"}])
-    with caplog.at_level(logging.INFO, logger="orchestrator.jobs_calendar"):
-        mocks = await _run_evening(patches)
-
-    mocks["set_state"].assert_called_once_with("parked_item", "email the landlord")
-    mocks["voice"].assert_not_awaited()
-    mocks["telegram"].assert_not_called()
-    assert any("DND active" in r.getMessage() for r in caplog.records)
 
 
 def _outcome(label):
-    from orchestrator.metrics import EVENING_BRIEFING_OUTCOME_TOTAL
-
-    return EVENING_BRIEFING_OUTCOME_TOTAL.labels(outcome=label)._value.get()
+    return metric_value(EVENING_BRIEFING_OUTCOME_TOTAL, outcome=label)
 
 
 _OUTCOMES = ("spoken", "skipped_routine", "skipped_dnd", "suppressed", "failed", "error")
@@ -403,13 +285,29 @@ def _assert_counted_once(before, label):
     assert deltas == {k: (1 if k == label else 0) for k in _OUTCOMES}
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
+async def test_dnd_parks_silently(reset_shared, patch_evening_deps, caplog):
+    """DND active -> the parked item is persisted, but nothing is announced,
+    no inbox card is posted and nothing is mirrored to Telegram. Counted as
+    skipped_dnd only."""
+    reset_shared.DND_ACTIVE = True
+    before = _all_outcomes()
+
+    _, patches = patch_evening_deps(open_tasks=[{"text": "email the landlord"}])
+    with caplog.at_level(logging.INFO, logger="orchestrator.jobs_calendar"):
+        mocks = await _run_evening(patches)
+
+    mocks["set_state"].assert_called_once_with("parked_item", "email the landlord")
+    mocks["voice"].assert_not_awaited()
+    mocks["telegram"].assert_not_called()
+    assert inbox.list_pending() == []
+    _assert_counted_once(before, "skipped_dnd")
+    assert any("DND active" in r.getMessage() for r in caplog.records)
+
+
 async def test_active_routine_skips_announce_but_mirrors(reset_shared, patch_evening_deps, caplog):
     """A guided routine walkthrough mid-flight -> park, don't talk over it, but
     still mirror the digest off the speakers (the routine never speaks the
     parked item or the leave-by time). Counted as skipped_routine."""
-    from orchestrator import inbox, routine_manager
 
     before = _all_outcomes()
     _, patches = patch_evening_deps(open_tasks=[{"text": "email the landlord"}])
@@ -429,12 +327,9 @@ async def test_active_routine_skips_announce_but_mirrors(reset_shared, patch_eve
     assert any("Routine session active" in r.getMessage() for r in caplog.records)
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_dnd_wins_over_active_routine(reset_shared, patch_evening_deps):
     """Goodnight said AND a routine still mid-flight -> DND's silent park wins:
     no announce, no inbox card, no Telegram, counted as skipped_dnd only."""
-    from orchestrator import inbox, routine_manager
 
     reset_shared.DND_ACTIVE = True
     before = _all_outcomes()
@@ -449,12 +344,9 @@ async def test_dnd_wins_over_active_routine(reset_shared, patch_evening_deps):
     _assert_counted_once(before, "skipped_dnd")
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_routine_mirror_inbox_failure_still_telegrams_and_counts_once(reset_shared, patch_evening_deps):
     """On the routine path the mirror is the ONLY delivery: a broken inbox must
     not stop the Telegram copy, and must not also count as an error."""
-    from orchestrator import inbox, routine_manager
 
     before = _all_outcomes()
     _, patches = patch_evening_deps()
@@ -470,18 +362,6 @@ async def test_routine_mirror_inbox_failure_still_telegrams_and_counts_once(rese
     _assert_counted_once(before, "skipped_routine")
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_dnd_counts_skipped_dnd(reset_shared, patch_evening_deps):
-    reset_shared.DND_ACTIVE = True
-    before = _all_outcomes()
-    _, patches = patch_evening_deps()
-    await _run_evening(patches)
-    _assert_counted_once(before, "skipped_dnd")
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "result,label",
     [
@@ -497,11 +377,8 @@ async def test_announce_outcome_counted(reset_shared, patch_evening_deps, result
     _assert_counted_once(before, label)
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_routine_check_failure_still_speaks(reset_shared, patch_evening_deps, caplog):
     """A broken routine check fails open (speaks) and logs only the type name."""
-    import sys
 
     class _Broken:
         @property
@@ -523,8 +400,6 @@ async def test_routine_check_failure_still_speaks(reset_shared, patch_evening_de
     assert warn == ["[EVENING_BRIEFING] Routine check failed: RuntimeError"]
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_crash_counted_as_error(reset_shared, patch_evening_deps):
     before = _all_outcomes()
     _, patches = patch_evening_deps()
@@ -534,25 +409,13 @@ async def test_crash_counted_as_error(reset_shared, patch_evening_deps):
 
 
 # ---------------------------------------------------------------------------
-# Telegram mirror
+# Inbox card + Telegram mirror
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_telegram_mirror_fires(reset_shared, patch_evening_deps):
-    _, patches = patch_evening_deps()
-    mocks = await _run_evening(patches)
-    mocks["telegram"].assert_called_once()
-    assert mocks["telegram"].call_args.args[0].startswith("🌙 ")
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_evening_posts_inbox_card_matching_telegram(reset_shared, patch_evening_deps):
     """The card carries the spoken text without the emoji; Telegram keeps the
     🌙 prefix. One card, kind message, ref evening_briefing."""
-    from orchestrator import inbox
 
     _, patches = patch_evening_deps(open_tasks=[{"text": "sort the mail"}])
     mocks = await _run_evening(patches)
@@ -568,33 +431,13 @@ async def test_evening_posts_inbox_card_matching_telegram(reset_shared, patch_ev
     mocks["telegram"].assert_called_once_with(f"🌙 {spoken}")
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_evening_card_posted_even_when_tts_fails(reset_shared, patch_evening_deps):
-    from orchestrator import inbox
-
     _, patches = patch_evening_deps(announce_result={"success": False, "error": "tts down"})
     await _run_evening(patches)
     assert [c["ref"] for c in inbox.list_pending()] == ["evening_briefing"]
 
 
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_evening_dnd_posts_no_card(reset_shared, patch_evening_deps):
-    from orchestrator import inbox
-
-    reset_shared.DND_ACTIVE = True
-    _, patches = patch_evening_deps()
-    mocks = await _run_evening(patches)
-    assert inbox.list_pending() == []
-    mocks["telegram"].assert_not_called()
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
 async def test_second_evening_supersedes_first_card(reset_shared, patch_evening_deps):
-    from orchestrator import inbox
-
     _, patches = patch_evening_deps()
     await _run_evening(patches)
     first = inbox.list_pending()[0]["id"]
@@ -603,113 +446,3 @@ async def test_second_evening_supersedes_first_card(reset_shared, patch_evening_
     pending = inbox.list_pending()
     assert len(pending) == 1 and pending[0]["id"] != first
     assert inbox.get_item(first)["resolution"] == "superseded"
-
-
-# ---------------------------------------------------------------------------
-# Morning pickup of the parked item
-# ---------------------------------------------------------------------------
-
-
-def _parked_entry(value, hours_ago=10):
-    return {"value": value, "updated_at": (datetime.now() - timedelta(hours=hours_ago)).isoformat()}
-
-
-def _morning_patches(*, parked_entry, announce_result):
-    from orchestrator.tests.calendar_fakes import no_calendar_patch
-
-    return {
-        "client": no_calendar_patch(),
-        "voice": patch(
-            "orchestrator.jobs_calendar._announce_voice",
-            new_callable=AsyncMock,
-            return_value=announce_result,
-        ),
-        "weather": patch("orchestrator.jobs_calendar._get_weather_forecast", new_callable=AsyncMock, return_value=None),
-        "reminders": patch("orchestrator.jobs_calendar.list_pending_reminders", return_value=[]),
-        # morning_briefing reads two app_state keys (sleep_started_at for the
-        # short-night check, parked_item for the pickup) — key the mock off
-        # the argument so the sleep check sees "no stamp".
-        "get_state": patch(
-            "orchestrator.state_store.get_app_state_entry",
-            side_effect=lambda key: parked_entry if key == "parked_item" else None,
-        ),
-        "delete_state": patch("orchestrator.state_store.delete_app_state"),
-        "outcomes": patch("orchestrator.state_store.get_recent_reminder_outcomes", return_value=[]),
-        # morning_briefing yields (asyncio.sleep(1)) before its routine-collision
-        # check; swap the module's asyncio ref so tests don't pay the real
-        # second, and pin the check to "no routine" so these stay about their
-        # own branch.
-        "yield": patch("orchestrator.jobs_calendar.asyncio", MagicMock(sleep=AsyncMock(return_value=None))),
-        "routine": patch("orchestrator.jobs_calendar._routine_active_or_imminent", return_value=False),
-    }
-
-
-async def _run_morning(patches):
-    from contextlib import ExitStack
-
-    from orchestrator import jobs_calendar
-
-    with ExitStack() as stack:
-        mocks = {name: stack.enter_context(p) for name, p in patches.items()}
-        await jobs_calendar.morning_briefing()
-    return mocks
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_morning_offers_parked_item_and_clears_on_success(reset_shared):
-    mocks = await _run_morning(
-        _morning_patches(parked_entry=_parked_entry("the OAuth flow"), announce_result={"success": True})
-    )
-
-    text = mocks["voice"].await_args.args[0]
-    assert "Last night you parked: the OAuth flow" in text
-    mocks["delete_state"].assert_called_once_with("parked_item")
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_morning_keeps_parked_item_when_announce_fails(reset_shared):
-    mocks = await _run_morning(
-        _morning_patches(parked_entry=_parked_entry("the OAuth flow"), announce_result={"success": False})
-    )
-    mocks["delete_state"].assert_not_called()
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_morning_keeps_parked_item_when_announce_suppressed(reset_shared):
-    """A suppressed announce (DND / active voice session) reports success=True
-    but nothing was spoken — the parked item must survive to the next run."""
-    mocks = await _run_morning(
-        _morning_patches(
-            parked_entry=_parked_entry("the OAuth flow"),
-            announce_result={"success": True, "suppressed": True},
-        )
-    )
-    mocks["delete_state"].assert_not_called()
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_morning_drops_stale_parked_item(reset_shared):
-    """A parked item older than 36h (evening job disabled/failing) is dropped,
-    not announced as 'last night'."""
-    mocks = await _run_morning(
-        _morning_patches(
-            parked_entry=_parked_entry("the OAuth flow", hours_ago=72),
-            announce_result={"success": True},
-        )
-    )
-    text = mocks["voice"].await_args.args[0]
-    assert "parked" not in text.lower()
-    mocks["delete_state"].assert_called_once_with("parked_item")
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_morning_no_parked_item_no_mention(reset_shared):
-    mocks = await _run_morning(_morning_patches(parked_entry=None, announce_result={"success": True}))
-    text = mocks["voice"].await_args.args[0]
-    assert "parked" not in text.lower()
-    mocks["delete_state"].assert_not_called()

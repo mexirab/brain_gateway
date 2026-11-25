@@ -20,12 +20,13 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from pathlib import Path
 
 import pytest
 import yaml
 
-_REPO = Path(__file__).resolve().parents[2]
+from orchestrator.tests._helpers import REPO_ROOT
+
+_REPO = REPO_ROOT
 _COMPOSE = _REPO / "docker-compose.yml"
 _NET = "coder-net"
 

@@ -18,18 +18,27 @@ only, other part types dropped. Dashboard photos (data URIs) and Telegram
 photo turns (already a string) behave as before.
 """
 
-import contextlib
 import json
 import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
 from orchestrator import shared
-from orchestrator.cloud_brain import CloudBrain, _flatten_content, _sanitize_client_history, _strip_photo_content
+from orchestrator.cloud_brain import _flatten_content, _sanitize_client_history, _strip_photo_content
 from orchestrator.metrics import VISION_REQUEST_COUNT
 from orchestrator.prompt_builder import last_user_text
+from orchestrator.tests._helpers import metric_value
+from orchestrator.tests.fixtures_loop import (
+    FALLBACK_URL,
+    PRIMARY_URL,
+    RecordingScheduler,
+    drain,
+    make_brain,
+    patched_vision,
+    vision_brain,
+)
 from orchestrator.unified_loop import _last_user_text
 from orchestrator.vision_handler import (
     MAX_IMAGES_PER_REQUEST,
@@ -67,7 +76,7 @@ def _text(t: str) -> dict:
 
 
 def _status(status: str) -> float:
-    return VISION_REQUEST_COUNT.labels(status=status)._value.get()
+    return metric_value(VISION_REQUEST_COUNT, status=status)
 
 
 def _assert_text_only(messages):
@@ -80,31 +89,9 @@ def _assert_text_only(messages):
     assert "A" * 100 not in dumped  # no base64 payload
 
 
-@pytest.fixture
-def vision_on(monkeypatch):
-    monkeypatch.setattr(shared, "VISION_ENABLED", True)
+def _set_vision(monkeypatch, on: bool):
+    monkeypatch.setattr(shared, "VISION_ENABLED", on)
     monkeypatch.setattr(shared, "_vision_image_cache", {})
-
-
-@pytest.fixture
-def vision_off(monkeypatch):
-    monkeypatch.setattr(shared, "VISION_ENABLED", False)
-    monkeypatch.setattr(shared, "_vision_image_cache", {})
-
-
-def _brain():
-    brain = CloudBrain.__new__(CloudBrain)
-    brain._model_name = "fake"
-    return brain
-
-
-@contextlib.contextmanager
-def _vision(analyze, healthy=True):
-    with (
-        patch("orchestrator.vision_handler.check_vision_health", AsyncMock(return_value=healthy)),
-        patch("orchestrator.vision_handler.analyze_image", analyze),
-    ):
-        yield
 
 
 # ---------------------------------------------------------------------------
@@ -151,13 +138,13 @@ def test_extraction_skips_links_and_malformed_parts():
 
 
 @pytest.mark.parametrize("url", LINKS)
-async def test_link_in_user_turn_is_not_forwarded_vision_on(vision_on, url):
+async def test_link_in_user_turn_is_not_forwarded_vision_on(loop_vision_on, url):
     analyze = AsyncMock(return_value="unused")
     before = _status("rejected_url")
     routing: dict = {}
     messages = [{"role": "user", "content": [_text("what is this?"), _img(url)]}]
-    with _vision(analyze):
-        out = await _brain()._process_vision(messages, routing)
+    with patched_vision(analyze):
+        out = await vision_brain()._process_vision(messages, routing)
 
     analyze.assert_not_awaited()
     assert out[0]["content"] == "what is this?\n\n[PHOTO 1 NOT ANALYZED] " + NOT_ANALYZED_NOT_INLINE
@@ -168,19 +155,19 @@ async def test_link_in_user_turn_is_not_forwarded_vision_on(vision_on, url):
     assert shared._vision_image_cache == {}
 
 
-async def test_link_in_user_turn_is_not_forwarded_vision_off(vision_off):
-    out = await _brain()._process_vision([{"role": "user", "content": [_img(LINK)]}], {})
+async def test_link_in_user_turn_is_not_forwarded_vision_off(loop_vision_off):
+    out = await vision_brain()._process_vision([{"role": "user", "content": [_img(LINK)]}], {})
     assert out[0]["content"] == "[PHOTO 1 NOT ANALYZED] " + NOT_ANALYZED_NOT_INLINE
     _assert_text_only(out)
 
 
-async def test_vision_off_flattens_photos_to_not_analyzed(vision_off, caplog):
+async def test_vision_off_flattens_photos_to_not_analyzed(loop_vision_off, caplog):
     before = _status("disabled")
     routing: dict = {}
     analyze = AsyncMock(return_value="unused")
     messages = [{"role": "user", "content": [_text("read this"), _img(DATA_URI), _img(DATA_URI + "B")]}]
-    with _vision(analyze), caplog.at_level(logging.INFO):
-        out = await _brain()._process_vision(messages, routing)
+    with patched_vision(analyze), caplog.at_level(logging.INFO):
+        out = await vision_brain()._process_vision(messages, routing)
 
     analyze.assert_not_awaited()
     assert out[0]["content"] == (
@@ -193,26 +180,26 @@ async def test_vision_off_flattens_photos_to_not_analyzed(vision_off, caplog):
     assert "Vision disabled — 2 image(s) not analyzed" in caplog.text
 
 
-async def test_assistant_image_parts_never_forwarded(vision_on):
+async def test_assistant_image_parts_never_forwarded(loop_vision_on):
     analyze = AsyncMock(return_value="unused")
     messages = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": [_text("here you go"), _img(LINK), _img(DATA_URI)]},
         {"role": "user", "content": "thanks"},
     ]
-    with _vision(analyze):
-        out = await _brain()._process_vision(messages, {})
+    with patched_vision(analyze):
+        out = await vision_brain()._process_vision(messages, {})
 
     analyze.assert_not_awaited()
     assert out[1] == {"role": "assistant", "content": "here you go"}
     _assert_text_only(out)
 
 
-async def test_mixed_photo_and_link_keep_part_order(vision_on):
+async def test_mixed_photo_and_link_keep_part_order(loop_vision_on):
     analyze = AsyncMock(return_value="A grocery receipt")
     messages = [{"role": "user", "content": [_text("compare"), _img(LINK), _img(DATA_URI)]}]
-    with _vision(analyze):
-        out = await _brain()._process_vision(messages, {})
+    with patched_vision(analyze):
+        out = await vision_brain()._process_vision(messages, {})
 
     analyze.assert_awaited_once()
     assert analyze.await_args.args[0] == DATA_URI
@@ -222,7 +209,7 @@ async def test_mixed_photo_and_link_keep_part_order(vision_on):
     )
 
 
-async def test_descriptions_land_on_their_own_photo_across_the_cap(vision_on):
+async def test_descriptions_land_on_their_own_photo_across_the_cap(loop_vision_on):
     a, b, c, d = (DATA_URI + t for t in "ABCD")
     analyze = AsyncMock(side_effect=lambda url, *args, **kw: f"desc {url[-1]}")
     messages = [
@@ -230,8 +217,8 @@ async def test_descriptions_land_on_their_own_photo_across_the_cap(vision_on):
         {"role": "assistant", "content": "ok"},
         {"role": "user", "content": [_img(LINK), _img(c), _img(d)]},
     ]
-    with _vision(analyze):
-        out = await _brain()._process_vision(messages, {})
+    with patched_vision(analyze):
+        out = await vision_brain()._process_vision(messages, {})
 
     assert out[0]["content"] == frame_photo_description(1, "desc A") + "\n\n" + frame_photo_description(2, "desc B")
     assert out[2]["content"] == "\n\n".join(
@@ -243,12 +230,12 @@ async def test_descriptions_land_on_their_own_photo_across_the_cap(vision_on):
     )
 
 
-async def test_photos_past_the_cap_are_noted_not_forwarded(vision_on):
+async def test_photos_past_the_cap_are_noted_not_forwarded(loop_vision_on):
     before = _status("skipped_cap")
     analyze = AsyncMock(side_effect=["one", "two", "three"])
     urls = [DATA_URI + c for c in "BCDE"]
-    with _vision(analyze):
-        out = await _brain()._process_vision([{"role": "user", "content": [_img(u) for u in urls]}], {})
+    with patched_vision(analyze):
+        out = await vision_brain()._process_vision([{"role": "user", "content": [_img(u) for u in urls]}], {})
 
     assert analyze.await_count == 3
     content = out[0]["content"]
@@ -260,8 +247,7 @@ async def test_photos_past_the_cap_are_noted_not_forwarded(vision_on):
 
 @pytest.mark.parametrize("vision", [True, False])
 async def test_other_part_types_are_dropped(monkeypatch, caplog, vision):
-    monkeypatch.setattr(shared, "VISION_ENABLED", vision)
-    monkeypatch.setattr(shared, "_vision_image_cache", {})
+    _set_vision(monkeypatch, vision)
     analyze = AsyncMock(return_value="a photo")
     messages = [
         {
@@ -277,8 +263,8 @@ async def test_other_part_types_are_dropped(monkeypatch, caplog, vision):
             ],
         }
     ]
-    with _vision(analyze), caplog.at_level(logging.INFO):
-        out = await _brain()._process_vision(messages, {})
+    with patched_vision(analyze), caplog.at_level(logging.INFO):
+        out = await vision_brain()._process_vision(messages, {})
     photo = frame_photo_description(1, "a photo") if vision else f"[PHOTO 1 NOT ANALYZED] {NOT_ANALYZED_DISABLED}"
     assert out[0]["content"] == "listen\n\n" + photo
     _assert_text_only(out)
@@ -287,12 +273,12 @@ async def test_other_part_types_are_dropped(monkeypatch, caplog, vision):
         assert analyze.await_args.args[1] == "listen"
 
 
-async def test_many_empty_image_parts_do_not_grow_the_prompt(vision_on):
+async def test_many_empty_image_parts_do_not_grow_the_prompt(loop_vision_on):
     # 40-byte image parts must not each turn into a ~140-char note.
     parts = [{"type": "image_url", "image_url": ""} for _ in range(500)]
     messages = [{"role": "user", "content": parts}, {"role": "user", "content": [_img(LINK)] * 50}]
-    with _vision(AsyncMock(return_value="unused")):
-        out = await _brain()._process_vision(messages, {})
+    with patched_vision(AsyncMock(return_value="unused")):
+        out = await vision_brain()._process_vision(messages, {})
 
     blocks = out[0]["content"].split("\n\n")
     assert blocks[0] == f"[PHOTO 1 NOT ANALYZED] {NOT_ANALYZED_NOT_INLINE}"
@@ -303,14 +289,16 @@ async def test_many_empty_image_parts_do_not_grow_the_prompt(vision_on):
     assert PHOTO_BLOCK_RE.sub("", out[1]["content"]) == ""
 
 
-async def test_lone_surrogate_data_uri_does_not_crash(vision_on):
+async def test_lone_surrogate_data_uri_does_not_crash(loop_vision_on):
     analyze = AsyncMock(return_value="[Invalid image data. The image appears to be corrupted or not properly encoded.]")
-    with _vision(analyze):
-        out = await _brain()._process_vision([{"role": "user", "content": [_img("data:image/jpeg;base64,\ud800")]}], {})
+    with patched_vision(analyze):
+        out = await vision_brain()._process_vision(
+            [{"role": "user", "content": [_img("data:image/jpeg;base64,\ud800")]}], {}
+        )
     assert out[0]["content"].startswith("[PHOTO 1 NOT ANALYZED]")
 
 
-async def test_malformed_data_uri_header_is_not_echoed(vision_on, caplog):
+async def test_malformed_data_uri_header_is_not_echoed(loop_vision_on, caplog):
     # A data: URI with no comma: the whole client string is the "MIME type".
     with caplog.at_level(logging.WARNING):
         out = await analyze_image("data:" + "evil\ninjected log line " * 20, "x", http_client=object())
@@ -319,15 +307,15 @@ async def test_malformed_data_uri_header_is_not_echoed(vision_on, caplog):
     assert "injected" not in caplog.text and "Unsupported MIME type: malformed" in caplog.text
 
 
-async def test_string_turns_pass_through_unchanged(vision_off):
+async def test_string_turns_pass_through_unchanged(loop_vision_off):
     # Telegram photo turns arrive as a string with the framed description.
     tg = {"role": "user", "content": "[I sent you a photo.]\n\n" + frame_photo_description(1, "a cat")}
     plain = {"role": "assistant", "content": "ok"}
-    out = await _brain()._process_vision([tg, plain], {})
+    out = await vision_brain()._process_vision([tg, plain], {})
     assert out[0] is tg and out[1] is plain
 
 
-async def test_dashboard_photo_still_framed_and_cached(vision_on):
+async def test_dashboard_photo_still_framed_and_cached(loop_vision_on):
     # The dashboard sends one data-URI photo with the turn it belongs to.
     analyze = AsyncMock(return_value="A handwritten shopping list")
     routing: dict = {}
@@ -336,8 +324,8 @@ async def test_dashboard_photo_still_framed_and_cached(vision_on):
         {"role": "assistant", "content": "Nice."},
         {"role": "user", "content": [_text("what does it say?"), _img(DATA_URI)]},
     ]
-    with _vision(analyze):
-        out = await _brain()._process_vision(messages, routing)
+    with patched_vision(analyze):
+        out = await vision_brain()._process_vision(messages, routing)
 
     assert out[2]["content"] == "what does it say?\n\n" + frame_photo_description(1, "A handwritten shopping list")
     assert out[0] is messages[0] and out[1] is messages[1]
@@ -345,8 +333,8 @@ async def test_dashboard_photo_still_framed_and_cached(vision_on):
     assert list(shared._vision_image_cache.values()) == [DATA_URI]
 
 
-async def test_not_analyzed_notes_stay_out_of_routing_and_memory(vision_off):
-    out = await _brain()._process_vision(
+async def test_not_analyzed_notes_stay_out_of_routing_and_memory(loop_vision_off):
+    out = await vision_brain()._process_vision(
         [{"role": "user", "content": [_text("turn off the lights"), _img(LINK), _img(DATA_URI)]}], {}
     )
     turn = out[0]["content"]
@@ -396,9 +384,6 @@ def test_sanitize_flattens_assistant_turns_and_drops_image_only_ones(caplog):
 # End to end: what each loop path is handed
 # ---------------------------------------------------------------------------
 
-PRIMARY_URL = "http://primary.invalid/v1"
-FALLBACK_URL = "http://fallback.invalid/v1"
-
 
 def _client_messages():
     return [
@@ -409,49 +394,25 @@ def _client_messages():
 
 
 def _make_brain(monkeypatch, loop_mock, *, healthy=True):
-    from orchestrator import cloud_brain
-
-    brain = CloudBrain.__new__(CloudBrain)
-    brain._mode_router = SimpleNamespace(route=lambda text: SimpleNamespace(mode="baseline", intensity="low", tags=[]))
-    brain._is_greeting = lambda text: True
-    brain._last_user_text = last_user_text
-    brain._get_unified_system_prompt = lambda *a, **k: "sys"
-    brain._check_model_health = AsyncMock(return_value=healthy)
-    brain._start_model_server = AsyncMock(return_value=False)
-    brain._model_url = PRIMARY_URL
-    brain._model_name = "primary"
-    brain._fallback_model_url = FALLBACK_URL
-    brain._fallback_model_name = "fallback"
-    brain._get_all_tools = lambda: []
-    brain._run_unified_loop = loop_mock
-    brain._schedule_auto_learn = lambda messages: None
+    brain = make_brain(monkeypatch, loop_mock, healthy=healthy, real_vision=True)
     brain._try_fast_path = AsyncMock()  # must not run on a photo turn
-    monkeypatch.setattr(cloud_brain, "record_reply_style", lambda mode: None)
-    monkeypatch.setattr(cloud_brain, "apply_tone_request", lambda text: "")
-    monkeypatch.setattr(cloud_brain, "is_first_chat", lambda: False)
-    monkeypatch.setattr(shared, "REAL_STREAMING_ENABLED", True)
     return brain
-
-
-async def _drain(response):
-    return "".join([c if isinstance(c, str) else c.decode() async for c in response.body_iterator])
 
 
 @pytest.mark.parametrize("vision", [True, False])
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("healthy", [True, False])  # False = health-check fallback path
 async def test_no_loop_path_is_handed_an_image_part(monkeypatch, vision, stream, healthy):
-    monkeypatch.setattr(shared, "VISION_ENABLED", vision)
-    monkeypatch.setattr(shared, "_vision_image_cache", {})
+    _set_vision(monkeypatch, vision)
     loop_mock = AsyncMock(return_value="fine")
     brain = _make_brain(monkeypatch, loop_mock, healthy=healthy)
     analyze = AsyncMock(return_value="A cat on a sofa")
     client = _client_messages()
     snapshot = json.dumps(client)
 
-    with _vision(analyze):
+    with patched_vision(analyze):
         resp = await brain.chat(client, stream=stream, ha_client=object())
-        body = await _drain(resp) if stream else resp.body.decode()
+        body = await drain(resp) if stream else resp.body.decode()
 
     assert "fine" in body
     assert json.dumps(client) == snapshot
@@ -472,12 +433,11 @@ async def test_no_loop_path_is_handed_an_image_part(monkeypatch, vision, stream,
 
 @pytest.mark.parametrize("vision", [True, False])
 async def test_non_string_text_part_is_dropped_not_a_500(monkeypatch, vision):
-    monkeypatch.setattr(shared, "VISION_ENABLED", vision)
-    monkeypatch.setattr(shared, "_vision_image_cache", {})
+    _set_vision(monkeypatch, vision)
     loop_mock = AsyncMock(return_value="fine")
     brain = _make_brain(monkeypatch, loop_mock)
     client = [{"role": "user", "content": [{"type": "text", "text": {"x": 1}}, _text("hello"), _img(DATA_URI)]}]
-    with _vision(AsyncMock(return_value="a photo")):
+    with patched_vision(AsyncMock(return_value="a photo")):
         resp = await brain.chat(client, stream=False)
 
     assert "fine" in resp.body.decode()
@@ -492,15 +452,14 @@ async def test_loop_failure_fallback_is_handed_text_only(monkeypatch, vision, st
     # The primary loop raises with nothing emitted: the buffered except branch
     # (stream=False) and the streamed producer (stream=True) both rerun the
     # request on the fallback model — from the same flattened list.
-    monkeypatch.setattr(shared, "VISION_ENABLED", vision)
-    monkeypatch.setattr(shared, "_vision_image_cache", {})
+    _set_vision(monkeypatch, vision)
     loop_mock = AsyncMock(side_effect=[RuntimeError("primary died"), "from fallback"])
     brain = _make_brain(monkeypatch, loop_mock)
     analyze = AsyncMock(return_value="A cat on a sofa")
 
-    with _vision(analyze):
+    with patched_vision(analyze):
         resp = await brain.chat(_client_messages(), stream=stream)
-        body = await _drain(resp) if stream else resp.body.decode()
+        body = await drain(resp) if stream else resp.body.decode()
 
     assert "from fallback" in body
     calls = [(c.kwargs["model_url"], c.kwargs["messages"]) for c in loop_mock.call_args_list]
@@ -521,8 +480,7 @@ async def test_fast_path_skipped_on_a_photo_turn_that_was_not_analyzed(monkeypat
     # vision-on-link: extraction finds no inline image, so "vision_images" is
     # never set and only "images_not_analyzed" keeps the device command in
     # the text from being run before the loop sees the turn.
-    monkeypatch.setattr(shared, "VISION_ENABLED", vision)
-    monkeypatch.setattr(shared, "_vision_image_cache", {})
+    _set_vision(monkeypatch, vision)
     loop_mock = AsyncMock(return_value="fine")
     brain = _make_brain(monkeypatch, loop_mock)
     brain._try_fast_path = AsyncMock(
@@ -530,7 +488,7 @@ async def test_fast_path_skipped_on_a_photo_turn_that_was_not_analyzed(monkeypat
     )
     analyze = AsyncMock(return_value="unused")
 
-    with _vision(analyze):
+    with patched_vision(analyze):
         resp = await brain.chat(
             [{"role": "user", "content": [_text("turn off the kitchen lights"), part]}], ha_client=object()
         )
@@ -546,8 +504,7 @@ async def test_fast_path_skipped_on_a_photo_turn_that_was_not_analyzed(monkeypat
 @pytest.mark.parametrize("vision", [True, False])
 async def test_fast_path_still_runs_on_the_same_turn_without_a_photo(monkeypatch, vision):
     # Control for the test above: same harness, no image part.
-    monkeypatch.setattr(shared, "VISION_ENABLED", vision)
-    monkeypatch.setattr(shared, "_vision_image_cache", {})
+    _set_vision(monkeypatch, vision)
     loop_mock = AsyncMock(return_value="unused")
     brain = _make_brain(monkeypatch, loop_mock)
     brain._try_fast_path = AsyncMock(
@@ -555,7 +512,7 @@ async def test_fast_path_still_runs_on_the_same_turn_without_a_photo(monkeypatch
     )
     ha = object()
 
-    with _vision(AsyncMock(return_value="unused")):
+    with patched_vision(AsyncMock(return_value="unused")):
         resp = await brain.chat([{"role": "user", "content": "turn off the kitchen lights"}], ha_client=ha)
 
     brain._try_fast_path.assert_awaited_once_with("turn off the kitchen lights", ha)
@@ -563,32 +520,23 @@ async def test_fast_path_still_runs_on_the_same_turn_without_a_photo(monkeypatch
     assert json.loads(resp.body)["choices"][0]["message"]["content"] == "Done."
 
 
-class _Scheduler:
-    def __init__(self):
-        self.jobs = {}
-
-    def add_job(self, func, trigger, run_date, args, id, replace_existing):  # noqa: A002
-        self.jobs[id] = args
-
-
 @pytest.mark.parametrize("vision", [True, False])
 @pytest.mark.parametrize("stream", [False, True])
 async def test_auto_learn_snapshot_holds_no_image_link_or_photo_text(monkeypatch, vision, stream):
     # The real _schedule_auto_learn (buffered path and streaming producer):
     # the cached conversation is what auto-learn later sends to the brain.
-    monkeypatch.setattr(shared, "VISION_ENABLED", vision)
-    monkeypatch.setattr(shared, "_vision_image_cache", {})
-    monkeypatch.setattr(shared, "scheduler", _Scheduler())
+    _set_vision(monkeypatch, vision)
+    monkeypatch.setattr(shared, "scheduler", RecordingScheduler())
     monkeypatch.setattr(shared, "AUTO_LEARN_ENABLED", True)
     monkeypatch.setattr(shared, "AUTO_LEARN_DELAY_MINUTES", 10)
     monkeypatch.setattr(shared, "_auto_learn_conversations", {})
     brain = _make_brain(monkeypatch, AsyncMock(return_value="fine"))
     del brain._schedule_auto_learn  # use the real method, not _make_brain's stub
 
-    with _vision(AsyncMock(return_value="A cat on a sofa")):
+    with patched_vision(AsyncMock(return_value="A cat on a sofa")):
         resp = await brain.chat(_client_messages(), stream=stream)
         if stream:
-            await _drain(resp)
+            await drain(resp)
 
     (cached,) = shared._auto_learn_conversations.values()
     assert cached == [

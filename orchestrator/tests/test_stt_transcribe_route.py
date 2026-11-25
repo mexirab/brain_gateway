@@ -16,6 +16,9 @@ import httpx
 import pytest
 from prometheus_client import REGISTRY
 
+from orchestrator import routes_vision, shared
+from orchestrator.tests.fixtures_ha_voice import assert_route_error
+
 STT_BASE = "http://stt.test"
 URL = "/api/stt/transcribe"
 AUDIO = b"\x1aE\xdf\xa3fake-webm-audio"
@@ -72,25 +75,12 @@ def _parse_multipart(request: httpx.Request) -> dict[str, dict]:
 
 
 @pytest.fixture(autouse=True)
-def _reset_voice_activity(monkeypatch):
-    from orchestrator import shared
-
-    monkeypatch.setattr(shared, "_last_voice_activity_at", 0.0)
-    monkeypatch.setattr(shared, "_last_voice_at", 0.0)
-    yield
-
-
-@pytest.fixture(autouse=True)
 def _stt_url(monkeypatch):
-    from orchestrator import routes_vision
-
     monkeypatch.setattr(routes_vision, "STT_URL", STT_BASE)
 
 
 @pytest.fixture
 def upstream(monkeypatch):
-    from orchestrator import shared
-
     def _set(response: httpx.Response | None = None, exc: Exception | None = None) -> _Upstream:
         up = _Upstream(response=response, exc=exc)
         monkeypatch.setattr(shared, "_http", httpx.AsyncClient(transport=httpx.MockTransport(up)), raising=False)
@@ -100,32 +90,15 @@ def upstream(monkeypatch):
 
 
 @pytest.fixture
-def client():
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    from orchestrator import routes_vision
-
-    app = FastAPI()
-    app.include_router(routes_vision.router)
-    return TestClient(app)
+def client(ha_voice_route_client):
+    return ha_voice_route_client
 
 
 def _post(client, data: bytes = AUDIO, content_type: str = "audio/webm", filename: str = "clip.webm"):
     return client.post(URL, files={"file": (filename, data, content_type)})
 
 
-def _assert_error(resp, status: int):
-    assert resp.status_code == status
-    body = resp.json()
-    assert body["ok"] is False
-    assert isinstance(body.get("error"), str) and body["error"]
-    assert "success" not in body
-
-
 def _assert_no_voice_activity():
-    from orchestrator import shared
-
     assert shared.is_voice_session_active() is False
     assert shared._last_voice_at == 0.0
     assert shared._last_voice_activity_at == 0.0
@@ -137,23 +110,19 @@ def _assert_no_voice_activity():
 
 
 def test_too_large_returns_413_and_skips_upstream(client, upstream, monkeypatch):
-    from orchestrator import routes_vision
-
     monkeypatch.setattr(routes_vision, "MAX_AUDIO_UPLOAD", 16)
     up = upstream()
     before = _count("too_large")
 
     resp = _post(client, data=b"x" * 17)
 
-    _assert_error(resp, 413)
+    assert_route_error(resp, 413)
     assert up.requests == []
     assert _count("too_large") == before + 1
     _assert_no_voice_activity()
 
 
 def test_exactly_max_size_is_accepted(client, upstream, monkeypatch):
-    from orchestrator import routes_vision
-
     monkeypatch.setattr(routes_vision, "MAX_AUDIO_UPLOAD", 16)
     up = upstream()
 
@@ -164,15 +133,13 @@ def test_exactly_max_size_is_accepted(client, upstream, monkeypatch):
 
 
 def test_not_configured_returns_503_and_skips_upstream(client, upstream, monkeypatch):
-    from orchestrator import routes_vision
-
     monkeypatch.setattr(routes_vision, "STT_URL", "")
     up = upstream()
     before = _count("not_configured")
 
     resp = _post(client)
 
-    _assert_error(resp, 503)
+    assert_route_error(resp, 503)
     assert up.requests == []
     assert _count("not_configured") == before + 1
     _assert_no_voice_activity()
@@ -204,7 +171,7 @@ def test_upstream_failures_map_to_status_and_metric(client, upstream, kwargs, st
 
     resp = _post(client)
 
-    _assert_error(resp, status)
+    assert_route_error(resp, status)
     assert len(up.requests) == 1
     assert _SECRET not in resp.text
     assert _count(result) == before + 1
@@ -217,8 +184,6 @@ def test_upstream_failures_map_to_status_and_metric(client, upstream, kwargs, st
 
 
 def test_ok_passes_through_and_marks_voice_activity(client, upstream):
-    from orchestrator import shared
-
     up = upstream(httpx.Response(200, json={"text": "hello there"}))
     before = _count("ok")
 

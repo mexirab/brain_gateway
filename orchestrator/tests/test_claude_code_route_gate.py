@@ -11,8 +11,6 @@ get_recent_claude_code_activity.
 
 import json
 
-import pytest
-
 from orchestrator import api_routes, shared
 
 
@@ -20,7 +18,6 @@ async def _read_body(resp):
     return json.loads(bytes(resp.body).decode())
 
 
-@pytest.mark.asyncio
 async def test_recent_404_when_jess_advanced_off(monkeypatch):
     monkeypatch.setattr(shared, "JESS_ADVANCED", False)
     # Tripwire: the DB reader must NOT be reached when gated off.
@@ -33,7 +30,6 @@ async def test_recent_404_when_jess_advanced_off(monkeypatch):
     assert (await _read_body(resp)).get("ok") is False
 
 
-@pytest.mark.asyncio
 async def test_recent_proceeds_when_jess_advanced_on(monkeypatch):
     monkeypatch.setattr(shared, "JESS_ADVANCED", True)
     monkeypatch.setattr("orchestrator.state_store.get_claude_code_turns", lambda *a, **k: [])

@@ -34,12 +34,13 @@ import pytest
 import respx
 import yaml
 
+from orchestrator.tests._helpers import REPO_ROOT
+from orchestrator.tests.fixtures_ops import AM_TEMPLATE, PROM_CONFIG, am_config, routing
+
 REPO = "example-owner/example-repo"
 RUNS_PATH = f"/repos/{REPO}/actions/workflows/ci.yml/runs"
 _JOBS_RE = re.compile(rf"/repos/{re.escape(REPO)}/actions/runs/(\d+)/jobs")
 _COMPARE_RE = re.compile(rf"/repos/{re.escape(REPO)}/compare/([0-9a-f]{{40}})\.\.\.([0-9a-f]{{40}})")
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 T0 = 1_792_000_000.0  # a fixed instant in Oct 2026; every run/job time is relative to it
 T_MARK = T0 - 3600.0  # marker mtime
@@ -394,11 +395,9 @@ class TestMarker:
         assert math.isnan(_stamp(drift))
         assert _drift_is_nan(drift)
 
-    def test_directory_is_marker_missing(self, drift, tmp_path):
-        assert drift.read_marker(str(tmp_path)) == "marker_missing"
-
-    def test_absent_path_is_marker_missing(self, drift, tmp_path):
-        assert drift.read_marker(str(tmp_path / "nope")) == "marker_missing"
+    @pytest.mark.parametrize("name", ["", "nope"], ids=["directory", "absent"])
+    def test_directory_or_absent_path_is_marker_missing(self, drift, tmp_path, name):
+        assert drift.read_marker(str(tmp_path / name)) == "marker_missing"
 
     def test_fifo_does_not_block(self, drift, tmp_path):
         """A FIFO in the marker's place must not hang the event loop."""
@@ -1354,67 +1353,21 @@ class TestCiCoupling:
         assert re.search(r'>\s*"?\$\{?MARKER\}?"?', script), "the deploy job must write the marker"
 
 
-def _route_receivers(route: dict, labels: dict[str, str]) -> list[str]:
-    """Receivers Alertmanager would notify for ``labels`` (child routes in
-    order; a match without ``continue`` stops the walk)."""
-
-    def matches(child: dict) -> bool:
-        for matcher in child.get("matchers") or []:
-            m = re.fullmatch(r'\s*(\w+)\s*(=~|!~|!=|=)\s*"(.*)"\s*', matcher)
-            assert m, f"unparseable matcher {matcher!r}"
-            name, op, value = m.groups()
-            actual = labels.get(name, "")
-            ok = {
-                "=": actual == value,
-                "!=": actual != value,
-                "=~": re.fullmatch(value, actual) is not None,
-                "!~": re.fullmatch(value, actual) is None,
-            }[op]
-            if not ok:
-                return False
-        return True
-
-    out = []
-    for child in route.get("routes") or []:
-        if matches(child):
-            out.extend(_route_receivers(child, labels) or [child["receiver"]])
-            if not child.get("continue"):
-                return out
-    return out or [route.get("receiver", "")]
-
-
 class TestAlertWiring:
     def _rules(self) -> dict[str, dict]:
         data = _load_yaml_or_skip("monitoring/prometheus/alert-rules.yml")
         return {r["alert"]: r for g in data["groups"] for r in g.get("rules", []) if "alert" in r}
 
-    def test_both_alerts_exist(self):
-        rules = self._rules()
-        assert "DeployDrift" in rules
-        assert "DeployDriftCheckFailing" in rules
-
     @pytest.mark.parametrize("alert", ["DeployDrift", "DeployDriftCheckFailing"], ids=["drift", "check_failing"])
     def test_routed_to_pushover_quiet(self, alert):
-        am = _load_yaml_or_skip("monitoring/alertmanager/alertmanager.yml.template")
-        quiet = [
-            r
-            for r in am["route"]["routes"]
-            if r.get("receiver") == "pushover-quiet"
-            and any(str(m).strip().startswith("alertname=~") for m in r.get("matchers") or [])
-        ]
-        assert quiet, "no pushover-quiet route with an alertname=~ matcher"
-        regexes = [
-            re.fullmatch(r'\s*alertname=~"(.*)"\s*', m).group(1)
-            for r in quiet
-            for m in r["matchers"]
-            if str(m).strip().startswith("alertname=~")
-        ]
-        assert any(re.fullmatch(rx, alert) for rx in regexes)
-        # And the route walk ends there (not paging, not the null receiver).
-        severity = self._rules()[alert]["labels"]["severity"]
-        receivers = _route_receivers(am["route"], {"alertname": alert, "severity": severity})
-        assert receivers[-1] == "pushover-quiet"
-        assert "pushover" not in receivers and "null" not in receivers
+        if not (AM_TEMPLATE.is_file() and PROM_CONFIG.is_file()):
+            pytest.skip("monitoring/ alertmanager + prometheus templates not available in this checkout/mount")
+        table = routing(am_config())
+        assert table.get(alert), f"no rule defines {alert}"
+        # The route walk ends at pushover-quiet (not paging, not the null receiver).
+        for receivers in table[alert]:
+            assert receivers[-1] == "pushover-quiet", receivers
+            assert "pushover" not in receivers and "null" not in receivers
 
     def test_check_failing_counts_exactly_the_failure_results(self):
         from orchestrator import jobs_deploy_drift as mod

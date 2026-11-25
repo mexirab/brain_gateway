@@ -7,12 +7,18 @@ Tests for the echo-injection defences in unified_loop (2026-10-02):
   back as a tool call or forge a chat-template turn;
 - _xml_fallback_allowed only honours <tool_call> markup when the reply is
   essentially just the call and the model stopped cleanly;
-- _filter_new_tool_calls dedups within a round and caps the batch.
+- _filter_new_tool_calls dedups within a round and caps the batch;
+- _cap_tool_result's size cap (MAX_TOOL_RESULT_CHARS): stringify, pass short
+  results through, truncate long ones with a model-facing footer, warn once.
 """
 
 import json
+import logging
+
+import pytest
 
 from orchestrator import unified_loop as ul
+from orchestrator.tests.fixtures_loop import tool_call
 
 # --------------------------------------------------------------------------- sanitizer
 
@@ -84,7 +90,7 @@ def test_fallback_refused_without_markup():
 
 
 def _tc(name, args, i=0):
-    return {"id": f"call_{i}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+    return tool_call(name, args, f"call_{i}")
 
 
 def test_filter_drops_prior_round_repeats_and_collapses_duplicates():
@@ -111,3 +117,43 @@ def test_filter_tolerates_malformed_arguments():
     calls = [{"id": "c", "type": "function", "function": {"name": "focus_status", "arguments": "{not json"}}]
     out = ul._filter_new_tool_calls(calls, set(), "T")
     assert len(out) == 1
+
+
+# --------------------------------------------------------------------------- size cap
+
+CAP = ul.MAX_TOOL_RESULT_CHARS
+
+
+@pytest.mark.parametrize(
+    "result, expected",
+    [
+        pytest.param("hello", "hello", id="short"),
+        pytest.param(None, "", id="none"),
+        pytest.param(42, "42", id="int"),
+        pytest.param({"ok": True}, "{'ok': True}", id="dict"),
+        pytest.param("x" * CAP, "x" * CAP, id="exactly-at-cap"),
+    ],
+)
+def test_cap_passes_short_results_through_silently(caplog, result, expected):
+    with caplog.at_level(logging.WARNING, logger="orchestrator.unified_loop"):
+        assert ul._cap_tool_result(result, "bloated_test_tool") == expected
+    assert caplog.records == []
+
+
+def test_cap_truncates_with_footer_and_warns_once(caplog):
+    with caplog.at_level(logging.WARNING, logger="orchestrator.unified_loop"):
+        out = ul._cap_tool_result("A" * 20_000, "bloated_test_tool")
+
+    overflow = 20_000 - CAP
+    assert out.startswith("A" * CAP + f"\n\n[... {overflow} chars truncated")
+    assert "A" * (CAP + 1) not in out
+    assert CAP < len(out) < 20_000
+    (warning,) = caplog.records
+    msg = warning.getMessage()
+    assert "bloated_test_tool" in msg and "20000" in msg and str(CAP) in msg
+
+
+def test_cap_bounds_a_huge_result():
+    out = ul._cap_tool_result("Z" * 1_000_000, "stress_tool")
+    assert out.startswith("Z" * CAP)
+    assert len(out) < 9_000

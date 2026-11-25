@@ -109,18 +109,22 @@ def test_token_and_investigate_keep_the_webhook(project):
 
 
 @pytest.mark.parametrize(
-    "extra",
+    ("extra", "warns_short"),
     [
-        {},  # no token, no flag
-        {"SELF_AUDIT_WEBHOOK_TOKEN": TOKEN},  # token but investigate off (default)
-        {"SELF_AUDIT_WEBHOOK_TOKEN": TOKEN, "SELF_AUDIT_INVESTIGATE": "false"},
-        {"SELF_AUDIT_WEBHOOK_TOKEN": "s" * 23, "SELF_AUDIT_INVESTIGATE": "true"},  # config.py drops it
-        {"SELF_AUDIT_INVESTIGATE": "true"},  # flag without token
+        pytest.param({}, False, id="no-token-no-flag"),
+        pytest.param({"SELF_AUDIT_WEBHOOK_TOKEN": TOKEN}, False, id="token-investigate-default-off"),
+        pytest.param(
+            {"SELF_AUDIT_WEBHOOK_TOKEN": TOKEN, "SELF_AUDIT_INVESTIGATE": "false"}, False, id="investigate-off"
+        ),
+        # config.py drops a token this short, so the receiver would post into a 401
+        pytest.param({"SELF_AUDIT_WEBHOOK_TOKEN": "s" * 23, "SELF_AUDIT_INVESTIGATE": "true"}, True, id="token-23"),
+        pytest.param({"SELF_AUDIT_INVESTIGATE": "true"}, False, id="flag-without-token"),
     ],
 )
-def test_webhook_stripped_unless_both_conditions(project, extra):
+def test_webhook_stripped_unless_both_conditions(project, extra, warns_short):
     r = _run(project, {**_PUSHOVER, **extra})
     assert r.returncode == 0, r.stdout + r.stderr
+    assert ("shorter than 24 chars" in r.stdout) is warns_short
     rendered, token_file = _am(project)
     assert "self-investigator" not in rendered
     assert "/api/self_audit/alert" not in rendered
@@ -131,24 +135,10 @@ def test_webhook_stripped_unless_both_conditions(project, extra):
     assert "user_key: ukey-abc" in rendered
 
 
-def test_short_token_warns(project):
-    r = _run(project, {**_PUSHOVER, "SELF_AUDIT_WEBHOOK_TOKEN": "short", "SELF_AUDIT_INVESTIGATE": "true"})
-    assert r.returncode == 0
-    assert "shorter than 24 chars" in r.stdout
-
-
 def test_no_tmp_template_left_behind(project, tmp_path):
-    root, bindir = project
     tmpdir = tmp_path / "tmp"
     tmpdir.mkdir()
-    (root / ".env").write_text("".join(f"{k}={v}\n" for k, v in _PUSHOVER.items()))
-    r = subprocess.run(
-        [str(bindir / "bash"), str(root / "scripts" / "generate-configs.sh")],
-        env={"PATH": str(bindir), "HOME": str(root), "TMPDIR": str(tmpdir)},
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    r = _run(project, _PUSHOVER, extra_env={"TMPDIR": str(tmpdir)})
     assert r.returncode == 0, r.stdout + r.stderr
     assert list(tmpdir.iterdir()) == []
 
@@ -161,17 +151,39 @@ def test_missing_pushover_skips_alertmanager_entirely(project):
     assert not (root / "monitoring" / "alertmanager" / "self_audit_webhook_token").exists()
 
 
-def test_existing_render_is_truncated_in_place(project):
-    """Bind-mount inode rule: the render must keep its inode across runs."""
-    _run(project, {**_PUSHOVER, "SELF_AUDIT_WEBHOOK_TOKEN": TOKEN, "SELF_AUDIT_INVESTIGATE": "on"})
+def test_renders_and_token_files_keep_their_inodes(project):
+    """Bind-mount inode rule: every file the script rewrites (the alertmanager render, the webhook,
+    llama and deadman token files) keeps its inode across runs — rotated, or cleared when its
+    feature is switched off. Also: "on" / "yes" count as truthy for SELF_AUDIT_INVESTIGATE."""
     root, _ = project
     out = root / "monitoring" / "alertmanager" / "alertmanager.yml"
-    tok = root / "monitoring" / "alertmanager" / "self_audit_webhook_token"
-    inode, tok_inode = out.stat().st_ino, tok.stat().st_ino
-    r = _run(project, {**_PUSHOVER, "SELF_AUDIT_WEBHOOK_TOKEN": "u" * 30, "SELF_AUDIT_INVESTIGATE": "yes"})
-    assert r.returncode == 0
-    assert out.stat().st_ino == inode and tok.stat().st_ino == tok_inode
-    assert tok.read_text() == "u" * 30
+    sa_token = root / "monitoring" / "alertmanager" / "self_audit_webhook_token"
+    deadman = root / "monitoring" / "alertmanager" / "deadman_webhook_token"
+    llama = root / "monitoring" / "prometheus" / "llama_api_key"
+    first = {
+        **_PUSHOVER,
+        **_BRAIN_ENV,
+        "MODEL_API_KEY": LLAMA_KEY,
+        "SELF_AUDIT_WEBHOOK_TOKEN": TOKEN,
+        "SELF_AUDIT_INVESTIGATE": "on",
+        "DEADMAN_WEBHOOK_TOKEN": DEADMAN_TOKEN,
+    }
+    assert _run(project, first).returncode == 0
+    files = (out, sa_token, deadman, llama)
+    inodes = [f.stat().st_ino for f in files]
+    second = {
+        **_PUSHOVER,
+        **_BRAIN_ENV,
+        "MODEL_API_KEY": "rotated-" + "r" * 20,
+        "SELF_AUDIT_WEBHOOK_TOKEN": "u" * 30,
+        "SELF_AUDIT_INVESTIGATE": "yes",
+    }  # deadman switched off
+    r = _run(project, second)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert [f.stat().st_ino for f in files] == inodes
+    assert sa_token.read_text() == "u" * 30
+    assert llama.read_text() == "rotated-" + "r" * 20
+    assert deadman.read_text() == ""
     assert os.access(out, os.R_OK)
 
 
@@ -220,17 +232,6 @@ def test_llama_key_renders_scrape_auth(project, extra):
     assert oct(key_file.stat().st_mode & 0o777) == "0o644"
     # The orchestrator job's own bearer auth is unaffected.
     assert _prom_jobs(rendered)["orchestrator"]["authorization"]["credentials_file"] == "/etc/prometheus/api_token"
-
-
-def test_llama_key_file_truncated_in_place(project):
-    """Directory mount, but same rule as the other token files: keep the inode."""
-    _run(project, {**_BRAIN_ENV, "MODEL_API_KEY": LLAMA_KEY})
-    _, key_file = _prom(project)
-    inode = key_file.stat().st_ino
-    r = _run(project, {**_BRAIN_ENV, "MODEL_API_KEY": "rotated-" + "r" * 20})
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert key_file.stat().st_ino == inode
-    assert key_file.read_text() == "rotated-" + "r" * 20
 
 
 @pytest.mark.parametrize("extra", [{}, {"MODEL_API_KEY": ""}])
@@ -464,15 +465,6 @@ def test_deadman_scrape_follows_token_even_without_pushover(project):
     r = _run(project, {})
     assert r.returncode == 0, r.stdout + r.stderr
     assert "jupiter-deadman" not in _prom(project)[0]
-
-
-def test_deadman_token_file_cleared_when_switched_off(project):
-    _run(project, {**_PUSHOVER, "DEADMAN_WEBHOOK_TOKEN": TOKEN})
-    token_file = _deadman_token_file(project)
-    inode = token_file.stat().st_ino
-    r = _run(project, _PUSHOVER)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert token_file.read_text() == "" and token_file.stat().st_ino == inode
 
 
 @pytest.mark.parametrize("sub", ["prometheus", "alertmanager"])

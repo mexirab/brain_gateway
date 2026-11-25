@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -38,11 +39,10 @@ def _make_wal_db(path: Path, marker: str) -> None:
         conn.close()
 
 
-@pytest.fixture
-def state_tree(tmp_path):
+def _build_tree(root: Path) -> tuple[Path, Path, Path]:
     """A realistic data/ + credentials/ layout with excludable noise."""
-    data = tmp_path / "data"
-    creds = tmp_path / "credentials"
+    data = root / "data"
+    creds = root / "credentials"
 
     _make_wal_db(data / "app" / "brain_state.db", "hello-reminders")
     _make_wal_db(data / "chroma" / "personal_rag" / "chroma.sqlite3", "vectors")
@@ -70,7 +70,12 @@ def state_tree(tmp_path):
     creds.mkdir()
     (creds / "google_token.json").write_text('{"refresh_token": "x"}')
 
-    return tmp_path, data, creds
+    return root, data, creds
+
+
+@pytest.fixture
+def state_tree(tmp_path):
+    return _build_tree(tmp_path)
 
 
 def _run(tmp_path, data, creds, **extra_env):
@@ -100,18 +105,28 @@ def _only_archive(tmp_path):
     return archives[0]
 
 
-class TestBackupContents:
-    def test_archive_written_and_locked_down(self, state_tree):
-        tmp_path, data, creds = state_tree
-        r = _run(tmp_path, data, creds)
-        assert r.returncode == 0, r.stderr
-        archive = _only_archive(tmp_path)
-        assert (archive.stat().st_mode & 0o777) == 0o600
+@pytest.fixture(scope="module")
+def one_backup(tmp_path_factory):
+    """One real run of the script on a fresh tree, shared by the content checks."""
+    root, data, creds = _build_tree(tmp_path_factory.mktemp("backup"))
+    metric = root / "jess_backup.prom"
+    result = _run(root, data, creds, JESS_BACKUP_METRICS_PATH=str(metric))
+    assert result.returncode == 0, result.stderr
+    return SimpleNamespace(root=root, archive=_only_archive(root), metric=metric)
 
-    def test_includes_critical_excludes_noise(self, state_tree):
-        tmp_path, data, creds = state_tree
-        _run(tmp_path, data, creds)
-        with tarfile.open(_only_archive(tmp_path)) as tar:
+
+def _extract(one_backup, member: str, dest: Path) -> Path:
+    with tarfile.open(one_backup.archive) as tar:
+        tar.extract(member, dest)
+    return dest / member
+
+
+class TestBackupContents:
+    def test_archive_is_locked_down(self, one_backup):
+        assert (one_backup.archive.stat().st_mode & 0o777) == 0o600
+
+    def test_includes_critical_excludes_noise(self, one_backup):
+        with tarfile.open(one_backup.archive) as tar:
             names = set(tar.getnames())
         assert "data/app/brain_state.db" in names
         assert "data/app/auto_learn.key" in names
@@ -124,42 +139,25 @@ class TestBackupContents:
         assert not any("app-backup-" in n for n in names)
         assert not any(n.endswith("-wal") or n.endswith("-shm") for n in names)
 
-    def test_sqlite_snapshot_is_consistent(self, state_tree, tmp_path):
-        src_tmp, data, creds = state_tree
-        _run(src_tmp, data, creds)
-        extract = tmp_path / "extract"
-        extract.mkdir()
-        with tarfile.open(_only_archive(src_tmp)) as tar:
-            tar.extract("data/app/brain_state.db", extract)
-        db = extract / "data" / "app" / "brain_state.db"
-        conn = sqlite3.connect(str(db))
+    def test_sqlite_snapshot_is_consistent(self, one_backup, tmp_path):
+        conn = sqlite3.connect(str(_extract(one_backup, "data/app/brain_state.db", tmp_path)))
         try:
             assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
             assert conn.execute("SELECT v FROM t").fetchone()[0] == "hello-reminders"
         finally:
             conn.close()
 
-    def test_key_mode_preserved(self, state_tree, tmp_path):
-        src_tmp, data, creds = state_tree
-        _run(src_tmp, data, creds)
-        extract = tmp_path / "extract"
-        extract.mkdir()
-        with tarfile.open(_only_archive(src_tmp)) as tar:
-            tar.extract("data/app/auto_learn.key", extract)
-        key = extract / "data" / "app" / "auto_learn.key"
+    def test_key_mode_preserved(self, one_backup, tmp_path):
+        key = _extract(one_backup, "data/app/auto_learn.key", tmp_path)
         assert (key.stat().st_mode & 0o777) == 0o600
 
-
-class TestMetricAndRotation:
-    def test_metric_written(self, state_tree, tmp_path):
-        src_tmp, data, creds = state_tree
-        metric = tmp_path / "jess_backup.prom"
-        r = _run(src_tmp, data, creds, JESS_BACKUP_METRICS_PATH=str(metric))
-        assert r.returncode == 0
-        body = metric.read_text()
+    def test_metric_written(self, one_backup):
+        body = one_backup.metric.read_text()
         assert "jess_backup_success_timestamp_seconds " in body
         assert "jess_backup_size_bytes " in body
 
+
+class TestRotation:
     def test_rotation_keeps_only_n(self, state_tree):
         src_tmp, data, creds = state_tree
         backups = src_tmp / "backups"
@@ -178,11 +176,11 @@ class TestMetricAndRotation:
 
 
 class TestResilience:
-    """The orchestrator container runs as root and writes some data/app files
-    root-owned, so a host-user cron can't read every file. A single unreadable
-    (or mid-run-vanished) file must not sink the whole backup — unless it's
-    critical. Dangling symlinks force a copy failure portably (chmod 000 won't,
-    since the container test runs as root)."""
+    """Some data/app files can be unreadable to the host-user cron (left
+    root-owned by the orchestrator container from before it ran as uid
+    ORCHESTRATOR_UID, or vanished mid-run). A single such file must not sink
+    the whole backup — unless it's critical. Dangling symlinks force a copy
+    failure portably (chmod 000 wouldn't stop a test run as root)."""
 
     def test_noncritical_unreadable_file_is_skipped(self, state_tree, tmp_path):
         src_tmp, data, creds = state_tree

@@ -41,6 +41,7 @@ from orchestrator.audio_stream import (
     parse_wav,
     split_for_tts,
 )
+from orchestrator.tests.fixtures_ha_voice import build_wav
 
 RATE = 8000  # mono 16-bit: 16 000 bytes per second of audio (small buffers, fast tests)
 BYTES_PER_S = RATE * 2
@@ -57,22 +58,6 @@ assert len(LONG) > ONE_CLIP_MAX_CHARS
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def build_wav(pcm: bytes, *, channels=1, rate=RATE, bits=16, tag=1, extra=b"", data_size=None, fmt_size=16) -> bytes:
-    block = channels * bits // 8
-    fmt = struct.pack("<HHIIHH", tag, channels, rate, rate * block, block, bits) + b"\x00" * (fmt_size - 16)
-    body = (
-        b"WAVE"
-        + b"fmt "
-        + struct.pack("<I", fmt_size)
-        + fmt
-        + extra
-        + b"data"
-        + struct.pack("<I", len(pcm) if data_size is None else data_size)
-        + pcm
-    )
-    return b"RIFF" + struct.pack("<I", len(body)) + body
 
 
 def wav_bytes(seconds: float, *, fill: int = 1, rate=RATE, channels=1, bits=16) -> bytes:

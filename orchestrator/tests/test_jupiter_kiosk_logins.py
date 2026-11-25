@@ -15,7 +15,6 @@ import base64
 import email.message
 import hashlib
 import hmac
-import importlib.util
 import io
 import json
 import os
@@ -26,47 +25,18 @@ import sys
 import urllib.error
 import urllib.request
 import urllib.response
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-_HERE = Path(__file__).resolve()
-_REPO = _HERE.parents[2]
+from orchestrator.tests._helpers import REPO_ROOT, load_script
+from orchestrator.tests.fixtures_ops import KIOSK_DIR, Proxy, first_existing, kiosk_module
 
-
-def _first_existing(*candidates: Path) -> Path | None:
-    return next((c for c in candidates if c.is_file()), None)
-
-
-_FOLDER = next(
-    (p for p in (_REPO / "scripts" / "jupiter-kiosk", Path("/app/scripts/jupiter-kiosk")) if p.is_dir()), None
-)
-if _FOLDER is None or not (_FOLDER / "make_logins.py").is_file():
+if not (KIOSK_DIR / "make_logins.py").is_file():
     pytest.skip("scripts/jupiter-kiosk/make_logins.py not found", allow_module_level=True)
 
-
-def _load(path: Path, name: str):
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod  # before exec, like kiosk.py's dataclasses need
-    spec.loader.exec_module(mod)
-    return mod
-
-
-ml = _load(_FOLDER / "make_logins.py", "jupiter_kiosk_make_logins")
+ml = load_script(KIOSK_DIR / "make_logins.py", "jupiter_kiosk_make_logins")
 Refused = ml.Refused
-
-
-class _Proxy:
-    """A module stand-in: the given attributes, everything else from the real module."""
-
-    def __init__(self, real, **override):
-        self._real = real
-        self.__dict__.update(override)
-
-    def __getattr__(self, name):
-        return getattr(self._real, name)
 
 
 # --------------------------------------------------------------------------------------- parse_env
@@ -150,15 +120,6 @@ def test_kiosk_session_is_never_the_full_login():
     assert ml.kiosk_session(KIOSK_TOKEN, DASH_TOKEN) != full
 
 
-def test_kiosk_session_value_is_accepted_by_the_kiosk():
-    kiosk_path = _FOLDER / "kiosk.py"
-    kiosk = _load(kiosk_path, "jupiter_kiosk_for_logins")
-    cfg = kiosk.load_config({"screens": [{"name": "right", "url": "https://host.example/", "login": "dashboard"}]})
-    value = ml.kiosk_session(KIOSK_TOKEN, DASH_TOKEN)
-    assert kiosk.load_secrets({"dashboard_kiosk_session": value}, cfg) == {"dashboard_kiosk_session": value}
-    assert kiosk.DASHBOARD_COOKIE == ml.DASHBOARD_COOKIE
-
-
 def test_kiosk_session_accepts_exactly_24_characters():
     assert re.fullmatch(r"[0-9a-f]{64}", ml.kiosk_session("k" * 24, DASH_TOKEN))
 
@@ -200,9 +161,7 @@ def test_constants_match_the_frontend():
     assert ml.DASHBOARD_COOKIE == "brain_token"
     assert {"", "changeme"} == ml.PLACEHOLDER_TOKENS
     assert not hasattr(ml, "SESSION_LABEL")  # the full-login label has no business here any more
-    auth = _first_existing(
-        _REPO / "frontend" / "src" / "lib" / "dashboard-auth.ts", Path("/app/frontend_lib/dashboard-auth.ts")
-    )
+    auth = first_existing(REPO_ROOT / "frontend" / "src" / "lib" / "dashboard-auth.ts")
     if auth is None:
         pytest.skip("frontend/src/lib not mounted")
     text = auth.read_text(encoding="utf-8")
@@ -214,9 +173,7 @@ def test_constants_match_the_frontend():
 
 
 def test_refused_paths_are_outside_the_kiosk_allow_list():
-    lib = _first_existing(
-        _REPO / "frontend" / "src" / "lib" / "kiosk-session.ts", Path("/app/frontend_lib/kiosk-session.ts")
-    )
+    lib = first_existing(REPO_ROOT / "frontend" / "src" / "lib" / "kiosk-session.ts")
     if lib is None:
         pytest.skip("frontend/src/lib not mounted")
     text = lib.read_text(encoding="utf-8")
@@ -277,7 +234,7 @@ def ports(monkeypatch):
         return world.procs[m.group(1)]["mnt"]
 
     monkeypatch.setattr(ml, "subprocess", SimpleNamespace(run=run, SubprocessError=subprocess.SubprocessError))
-    monkeypatch.setattr(ml, "os", _Proxy(os, stat=fake_stat, readlink=fake_readlink))
+    monkeypatch.setattr(ml, "os", Proxy(os, stat=fake_stat, readlink=fake_readlink))
     return world
 
 
@@ -695,7 +652,7 @@ def test_grafana_nothing_sent_when_port_is_not_docker_proxy(monkeypatch):
 
 def test_write_secrets_atomic_0640(tmp_path, monkeypatch, capsys):
     chowned = []
-    monkeypatch.setattr(ml, "os", _Proxy(os, chown=lambda path, uid, gid: chowned.append((path, uid, gid))))
+    monkeypatch.setattr(ml, "os", Proxy(os, chown=lambda path, uid, gid: chowned.append((path, uid, gid))))
     target = tmp_path / "secrets.json"
     data = {"grafana_user": "closet-kiosk", "grafana_password": "s3cret-grafana", "dashboard_kiosk_session": "ab" * 32}
     ml.write_secrets(str(target), 1234, data)
@@ -713,7 +670,7 @@ def test_write_secrets_failure_leaves_old_file(tmp_path, monkeypatch):
     def no_chown(path, uid, gid):
         raise PermissionError(1, "Operation not permitted")
 
-    monkeypatch.setattr(ml, "os", _Proxy(os, chown=no_chown))
+    monkeypatch.setattr(ml, "os", Proxy(os, chown=no_chown))
     target = tmp_path / "secrets.json"
     target.write_text('{"old": true}\n', encoding="utf-8")
     with pytest.raises(PermissionError):
@@ -738,7 +695,7 @@ def main_env(tmp_path, monkeypatch):
     out_dir.mkdir()
     out = out_dir / "secrets.json"
     steps = []
-    monkeypatch.setattr(ml, "os", _Proxy(os, geteuid=lambda: 0))
+    monkeypatch.setattr(ml, "os", Proxy(os, geteuid=lambda: 0))
     monkeypatch.setattr(ml, "grp", SimpleNamespace(getgrnam=lambda name: SimpleNamespace(gr_gid=1234)))
     monkeypatch.setattr(ml, "check_dashboard_cookie", lambda session: steps.append(("dashboard", session)))
     monkeypatch.setattr(
@@ -842,7 +799,7 @@ def test_main_needs_the_kiosk_group(main_env, monkeypatch):
 
 
 def test_main_needs_root(main_env, monkeypatch, capsys):
-    monkeypatch.setattr(ml, "os", _Proxy(os, geteuid=lambda: 1000))
+    monkeypatch.setattr(ml, "os", Proxy(os, geteuid=lambda: 1000))
     assert ml.main() == 1
     assert "run as root" in capsys.readouterr().err
     assert main_env.steps == []
@@ -861,7 +818,8 @@ def test_main_file_round_trips_through_the_kiosk(main_env, monkeypatch):
     # The upgrade: the file an older make_logins.py wrote (the full login as dashboard_session) is in
     # place and the kiosk refuses it; make_logins.py replaces the whole file; the kiosk then loads it and
     # sets exactly the read-only cookie. Real write_secrets() and kiosk.py, so the key names can't drift.
-    kiosk = _load(_FOLDER / "kiosk.py", "jupiter_kiosk_round_trip")
+    kiosk = kiosk_module()
+    assert kiosk.DASHBOARD_COOKIE == ml.DASHBOARD_COOKIE
     cfg = kiosk.load_config(
         {
             "screens": [
@@ -877,7 +835,7 @@ def test_main_file_round_trips_through_the_kiosk(main_env, monkeypatch):
         kiosk.load_secrets(kiosk.read_json(str(main_env.out)), cfg)
 
     monkeypatch.setattr(ml, "write_secrets", _REAL_WRITE_SECRETS)
-    monkeypatch.setattr(ml, "os", _Proxy(os, geteuid=lambda: 0, chown=lambda path, uid, gid: None))
+    monkeypatch.setattr(ml, "os", Proxy(os, geteuid=lambda: 0, chown=lambda path, uid, gid: None))
     assert ml.main() == 0
 
     assert full_login not in main_env.out.read_text(encoding="utf-8")

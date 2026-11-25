@@ -38,6 +38,8 @@ from orchestrator.metrics import (
     MEMORY_REPLACE_SKIPPED,
     TOOL_RESULT_MARKUP_NEUTRALIZED,
 )
+from orchestrator.tests._helpers import metric_value
+from orchestrator.tests.fixtures_memory import real_palace_yaml
 
 FACT_SOURCES = ["auto_learn", "user_correction"]
 
@@ -48,15 +50,7 @@ def _dist(cos: float) -> float:
 
 
 def _markup_count() -> float:
-    return TOOL_RESULT_MARKUP_NEUTRALIZED.labels(tool="memory_context")._value.get()
-
-
-@pytest.fixture
-def fernet(monkeypatch):
-    """A fresh Fernet cipher installed as auto_learn's cipher."""
-    f = Fernet(Fernet.generate_key())
-    monkeypatch.setattr(auto_learn, "_cipher", f)
-    return f
+    return metric_value(TOOL_RESULT_MARKUP_NEUTRALIZED, tool="memory_context")
 
 
 # ===========================================================================
@@ -171,33 +165,33 @@ class TestRagRowFilters:
     def test_memory_under_10_chars_dropped(self, rag):
         assert rag([("Ok sure", {"source": "brain_dump"}, 0.9)]) == ""
 
-    def test_short_encrypted_palace_memory_kept_and_decrypted(self, rag, fernet):
+    def test_short_encrypted_palace_memory_kept_and_decrypted(self, rag, memory_fernet):
         short = "Prefers tea over coffee"  # 23 readable chars, ~140 ciphertext chars
-        token = fernet.encrypt(short.encode()).decode()
+        token = memory_fernet.encrypt(short.encode()).decode()
         for source in ("claude_code", "api"):
             meta = {"source": source, "encrypted": "true", "wing": "jess", "room": "preferences"}
             out = rag([(token, meta, 0.6)])
             assert short in out, source
             assert token not in out
 
-    def test_short_encrypted_auto_learn_fact_kept(self, rag, fernet):
+    def test_short_encrypted_auto_learn_fact_kept(self, rag, memory_fernet):
         short = "Has a dog named Pepper"
-        token = fernet.encrypt(short.encode()).decode()
+        token = memory_fernet.encrypt(short.encode()).decode()
         out = rag([(token, {"source": "auto_learn", "encrypted": "true"}, 0.40)])
         assert short in out
 
-    def test_length_judged_on_decrypted_text(self, rag, fernet):
+    def test_length_judged_on_decrypted_text(self, rag, memory_fernet):
         # Ciphertext is long; the readable text is 5 chars → dropped.
-        token = fernet.encrypt(b"Hi yo").decode()
+        token = memory_fernet.encrypt(b"Hi yo").decode()
         assert len(token) > 10  # would pass the 10-char minimum if judged on ciphertext
         assert rag([(token, {"source": "auto_learn", "encrypted": "true"}, 0.9)]) == ""
 
-    def test_fernet_prefix_detected_without_metadata_flag(self, rag, fernet):
+    def test_fernet_prefix_detected_without_metadata_flag(self, rag, memory_fernet):
         short = "Owns a green kayak"
-        token = fernet.encrypt(short.encode()).decode()
+        token = memory_fernet.encrypt(short.encode()).decode()
         assert short in rag([(token, {"source": "auto_learn"}, 0.6)])
 
-    def test_undecryptable_row_skipped(self, rag, fernet):
+    def test_undecryptable_row_skipped(self, rag, memory_fernet):
         other_key_token = Fernet(Fernet.generate_key()).encrypt(b"Grew up near a big lake").decode()
         out = rag(
             [
@@ -433,14 +427,23 @@ class TestSearchMemoryTool:
         assert second.args == ("where did I grow up",)
         assert second.kwargs == {"fact_min_cos": 0.27}
 
-    async def test_known_wing_only_retries(self, search_env):
-        search_env.side_effect = ["", "- x fact here"]
-        out = await tool_handlers.tool_search_memory("q", wing="jess")
-        assert out.startswith("Nothing under that filter")
+    @pytest.mark.parametrize(
+        "filters,palace_up",
+        [
+            pytest.param({"wing": "jess"}, True, id="known-wing-only"),
+            pytest.param({"room": "identity"}, True, id="room-only"),
+            pytest.param({"wing": "personal"}, False, id="palace-unavailable"),
+        ],
+    )
+    async def test_empty_filtered_search_retries(self, search_env, monkeypatch, filters, palace_up):
+        if not palace_up:
 
-    async def test_room_only_retries(self, search_env):
+            def boom():
+                raise RuntimeError("no palace")
+
+            monkeypatch.setattr(shared, "get_palace", boom)
         search_env.side_effect = ["", "- x fact here"]
-        out = await tool_handlers.tool_search_memory("q", room="identity")
+        out = await tool_handlers.tool_search_memory("q", **filters)
         assert out.startswith("Nothing under that filter")
         assert search_env.await_count == 2
 
@@ -459,15 +462,6 @@ class TestSearchMemoryTool:
         assert out == "No relevant information found in memory."
         assert search_env.await_count == 1
 
-    async def test_palace_unavailable_still_retries(self, search_env, monkeypatch):
-        def boom():
-            raise RuntimeError("no palace")
-
-        monkeypatch.setattr(shared, "get_palace", boom)
-        search_env.side_effect = ["", "- x fact here"]
-        out = await tool_handlers.tool_search_memory("q", wing="personal")
-        assert out.startswith("Nothing under that filter")
-
     async def test_empty_query(self, search_env):
         assert await tool_handlers.tool_search_memory("") == "No query provided"
         search_env.assert_not_awaited()
@@ -476,36 +470,6 @@ class TestSearchMemoryTool:
 # ===========================================================================
 # 5. mempalace: keyword routing, route_fact, wakeup context
 # ===========================================================================
-
-
-def _make_palace(config=None, yaml_path="/nonexistent"):
-    from orchestrator.mempalace import MemPalace
-
-    with patch("orchestrator.mempalace.shared") as mock_shared:
-        mock_shared.PALACE_YAML_PATH = yaml_path
-        mock_shared.PALACE_ENABLED = True
-        mock_shared.PALACE_WAKEUP_ENABLED = False
-        mock_shared.PALACE_DEDUP_THRESHOLD = 0.85
-        mock_shared.AUTO_LEARN_ENCRYPT = False
-        palace = MemPalace()
-    if config is not None:
-        palace._config = config
-        palace._routing_rules = config.get("routing_rules", [])
-    return palace
-
-
-_PALACE_CANDIDATES = [
-    Path(__file__).resolve().parents[2] / "data" / "palace.yaml",  # repo checkout / CI
-    Path("/app/data_repo/palace.yaml"),  # throwaway test container mount
-    Path("/app/config/palace.yaml"),  # orchestrator image layout
-]
-
-
-def _real_palace_yaml() -> Path:
-    for p in _PALACE_CANDIDATES:
-        if p.is_file():
-            return p
-    pytest.fail(f"repo data/palace.yaml not found in any of {_PALACE_CANDIDATES}")
 
 
 KEYWORD_CONFIG = {
@@ -538,8 +502,8 @@ class TestKeywordRouting:
             "Took a long trip abroad",  # not "ip"
         ],
     )
-    def test_substring_inside_other_word_does_not_match(self, text):
-        palace = _make_palace(KEYWORD_CONFIG)
+    def test_substring_inside_other_word_does_not_match(self, memory_palace, text):
+        palace = memory_palace(KEYWORD_CONFIG)
         assert palace.route_to_room(text) == ("personal", "")
 
     @pytest.mark.parametrize(
@@ -554,14 +518,14 @@ class TestKeywordRouting:
             ("Visited two friends", ("personal", "relationships")),
         ],
     )
-    def test_whole_word_and_inflections_match(self, text, expected):
-        palace = _make_palace(KEYWORD_CONFIG)
+    def test_whole_word_and_inflections_match(self, memory_palace, text, expected):
+        palace = memory_palace(KEYWORD_CONFIG)
         assert palace.route_to_room(text) == expected
 
-    def test_prefer_matches_preferred(self):
+    def test_prefer_matches_preferred(self, memory_palace):
         # Spec + _keyword_re docstring: "prefer" → "preferred". Doubled final
         # consonant ("prefer" + "red") is not in the suffix list.
-        palace = _make_palace(KEYWORD_CONFIG)
+        palace = memory_palace(KEYWORD_CONFIG)
         assert palace.route_to_room("She preferred window seats") == ("jess", "preferences")
 
     def test_keyword_re_is_case_insensitive_on_keyword(self):
@@ -569,19 +533,19 @@ class TestKeywordRouting:
 
         assert _keyword_re("Budget").search("my budget is tight")
 
-    def test_best_keyword_room_only_wing(self):
-        palace = _make_palace(KEYWORD_CONFIG)
+    def test_best_keyword_room_only_wing(self, memory_palace):
+        palace = memory_palace(KEYWORD_CONFIG)
         # "system architecture" scores in brain_gateway, but only_wing restricts.
         assert palace._best_keyword_room("the system architecture", only_wing="personal") == ("personal", "")
         assert palace._best_keyword_room("money for family", only_wing="personal")[0] == "personal"
 
-    def test_none_rooms_and_keywords_tolerated(self):
+    def test_none_rooms_and_keywords_tolerated(self, memory_palace):
         cfg = {"wings": {"odd": {"rooms": None}, "odd2": {"rooms": {"r": None}}}, "routing_rules": []}
-        palace = _make_palace(cfg)
+        palace = memory_palace(cfg)
         assert palace.route_to_room("anything at all") == ("personal", "")
 
-    def test_real_config_flora_portland_media(self):
-        palace = _make_palace(yaml_path=str(_real_palace_yaml()))
+    def test_real_config_flora_portland_media(self, memory_palace):
+        palace = memory_palace(yaml_path=str(real_palace_yaml()))
         for text in ("I grew up near Flora Springs", "I moved to Portland in 2019", "I work in media production"):
             assert palace.route_to_room(text) == ("personal", ""), text
 
@@ -595,74 +559,74 @@ class TestRouteFact:
     @pytest.mark.parametrize(
         "category", sorted(["identity", "work", "career", "education", "history", "background", "biography"])
     )
-    def test_identity_category_goes_to_identity_room(self, category):
-        palace = _make_palace(KEYWORD_CONFIG)
+    def test_identity_category_goes_to_identity_room(self, memory_palace, category):
+        palace = memory_palace(KEYWORD_CONFIG)
         # Words that would keyword-route elsewhere ("network", "system").
         text = "Worked as a network engineer at Acme Systems for six years"
         assert palace.route_fact(text, category) == ("personal", "identity")
 
-    def test_category_normalized(self):
-        palace = _make_palace(KEYWORD_CONFIG)
+    def test_category_normalized(self, memory_palace):
+        palace = memory_palace(KEYWORD_CONFIG)
         assert palace.route_fact("Studied at Fenwick College", "  Education ") == ("personal", "identity")
 
-    def test_identity_text_at_cap_still_identity(self):
+    def test_identity_text_at_cap_still_identity(self, memory_palace):
         from orchestrator.mempalace import WAKEUP_ENTRY_MAX_CHARS
 
-        palace = _make_palace(KEYWORD_CONFIG)
+        palace = memory_palace(KEYWORD_CONFIG)
         text = ("Grew up in Brindlemoor. " * 20)[:WAKEUP_ENTRY_MAX_CHARS]
         assert len(text) == WAKEUP_ENTRY_MAX_CHARS
         assert palace.route_fact(text, "background") == ("personal", "identity")
 
-    def test_long_identity_text_goes_to_personal_keyword_room(self):
+    def test_long_identity_text_goes_to_personal_keyword_room(self, memory_palace):
         from orchestrator.mempalace import WAKEUP_ENTRY_MAX_CHARS
 
-        palace = _make_palace(KEYWORD_CONFIG)
+        palace = memory_palace(KEYWORD_CONFIG)
         text = "Has a big family spread across three towns. " * 10
         assert len(text) > WAKEUP_ENTRY_MAX_CHARS
         assert palace.route_fact(text, "history") == ("personal", "relationships")
 
-    def test_long_identity_text_never_leaves_personal(self):
-        palace = _make_palace(KEYWORD_CONFIG)
+    def test_long_identity_text_never_leaves_personal(self, memory_palace):
+        palace = memory_palace(KEYWORD_CONFIG)
         text = "Designed the system architecture of a network appliance. " * 8
         assert palace.route_fact(text, "work") == ("personal", "")
 
-    def test_other_personal_category_uses_personal_keyword_room(self):
-        palace = _make_palace(KEYWORD_CONFIG)
+    def test_other_personal_category_uses_personal_keyword_room(self, memory_palace):
+        palace = memory_palace(KEYWORD_CONFIG)
         assert palace.route_fact("Has a younger sister and a close family", "family") == ("personal", "relationships")
         assert palace.route_fact("Wants to redesign the system architecture", "goal") == ("personal", "")
 
-    def test_other_category_routes_as_usual(self):
-        palace = _make_palace(KEYWORD_CONFIG)
+    def test_other_category_routes_as_usual(self, memory_palace):
+        palace = memory_palace(KEYWORD_CONFIG)
         text = "The system architecture uses one model"
         assert palace.route_fact(text, "technical") == palace.route_to_room(text) == ("brain_gateway", "architecture")
         assert palace.route_fact("Prefers window seats", "preference") == ("jess", "preferences")
 
     @pytest.mark.parametrize("category", [None, ""])
-    def test_missing_category_routes_as_usual(self, category):
-        palace = _make_palace(KEYWORD_CONFIG)
+    def test_missing_category_routes_as_usual(self, memory_palace, category):
+        palace = memory_palace(KEYWORD_CONFIG)
         text = "The system architecture uses one model"
         assert palace.route_fact(text, category) == ("brain_gateway", "architecture")
 
-    def test_no_identity_room_configured_falls_back_to_personal(self):
+    def test_no_identity_room_configured_falls_back_to_personal(self, memory_palace):
         cfg = json.loads(json.dumps(KEYWORD_CONFIG))
         del cfg["wings"]["personal"]["rooms"]["identity"]
-        palace = _make_palace(cfg)
+        palace = memory_palace(cfg)
         assert palace.route_fact("Studied at Fenwick College with a friend", "education") == (
             "personal",
             "relationships",
         )
 
-    def test_real_config_identity(self):
-        palace = _make_palace(yaml_path=str(_real_palace_yaml()))
+    def test_real_config_identity(self, memory_palace):
+        palace = memory_palace(yaml_path=str(real_palace_yaml()))
         assert palace.route_fact("Grew up in a small town near Flora Springs", "identity") == ("personal", "identity")
         # Was filed under brain_gateway/architecture by the "system" keyword.
         assert palace.route_fact("Worked at Acme Systems as a network engineer", "work") == ("personal", "identity")
 
 
-def _wakeup_palace(wakeup_cfg, docs_by_room):
+def _wakeup_palace(build, wakeup_cfg, docs_by_room):
     """Palace whose collection.get returns docs_by_room[(wing, room)] = [(doc, meta), ...]."""
     cfg = {"wings": {}, "routing_rules": [], "wakeup": {"enabled": True, "refresh_interval_minutes": 30, **wakeup_cfg}}
-    palace = _make_palace(cfg)
+    palace = build(cfg)
     col = MagicMock()
 
     def get(where=None, include=None, **kw):
@@ -681,10 +645,11 @@ def _fact(text, day, field="learned_at"):
 
 
 class TestWakeupContext:
-    def test_room_limits_default_and_override(self):
+    def test_room_limits_default_and_override(self, memory_palace):
         identity = [_fact(f"Identity fact number {i:02d}", i) for i in range(1, 21)]
         health = [_fact(f"Health fact number {i:02d}", i) for i in range(1, 9)]
         palace, _ = _wakeup_palace(
+            memory_palace,
             {
                 "max_tokens": 100000,
                 "room_limits": {"personal/identity": 15},
@@ -698,8 +663,9 @@ class TestWakeupContext:
         # priority order kept: identity entries first
         assert lines[0].startswith("- Identity fact")
 
-    def test_where_filter_restricts_to_fact_sources(self):
+    def test_where_filter_restricts_to_fact_sources(self, memory_palace):
         palace, col = _wakeup_palace(
+            memory_palace,
             {"max_tokens": 1000, "priority_rooms": ["personal/identity", "jess/preferences"]},
             {("personal", "identity"): [_fact("Grew up in Brindlemoor", 1)]},
         )
@@ -710,7 +676,7 @@ class TestWakeupContext:
             {"$and": [{"wing": "jess"}, {"room": "preferences"}, {"source": {"$in": FACT_SOURCES}}]},
         ]
 
-    def test_newest_first(self):
+    def test_newest_first(self, memory_palace):
         rows = [
             _fact("Oldest fact about the user", 1),
             _fact("Middle fact about the user", 5, field="updated_at"),
@@ -718,16 +684,18 @@ class TestWakeupContext:
             _fact("Second newest fact here", 7, field="updated_at"),
         ]
         palace, _ = _wakeup_palace(
+            memory_palace,
             {"max_tokens": 1000, "room_limits": {"personal/identity": 2}, "priority_rooms": ["personal/identity"]},
             {("personal", "identity"): rows},
         )
         assert palace.generate_wakeup_context() == "- Newest fact about the user\n- Second newest fact here"
 
-    def test_entry_truncated(self):
+    def test_entry_truncated(self, memory_palace):
         from orchestrator.mempalace import WAKEUP_ENTRY_MAX_CHARS
 
         long_text = "Grew up by the sea and " * 30
         palace, _ = _wakeup_palace(
+            memory_palace,
             {"max_tokens": 100000, "priority_rooms": ["personal/identity"]},
             {("personal", "identity"): [_fact(long_text, 1)]},
         )
@@ -737,9 +705,10 @@ class TestWakeupContext:
         assert len(out) <= len("- ") + WAKEUP_ENTRY_MAX_CHARS + 1
         assert out[2:-1] == long_text[:WAKEUP_ENTRY_MAX_CHARS].rstrip()
 
-    def test_block_capped_at_max_tokens(self):
+    def test_block_capped_at_max_tokens(self, memory_palace):
         rows = [_fact(f"Short identity fact {i:02d}", i) for i in range(1, 11)]
         palace, _ = _wakeup_palace(
+            memory_palace,
             {"max_tokens": 20, "priority_rooms": ["personal/identity"]},
             {("personal", "identity"): rows},
         )
@@ -748,9 +717,10 @@ class TestWakeupContext:
         # Cut on a line boundary: every line is a whole entry.
         assert all(line.startswith("- Short identity fact ") and len(line) == 24 for line in out.split("\n"))
 
-    def test_non_dict_room_limits_ignored_with_warning(self, caplog):
+    def test_non_dict_room_limits_ignored_with_warning(self, memory_palace, caplog):
         rows = [_fact(f"Identity fact number {i:02d}", i) for i in range(1, 11)]
         palace, _ = _wakeup_palace(
+            memory_palace,
             {"max_tokens": 100000, "room_limits": ["personal/identity", 15], "priority_rooms": ["personal/identity"]},
             {("personal", "identity"): rows},
         )
@@ -759,25 +729,28 @@ class TestWakeupContext:
         assert len(out.split("\n")) == 5
         assert any("room_limits" in r.getMessage() for r in caplog.records)
 
-    def test_encrypted_entries_decrypted(self, fernet):
-        token = fernet.encrypt(b"Studied at Fenwick College").decode()
+    def test_encrypted_entries_decrypted(self, memory_palace, memory_fernet):
+        token = memory_fernet.encrypt(b"Studied at Fenwick College").decode()
         rows = [(token, {"source": "auto_learn", "encrypted": "true", "learned_at": "2026-10-01T00:00:00"})]
         palace, _ = _wakeup_palace(
-            {"max_tokens": 1000, "priority_rooms": ["personal/identity"]}, {("personal", "identity"): rows}
+            memory_palace,
+            {"max_tokens": 1000, "priority_rooms": ["personal/identity"]},
+            {("personal", "identity"): rows},
         )
         assert palace.generate_wakeup_context() == "- Studied at Fenwick College"
 
-    def test_cache_and_invalidate(self):
+    def test_cache_and_invalidate(self, memory_palace):
         docs = {("personal", "identity"): [_fact("Grew up in Brindlemoor", 1)]}
-        palace, col = _wakeup_palace({"max_tokens": 1000, "priority_rooms": ["personal/identity"]}, docs)
+        palace, col = _wakeup_palace(memory_palace, {"max_tokens": 1000, "priority_rooms": ["personal/identity"]}, docs)
         assert palace.generate_wakeup_context() == "- Grew up in Brindlemoor"
         docs[("personal", "identity")] = [_fact("Grew up in Thornwick", 2)]
         assert palace.generate_wakeup_context() == "- Grew up in Brindlemoor"  # cached
         palace.invalidate_wakeup_cache()
         assert palace.generate_wakeup_context() == "- Grew up in Thornwick"
 
-    def test_room_fetch_error_skips_room(self):
+    def test_room_fetch_error_skips_room(self, memory_palace):
         palace, col = _wakeup_palace(
+            memory_palace,
             {"max_tokens": 1000, "priority_rooms": ["personal/identity", "personal/health"]},
             {("personal", "health"): [_fact("Sees a dentist yearly", 1)]},
         )
@@ -839,7 +812,7 @@ class TestUpdateMemory:
         assert "embeddings" in kwargs["include"]
 
     async def test_replaces_only_when_both_similarities_clear(self, mm):
-        replaced0, skipped0 = MEMORY_FACTS_REPLACED._value.get(), MEMORY_REPLACE_SKIPPED._value.get()
+        replaced0, skipped0 = metric_value(MEMORY_FACTS_REPLACED), metric_value(MEMORY_REPLACE_SKIPPED)
         mm.col.query.return_value = _candidates(
             [
                 ("autolearn_a", "Favorite color is blue", {"source": "auto_learn"}, 0.80, SAME_TOPIC),
@@ -852,8 +825,8 @@ class TestUpdateMemory:
         assert "Replaced 1 outdated fact(s)" in out
         assert "Favorite color is blue" in out
         assert "autumn" not in out
-        assert MEMORY_FACTS_REPLACED._value.get() == replaced0 + 1
-        assert MEMORY_REPLACE_SKIPPED._value.get() == skipped0 + 1
+        assert metric_value(MEMORY_FACTS_REPLACED) == replaced0 + 1
+        assert metric_value(MEMORY_REPLACE_SKIPPED) == skipped0 + 1
         mm.col.upsert.assert_called_once()
 
     async def test_kept_similar_reported_when_nothing_replaced(self, mm):
@@ -874,9 +847,9 @@ class TestUpdateMemory:
         assert out.startswith("Added to my memory (no conflicting facts found to replace)")
         assert "Kept" not in out
 
-    async def test_encrypted_replaced_fact_shown_decrypted(self, mm, fernet):
+    async def test_encrypted_replaced_fact_shown_decrypted(self, mm, memory_fernet):
         old = "Favorite color used to be a deep blue"
-        token = fernet.encrypt(old.encode()).decode()
+        token = memory_fernet.encrypt(old.encode()).decode()
         mm.col.query.return_value = _candidates(
             [("autolearn_e", token, {"source": "auto_learn", "encrypted": "true"}, 0.85, SAME_TOPIC)]
         )
@@ -1061,7 +1034,8 @@ def no_idle_wait(monkeypatch):
 class TestExtractFacts:
     async def test_one_model_call_per_window(self, no_idle_wait):
         msgs = _talk(40)
-        n = len(auto_learn._conversation_windows(msgs))
+        windows = auto_learn._conversation_windows(msgs)
+        n = len(windows)
         assert n >= 2
         prompts = []
 
@@ -1072,6 +1046,7 @@ class TestExtractFacts:
         with patch("orchestrator.orchestrator.call_model", fake):
             facts = await auto_learn.extract_facts(msgs)
         assert len(prompts) == n
+        assert all(w in p for w, p in zip(windows, prompts, strict=True))  # each window, in order
         assert no_idle_wait.await_count == n
         assert [f["fact"] for f in facts] == [f"Invented background fact number {i}" for i in range(1, n + 1)]
 
@@ -1109,7 +1084,7 @@ class TestExtractFacts:
 
     async def test_filter_before_cap(self, no_idle_wait, monkeypatch):
         monkeypatch.setattr(shared, "AUTO_LEARN_MAX_FACTS", 2)
-        capped0 = AUTO_LEARN_FACTS_CAPPED._value.get()
+        capped0 = metric_value(AUTO_LEARN_FACTS_CAPPED)
         reply = [
             {"fact": "Takes an invented pill at night", "category": "health", "confidence": "high"},
             {"fact": "SSN is 123-45-6789 for the record", "category": "identity", "confidence": "high"},
@@ -1121,18 +1096,18 @@ class TestExtractFacts:
         with patch("orchestrator.orchestrator.call_model", AsyncMock(return_value=_llm_reply(reply))):
             facts = await auto_learn.extract_facts(_talk(2))
         assert [f["fact"] for f in facts] == ["Invented background fact number 1", "Invented background fact number 2"]
-        assert AUTO_LEARN_FACTS_CAPPED._value.get() == capped0 + 1
+        assert metric_value(AUTO_LEARN_FACTS_CAPPED) == capped0 + 1
 
     async def test_cap_applies_per_window(self, no_idle_wait, monkeypatch):
         monkeypatch.setattr(shared, "AUTO_LEARN_MAX_FACTS", 2)
         msgs = _talk(40)
         n = len(auto_learn._conversation_windows(msgs))
-        capped0 = AUTO_LEARN_FACTS_CAPPED._value.get()
+        capped0 = metric_value(AUTO_LEARN_FACTS_CAPPED)
         reply = _llm_reply([_good(1), _good(2), _good(3)])
         with patch("orchestrator.orchestrator.call_model", AsyncMock(return_value=reply)):
             facts = await auto_learn.extract_facts(msgs)
         assert len(facts) == 2 * n
-        assert AUTO_LEARN_FACTS_CAPPED._value.get() == capped0 + n
+        assert metric_value(AUTO_LEARN_FACTS_CAPPED) == capped0 + n
 
     async def test_malformed_items_do_not_crash(self, no_idle_wait):
         reply = [
@@ -1154,16 +1129,11 @@ class TestExtractFacts:
         assert fact["confidence"] == "high"
         assert all(isinstance(fact[k], str) for k in ("fact", "category", "confidence"))
 
-    async def test_missing_category_becomes_general(self, no_idle_wait):
-        reply = [{"fact": "Grew up in Brindlemoor by the sea", "confidence": "medium"}]
-        with patch("orchestrator.orchestrator.call_model", AsyncMock(return_value=_llm_reply(reply))):
-            facts = await auto_learn.extract_facts(_talk(2))
-        assert facts[0]["category"] == "general"
-
-    async def test_null_category_becomes_general(self, no_idle_wait):
-        # The model writes JSON null for "no category"; the normalizer's
-        # `category or "general"` intends the same result as a missing key.
-        reply = [{"fact": "Grew up in Brindlemoor by the sea", "category": None, "confidence": "medium"}]
+    # The model writes JSON null for "no category"; the normalizer's
+    # `category or "general"` intends the same result as a missing key.
+    @pytest.mark.parametrize("extra", [pytest.param({}, id="missing"), pytest.param({"category": None}, id="null")])
+    async def test_no_category_becomes_general(self, no_idle_wait, extra):
+        reply = [{"fact": "Grew up in Brindlemoor by the sea", "confidence": "medium", **extra}]
         with patch("orchestrator.orchestrator.call_model", AsyncMock(return_value=_llm_reply(reply))):
             facts = await auto_learn.extract_facts(_talk(2))
         assert facts[0]["category"] == "general"
@@ -1287,7 +1257,7 @@ def test_compose_passes_memory_env_defaults():
 
 
 def test_real_palace_yaml_identity_room_and_wakeup():
-    cfg = yaml.safe_load(_real_palace_yaml().read_text())
+    cfg = yaml.safe_load(real_palace_yaml().read_text())
     identity = cfg["wings"]["personal"]["rooms"]["identity"]
     assert identity["keywords"] == []  # keyword routing never files text here
     wakeup = cfg["wakeup"]

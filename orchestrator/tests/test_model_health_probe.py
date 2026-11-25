@@ -30,7 +30,6 @@ def test_models_probe_url(url, expected):
     assert _models_probe_url(url) == expected
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("backend", ["anthropic", "openai", "ANTHROPIC"])
 async def test_cloud_backends_short_circuit_without_probing(backend):
     """Cloud backends can't be SSH-woken and shouldn't be probed unauthenticated;
@@ -43,7 +42,6 @@ async def test_cloud_backends_short_circuit_without_probing(backend):
         assert await check_model_health() is True
 
 
-@pytest.mark.asyncio
 async def test_openai_compatible_hits_models_endpoint_and_is_healthy_on_200():
     resp = MagicMock(status_code=200)
     with (
@@ -56,7 +54,6 @@ async def test_openai_compatible_hits_models_endpoint_and_is_healthy_on_200():
         assert http.get.call_args[0][0] == "http://host.docker.internal:11434/v1/models"
 
 
-@pytest.mark.asyncio
 async def test_non_200_is_unhealthy():
     """Ollama 404s /health but serves /v1/models; a non-200 here is a real outage."""
     resp = MagicMock(status_code=404)
@@ -69,7 +66,6 @@ async def test_non_200_is_unhealthy():
         assert await check_model_health() is False
 
 
-@pytest.mark.asyncio
 async def test_connect_error_returns_false_so_wake_fires():
     """A sleeping local GPU box → probe raises → False → caller's SSH-wake fires.
     Preserves Helios auto-wake behavior."""

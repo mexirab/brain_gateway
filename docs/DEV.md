@@ -50,8 +50,9 @@ docker compose up -d --build orchestrator
 docker logs brain-orchestrator --tail 50 -f
 
 # Run the test suite (tests live in orchestrator/tests/; throwaway container from the orchestrator image;
-# the data/ mount is needed by test_palace_system_wing.py, which reads data/palace.yaml)
-docker run --rm -v "$PWD/orchestrator:/app/orchestrator:ro" -v "$PWD/scripts:/app/scripts:ro" -v "$PWD/data:/app/data_repo:ro" -w /app gateway_nerves-orchestrator \
+# /tmp on tmpfs because the suite fsyncs heavily (SQLite, atomic writes) — ~4x slower on Jupiter's busy NVMe without it,
+# ~2 min with it; the data/ mount is needed by test_palace_system_wing.py, which reads data/palace.yaml)
+docker run --rm --tmpfs /tmp:rw,exec,size=8g -v "$PWD/orchestrator:/app/orchestrator:ro" -v "$PWD/scripts:/app/scripts:ro" -v "$PWD/data:/app/data_repo:ro" -w /app gateway_nerves-orchestrator \
   sh -c "pip install -q pytest pytest-asyncio respx && python -m pytest -o asyncio_mode=auto -p no:cacheprovider orchestrator/tests -q"
 # The image carries the deployed requirements.txt: a branch that adds a package (e.g. anthropic + httpx2/httpcore2,
 # 2026-11-24) must add its pinned lines to that pip install until it deploys, or collection fails on the import.
@@ -64,6 +65,17 @@ docker compose --profile models config
 ```
 
 **Post-change pipeline (mandatory).** Every code change runs through a two-phase review pipeline (code-reviewer + security + prod-support + frontend/hacker + unit-test + docs-updater). Full spec in [`CLAUDE.md`](../CLAUDE.md) → **Post-change review workflow**.
+
+**Writing tests** (`orchestrator/tests/`):
+
+- **Async:** plain `async def test_*`, never `@pytest.mark.asyncio`. Auto mode is required: `conftest.py` refuses to run unless `asyncio_mode=auto` (`pyproject.toml` sets it; the container command passes `-o asyncio_mode=auto`).
+- **Shared fixtures:** `conftest.py` (`tmp_db`, `mode_router`, autouse resets) and `fixtures_<area>.py` (`loop`, `ha_voice`, `delivery`, `selfcare`, `pantry`, `memory`, `ops`, `coder`). Each area module lists its fixtures in `__all__` with area-prefixed names; conftest imports them suite-wide and refuses a name exported twice or clashing with its own. Plain helpers in those modules are imported by name.
+- **Helpers:** `_helpers.py` — `load_script(path, name)` imports a host script by path (`scripts/…`, `monitoring/…`, files without `.py` too); `metric_value(metric, sample="", **labels)` reads a Prometheus metric through `collect()` (sums matching series; a series never created reads 0.0).
+- **No cross-imports:** a test file never imports another test file; shared code goes in `fixtures_<area>.py` or `_helpers.py`.
+- **No import guards:** no `_can_import` / skip-if-import-fails; the image has every dependency, so a failed import is a failure.
+- **Test the real code:** import what you test; no copies of production code, no tautologies (why five files were deleted 2026-11-25).
+- **`tmp_db`** is a file copy of a state_store DB built once per session by the real `init_db()` (~100 fsyncs per `init_db`, 400+ users of the fixture).
+- Tests that read files outside `orchestrator/`, `scripts/` and `data/` (compose files, `coder/`, `monitoring/`, `tts/`, `frontend/src`, `.github`) skip in the plain container; mount the ones you need read-only under `/app/` to run them (a few are host-only, e.g. `test_jupiter_deadman.py`).
 
 **Test ids must stay ≤ 300 chars.** CI runs `pytest -v`, which prints every node id, and a parametrize value with no id becomes the id (pytest 9.2+ shortens a single str value over 100 chars by default, but explicit ids, `ids=` callables and multi-argument ids have no limit). `orchestrator/tests/conftest.py` (`MAX_NODEID_CHARS`) fails collection with exit code 4 when any id is longer, printing only the test function, count and length. Give big cases a short id: `pytest.param("9" * 400, id="400-digits")`, or `ids=[...]` on `@pytest.mark.parametrize`. Why: two tests parametrized with ~1 MB strings stalled the CI test job for 25+ min (2026-10-26). Guard tests: `orchestrator/tests/test_nodeid_length_guard.py`.
 
@@ -78,7 +90,7 @@ docker compose --profile models config
 | Python Lint & Format | 10 | ruff check + format check on `orchestrator/`, `coder/`, `scripts/jess-coder` and `scripts/jupiter-kiosk/` (ruff version pinned) |
 | Grafana Dashboards In Sync | 10 | regenerates `monitoring/grafana/dashgen/`, fails on drift |
 | Suite Theme In Sync | 10 | theme generator tests + `theme/build.py` drift check |
-| Python Tests | 15 | `pytest orchestrator/tests/ -v` (usually ~4 min) |
+| Python Tests | 15 | installs CPU-only torch from the PyTorch CPU index first (skips ~3 GB of CUDA wheels; pip cache keyed on `orchestrator/requirements.txt`), then `pytest orchestrator/tests/ -v`. ~3 min (first run 2026-11-25, cold pip cache: 54 s install, 36 s collection, 1 min 50 s run); was ~7 min with the CUDA wheels (2.5 min install, ~50 s collection, ~3.5 min run) |
 | Frontend Lint & Type Check | 15 | ESLint, `tsc --noEmit`, `npm test` |
 | Docker Build (orchestrator) | 25 | builds the orchestrator image; also the coder box image (`coder/`, `docs/CODER.md`) + offline smoke checks when its inputs changed (`coder/`, `orchestrator/{Dockerfile,requirements.txt,embedding_pin.py}`) |
 | Deploy to Jupiter | 45 | push to `main` only; self-hosted runner on Jupiter (`actions.runner.mexirab-brain_gateway.jupiter.service`), operates on the live checkout `/home/labadmin/gateway_nerves`; concurrency group `deploy-jupiter`, a running deploy is never cancelled |

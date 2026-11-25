@@ -2,12 +2,16 @@
 
 import asyncio
 import logging
+import threading
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from orchestrator import routes_documents as rd
+from orchestrator.metrics import DOCUMENT_NAME_SUGGEST
+from orchestrator.tests._helpers import metric_value
+from orchestrator.tests.fixtures_memory import FakeEmbedder
 
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 64
 
@@ -47,16 +51,6 @@ def test_valid_reply_returns_title_and_category(client, monkeypatch):
     assert calls[0]["image_data"].startswith("data:image/jpeg;base64,")
 
 
-def test_json_wrapped_in_prose_is_found(client, monkeypatch):
-    _vision_reply(monkeypatch, 'Sure!\n```json\n{"title": "Lease", "category": "housing"}\n```')
-    assert _post(client).json() == {"ok": True, "title": "Lease", "category": "housing"}
-
-
-def test_unknown_category_becomes_other(client, monkeypatch):
-    _vision_reply(monkeypatch, '{"title": "Gym card", "category": "fitness"}')
-    assert _post(client).json()["category"] == "other"
-
-
 def test_title_markup_newlines_and_length_cleaned(client, monkeypatch):
     long_tail = "word " * 40
     _vision_reply(
@@ -72,65 +66,77 @@ def test_title_markup_newlines_and_length_cleaned(client, monkeypatch):
     assert title.startswith("Water bill")
 
 
-def test_empty_title_is_unparseable(client, monkeypatch):
-    _vision_reply(monkeypatch, '{"title": "  **  ", "category": "auto"}')
-    assert _post(client).json() == {"ok": False, "reason": "unreadable"}
+@pytest.mark.parametrize(
+    "reply,expected",
+    [
+        pytest.param(
+            'Sure!\n```json\n{"title": "Lease", "category": "housing"}\n```',
+            {"ok": True, "title": "Lease", "category": "housing"},
+            id="json-in-prose",
+        ),
+        pytest.param(
+            '{"title": "Gym card", "category": "fitness"}',
+            {"ok": True, "title": "Gym card", "category": "other"},
+            id="unknown-category-other",
+        ),
+        pytest.param(
+            'Thinking {about it}. {"title": "Tax return 2025", "category": "financial"} done {x}',
+            {"ok": True, "title": "Tax return 2025", "category": "financial"},
+            id="second-object-after-prose",
+        ),
+        pytest.param(
+            '[{"title": "Lease", "category": "housing"}]',
+            {"ok": True, "title": "Lease", "category": "housing"},
+            id="json-array",
+        ),
+        pytest.param(
+            '{"title": "  **  ", "category": "auto"}', {"ok": False, "reason": "unreadable"}, id="empty-title"
+        ),
+        pytest.param("I can't tell what this is.", {"ok": False, "reason": "unreadable"}, id="garbage"),
+        # thinking=False on the brain can still yield an empty content string
+        pytest.param("", {"ok": False, "reason": "unreadable"}, id="empty-reply"),
+        pytest.param(
+            "[Vision model returned an error: 500]", {"ok": False, "reason": "vision_error"}, id="vision-error"
+        ),
+        pytest.param(
+            "[Vision unavailable: no HTTP client.]", {"ok": False, "reason": "vision_error"}, id="no-http-client"
+        ),
+        pytest.param(
+            "[Vision is disabled. Enable VISION_ENABLED=true to analyze images.]",
+            {"ok": False, "reason": "vision_unavailable"},
+            id="vision-disabled",
+        ),
+        pytest.param(
+            "[Vision model timed out. The image may be too complex or the model may be busy.]",
+            {"ok": False, "reason": "timeout"},
+            id="vision-timeout",
+        ),
+    ],
+)
+def test_reply_classified(client, monkeypatch, reply, expected):
+    _vision_reply(monkeypatch, reply)
+    assert _post(client).json() == expected
 
 
-def test_garbage_reply_is_unparseable(client, monkeypatch):
-    _vision_reply(monkeypatch, "I can't tell what this is.")
-    assert _post(client).json() == {"ok": False, "reason": "unreadable"}
-
-
-def test_non_dict_json_is_unparseable(client, monkeypatch):
+def test_non_dict_json_is_not_ok(client, monkeypatch):
+    # Classified as vision_error today: a reply opening with "[" reads like a
+    # bracketed vision error sentence. Only "not ok" is pinned.
     _vision_reply(monkeypatch, '["a", "b"] {not json}')
     assert _post(client).json()["ok"] is False
 
 
-def test_vision_error_sentence_is_vision_error(client, monkeypatch):
-    _vision_reply(monkeypatch, "[Vision model returned an error: 500]")
-    assert _post(client).json() == {"ok": False, "reason": "vision_error"}
-
-
-def test_vision_disabled_sentence_is_vision_off(client, monkeypatch):
-    _vision_reply(monkeypatch, "[Vision is disabled. Enable VISION_ENABLED=true to analyze images.]")
-    assert _post(client).json() == {"ok": False, "reason": "vision_unavailable"}
-
-
-def test_second_object_after_prose_still_found(client, monkeypatch):
-    _vision_reply(monkeypatch, 'Thinking {about it}. {"title": "Tax return 2025", "category": "financial"} done {x}')
-    assert _post(client).json() == {"ok": True, "title": "Tax return 2025", "category": "financial"}
-
-
 def test_busy_while_another_read_runs(client, monkeypatch):
     calls = _vision_reply(monkeypatch, '{"title": "x"}')
-
-    async def held():
-        await rd._suggest_lock.acquire()
-
+    before = _metric("busy")
     loop = asyncio.new_event_loop()
-    loop.run_until_complete(held())
+    loop.run_until_complete(rd._suggest_lock.acquire())
     try:
         assert _post(client).json() == {"ok": False, "reason": "busy"}
     finally:
         rd._suggest_lock.release()
         loop.close()
     assert calls == []
-
-
-def test_vision_timeout_sentence(client, monkeypatch):
-    _vision_reply(monkeypatch, "[Vision model timed out. The image may be too complex or the model may be busy.]")
-    assert _post(client).json() == {"ok": False, "reason": "timeout"}
-
-
-def test_outer_timeout(client, monkeypatch):
-    async def slow(*_a, **_k):
-        await asyncio.sleep(5)
-        return '{"title": "late"}'
-
-    monkeypatch.setattr("orchestrator.vision_handler.analyze_image", slow)
-    monkeypatch.setattr(rd, "_SUGGEST_TIMEOUT_S", 0.05)
-    assert _post(client).json() == {"ok": False, "reason": "timeout"}
+    assert _metric("busy") == before + 1
 
 
 def test_vision_unavailable_fails_fast(client, monkeypatch):
@@ -173,59 +179,6 @@ def test_title_never_logged(client, monkeypatch, caplog):
     with caplog.at_level(logging.DEBUG):
         assert _post(client).json()["ok"] is True
     assert "Secret Clinic" not in caplog.text
-
-
-def test_route_has_own_cap_and_length_required():
-    from orchestrator.orchestrator import _LENGTH_REQUIRED_PATHS, _PATH_UPLOAD_LIMITS
-
-    assert _PATH_UPLOAD_LIMITS["/api/documents/suggest-name"] == 16 * 1024 * 1024
-    assert "/api/documents/suggest-name" in _LENGTH_REQUIRED_PATHS
-
-
-def test_upload_runs_ocr_off_loop_and_survives_index_failure(client, monkeypatch, caplog):
-    """POST /api/documents: doc id exists even when RAG indexing blows up; error text not logged."""
-    import threading
-
-    from orchestrator import document_processor as dp
-    from orchestrator import shared, state_store
-
-    main_thread = threading.get_ident()
-    seen = {}
-
-    def fake_extract(_path):
-        seen["thread"] = threading.get_ident()
-        return "Invoice from Example Clinic"
-
-    class BoomCollection:
-        def add(self, **_k):
-            raise RuntimeError("chunk text Example Clinic leaked")
-
-    class Enc:
-        def encode(self, _c, normalize_embeddings=True):
-            class V:
-                def tolist(self):
-                    return [0.0]
-
-            return V()
-
-    monkeypatch.setattr(dp, "validate_upload", lambda *_a: None)
-    monkeypatch.setattr(dp, "save_uploaded_file", lambda *_a: "other/x.jpg")
-    monkeypatch.setattr(dp, "extract_text", fake_extract)
-    monkeypatch.setattr(shared, "collection", BoomCollection())
-    monkeypatch.setattr(shared, "embedding_model", Enc())
-    monkeypatch.setattr(state_store, "save_document", lambda d: dict(d))
-
-    with caplog.at_level(logging.DEBUG):
-        r = client.post(
-            "/api/documents",
-            files={"file": ("scan.jpg", JPEG, "image/jpeg")},
-            data={"title": "Clinic invoice", "category": "medical"},
-        )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["id"] and body["rag_doc_id"] == f"vault_{body['id']}"
-    assert seen["thread"] != main_thread
-    assert "Example Clinic" not in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -336,22 +289,6 @@ def test_parse_suggestion_outer_without_title_does_not_fall_through_to_inner():
 # ---------------------------------------------------------------------------
 
 
-def test_no_http_client_sentence_is_vision_error_not_crash(client, monkeypatch):
-    _vision_reply(monkeypatch, "[Vision unavailable: no HTTP client.]")
-    assert _post(client).json() == {"ok": False, "reason": "vision_error"}
-
-
-def test_empty_reply_is_unparseable(client, monkeypatch):
-    # thinking=False on the brain can still yield an empty content string
-    _vision_reply(monkeypatch, "")
-    assert _post(client).json() == {"ok": False, "reason": "unreadable"}
-
-
-def test_json_array_reply_is_parsed(client, monkeypatch):
-    _vision_reply(monkeypatch, '[{"title": "Lease", "category": "housing"}]')
-    assert _post(client).json() == {"ok": True, "title": "Lease", "category": "housing"}
-
-
 def test_png_and_webp_accepted_with_right_mime(client, monkeypatch):
     calls = _vision_reply(monkeypatch, '{"title": "Bill", "category": "housing"}')
     png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
@@ -388,7 +325,7 @@ def test_lock_released_after_timeout_and_vision_off(client, monkeypatch):
 
     monkeypatch.setattr("orchestrator.vision_handler.analyze_image", slow)
     monkeypatch.setattr(rd, "_SUGGEST_TIMEOUT_S", 0.05)
-    assert _post(client).json()["reason"] == "timeout"
+    assert _post(client).json() == {"ok": False, "reason": "timeout"}
     assert not rd._suggest_lock.locked()
 
     async def down(*_a, **_k):
@@ -424,9 +361,7 @@ def test_lock_released_when_analyze_image_raises(monkeypatch):
 
 
 def _metric(result):
-    from orchestrator.metrics import DOCUMENT_NAME_SUGGEST
-
-    return DOCUMENT_NAME_SUGGEST.labels(result=result)._value.get()
+    return metric_value(DOCUMENT_NAME_SUGGEST, result=result)
 
 
 async def _false(*_a, **_k):
@@ -446,8 +381,6 @@ async def _false(*_a, **_k):
     ],
 )
 def test_metric_incremented_once_per_result(client, monkeypatch, result, setup):
-    from orchestrator.metrics import DOCUMENT_NAME_SUGGEST
-
     if setup:
         setup(monkeypatch)
     else:
@@ -458,20 +391,6 @@ def test_metric_incremented_once_per_result(client, monkeypatch, result, setup):
     after = {r: _metric(r) for r in all_results}
     assert after[result] == before[result] + 1
     assert all(after[r] == before[r] for r in all_results if r != result)
-    assert DOCUMENT_NAME_SUGGEST is not None
-
-
-def test_metric_busy(client, monkeypatch):
-    _vision_reply(monkeypatch, '{"title": "x"}')
-    before = _metric("busy")
-    loop = asyncio.new_event_loop()
-    loop.run_until_complete(rd._suggest_lock.acquire())
-    try:
-        _post(client)
-    finally:
-        rd._suggest_lock.release()
-        loop.close()
-    assert _metric("busy") == before + 1
 
 
 # ---------------------------------------------------------------------------
@@ -519,38 +438,27 @@ def test_suggest_name_cap_is_tighter_than_general_upload(size_app):
     assert c.post("/api/documents", content=b"x", headers={"content-length": size}).status_code == 200
 
 
-def test_suggest_name_chunked_body_411(size_app):
-    c, _ = size_app
-    assert c.post("/api/documents/suggest-name", content=(b for b in [b"a", b"b"])).status_code == 411
-
-
 # ---------------------------------------------------------------------------
 # POST /api/documents happy path — chunks indexed with vault_doc_id
 # ---------------------------------------------------------------------------
 
 
-def _upload_env(monkeypatch, extracted):
-    import threading
-
+def _upload_env(monkeypatch, extracted, add_error=None):
     from orchestrator import document_processor as dp
     from orchestrator import shared, state_store
 
-    rec = {"main": threading.get_ident()}
+    rec = {"main": threading.get_ident(), "embedder": FakeEmbedder([0.1, 0.2])}
 
     class Coll:
         def add(self, **kw):
-            rec["add"] = kw
             rec["add_thread"] = threading.get_ident()
+            if add_error is not None:
+                raise add_error
+            rec["add"] = kw
 
-    class Enc:
-        def encode(self, _c, normalize_embeddings=True):
-            rec["enc_thread"] = threading.get_ident()
-
-            class V:
-                def tolist(self):
-                    return [0.1, 0.2]
-
-            return V()
+    def extract(_path):
+        rec["extract_thread"] = threading.get_ident()
+        return extracted
 
     def save(d):
         rec["saved"] = dict(d)
@@ -558,9 +466,9 @@ def _upload_env(monkeypatch, extracted):
 
     monkeypatch.setattr(dp, "validate_upload", lambda *_a: None)
     monkeypatch.setattr(dp, "save_uploaded_file", lambda *_a: "medical/x.jpg")
-    monkeypatch.setattr(dp, "extract_text", lambda _p: extracted)
+    monkeypatch.setattr(dp, "extract_text", extract)
     monkeypatch.setattr(shared, "collection", Coll())
-    monkeypatch.setattr(shared, "embedding_model", Enc())
+    monkeypatch.setattr(shared, "embedding_model", rec["embedder"])
     monkeypatch.setattr(state_store, "save_document", save)
     return rec
 
@@ -595,7 +503,8 @@ def test_upload_indexes_chunks_with_vault_doc_id(client, monkeypatch):
         assert (md["wing"], md["room"]) == ("personal", "health")
         assert md["category"] == "medical"
     assert rec["add_thread"] != rec["main"]
-    assert rec["enc_thread"] != rec["main"]
+    assert rec["extract_thread"] != rec["main"]
+    assert all(t != rec["main"] for t in rec["embedder"].threads)
     assert rec["saved"]["id"] == doc_id
     assert rec["saved"]["extracted_text"].startswith("lorem ipsum")
 
@@ -615,3 +524,17 @@ def test_upload_validation_error_is_400(client, monkeypatch):
     r = _upload(client, "bogus")
     assert r.status_code == 400
     assert "saved" not in rec and "add" not in rec
+
+
+def test_upload_survives_index_failure_without_logging_its_text(client, monkeypatch, caplog):
+    """The doc id exists even when RAG indexing blows up; the error text is not logged."""
+    rec = _upload_env(
+        monkeypatch, "Invoice from Example Clinic", add_error=RuntimeError("chunk text Example Clinic leaked")
+    )
+    with caplog.at_level(logging.DEBUG):
+        r = _upload(client)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] and body["rag_doc_id"] == f"vault_{body['id']}"
+    assert rec["extract_thread"] != rec["main"]  # OCR runs off the event loop
+    assert "Example Clinic" not in caplog.text

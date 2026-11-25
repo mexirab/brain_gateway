@@ -7,8 +7,8 @@ match_parent_owner(fd, parent) fchowns the tmpfile to the parent dir's
 owner before os.replace (no-op unless euid 0, never raises).
 
 os.fchown / os.geteuid are monkeypatched — nothing is actually chowned.
-Also covers is_first_boot() fail-closed, strict speaker validation, and the
-auto_learn key-file ownership/mode.
+Also covers strict speaker validation and the auto_learn key-file
+ownership/mode. (is_first_boot fail-closed: test_routes_setup.py.)
 """
 
 from __future__ import annotations
@@ -35,11 +35,17 @@ def chown_spy(monkeypatch):
 
 
 def test_match_parent_owner_noop_when_not_root(monkeypatch, tmp_path):
+    """Non-root never calls fchown, even when the parent's owner differs."""
     from orchestrator.config_writer import match_parent_owner
 
     calls = []
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
     monkeypatch.setattr(os, "fchown", lambda *a: calls.append(a))
+    other_owner = os.stat_result((0o40755, 0, 0, 1, 4242, 4242, 0, 0, 0, 0))
+    real_stat = os.stat
+    monkeypatch.setattr(
+        os, "stat", lambda p, *a, **kw: other_owner if str(p) == str(tmp_path) else real_stat(p, *a, **kw)
+    )
     match_parent_owner(3, tmp_path)
     assert calls == []
 
@@ -142,14 +148,13 @@ def test_atomic_write_yaml_real_chown_path_as_fake_root(chown_spy, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_auto_learn_key_creation_matches_owner_and_is_0600(monkeypatch, tmp_path):
-    from orchestrator import auto_learn, config_writer, shared
+def test_auto_learn_key_creation_matches_owner_and_is_0600(monkeypatch, memory_key_file):
+    from cryptography.fernet import Fernet
 
-    key_file = tmp_path / "sub" / "auto_learn.key"
-    monkeypatch.setattr(auto_learn, "_KEY_FILE", str(key_file))
-    monkeypatch.setattr(auto_learn, "_cipher", None)
-    monkeypatch.setattr(shared, "AUTO_LEARN_ENCRYPT", True, raising=False)
-    monkeypatch.setattr(shared, "AUTO_LEARN_ENCRYPTION_KEY", "", raising=False)
+    from orchestrator import config_writer
+
+    auto_learn, key_file = memory_key_file
+    assert not key_file.exists()
 
     calls: list[tuple[int, str]] = []
 
@@ -166,44 +171,8 @@ def test_auto_learn_key_creation_matches_owner_and_is_0600(monkeypatch, tmp_path
     assert len(calls) == 1 and calls[0][1] == str(key_file.parent)
     assert stat.S_IMODE(os.stat(key_file).st_mode) == 0o600
     assert len(key_file.read_bytes().strip()) == 44  # urlsafe-b64 Fernet key
-
-
-# ---------------------------------------------------------------------------
-# routes_setup.is_first_boot — fail closed on a corrupt state file
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def setup_state(monkeypatch, tmp_path):
-    from orchestrator import routes_setup
-
-    path = tmp_path / "setup_state.json"
-    monkeypatch.setattr(routes_setup, "_SETUP_STATE_PATH", str(path))
-    return routes_setup, path
-
-
-def test_first_boot_absent_file(setup_state):
-    mod, _ = setup_state
-    assert mod.is_first_boot() is True
-
-
-def test_first_boot_completed(setup_state):
-    mod, path = setup_state
-    path.write_text('{"setup_completed": true}')
-    assert mod.is_first_boot() is False
-
-
-def test_first_boot_empty_object(setup_state):
-    mod, path = setup_state
-    path.write_text("{}")
-    assert mod.is_first_boot() is True
-
-
-@pytest.mark.parametrize("content", ["{garbage", "[1, 2]", ""])
-def test_first_boot_corrupt_fails_closed(setup_state, content):
-    mod, path = setup_state
-    path.write_text(content)
-    assert mod.is_first_boot() is False
+    # The returned cipher is the one in the file.
+    assert Fernet(key_file.read_bytes().strip()).decrypt(cipher.encrypt(b"y")) == b"y"
 
 
 # ---------------------------------------------------------------------------

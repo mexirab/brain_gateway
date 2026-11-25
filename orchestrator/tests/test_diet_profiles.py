@@ -2,14 +2,15 @@
 audit row, rule/label helpers. Preference data is generic and invented."""
 
 import json
+import os
 
 import pytest
+
+from orchestrator import diet_profiles, shared, state_store
 
 
 @pytest.fixture
 def dp(tmp_db, tmp_path, monkeypatch):
-    from orchestrator import diet_profiles, shared
-
     monkeypatch.setattr(shared, "DIET_PROFILE_PATH", str(tmp_path / "sub" / "diet_profile.yaml"))
     return diet_profiles
 
@@ -128,28 +129,18 @@ class TestLoadSave:
     def test_missing_file_gives_defaults(self, dp):
         assert dp.load() == dp.DEFAULTS
 
-    def test_corrupt_yaml_gives_defaults(self, dp):
-        import os
-
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("profile: [unclosed\n  : :", id="corrupt-yaml"),
+            pytest.param("profile: keto\n", id="invalid-values"),
+            pytest.param("- a\n- b\n", id="not-a-mapping"),
+        ],
+    )
+    def test_unusable_file_gives_defaults(self, dp, text):
         os.makedirs(os.path.dirname(dp._path()), exist_ok=True)
         with open(dp._path(), "w") as f:
-            f.write("profile: [unclosed\n  : :")
-        assert dp.load() == dp.DEFAULTS
-
-    def test_invalid_values_on_disk_give_defaults(self, dp):
-        import os
-
-        os.makedirs(os.path.dirname(dp._path()), exist_ok=True)
-        with open(dp._path(), "w") as f:
-            f.write("profile: keto\n")
-        assert dp.load() == dp.DEFAULTS
-
-    def test_non_dict_yaml_gives_defaults(self, dp):
-        import os
-
-        os.makedirs(os.path.dirname(dp._path()), exist_ok=True)
-        with open(dp._path(), "w") as f:
-            f.write("- a\n- b\n")
+            f.write(text)
         assert dp.load() == dp.DEFAULTS
 
     def test_save_round_trip_and_partial_merge(self, dp):
@@ -176,8 +167,6 @@ class TestLoadSave:
         assert dp.load()["servings"] == 2
 
     def test_save_writes_audit_row(self, dp):
-        from orchestrator import state_store
-
         dp.save({"profile": "vegan"})
         with state_store.get_db() as conn:
             rows = conn.execute("SELECT diff_json FROM config_changes WHERE panel = 'diet'").fetchall()

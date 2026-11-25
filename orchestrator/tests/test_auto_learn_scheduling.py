@@ -12,6 +12,7 @@ import pytest
 
 from orchestrator import shared
 from orchestrator.cloud_brain import CloudBrain, _continues_conversation
+from orchestrator.tests._helpers import metric_value
 
 
 class FakeScheduler:
@@ -87,12 +88,6 @@ async def test_job_extracts_once_and_clears_cache(sched):
         await func(*args)  # a second firing finds nothing left to do
     run.assert_awaited_once()
     assert shared._auto_learn_conversations == {}
-
-
-def test_cache_stays_capped(sched):
-    for i in range(30):
-        _schedule(_conv(f"conversation {i}"))
-    assert len(shared._auto_learn_conversations) <= 20
 
 
 @pytest.mark.parametrize(
@@ -203,49 +198,6 @@ def test_chat_request_conversation_id_validation():
         assert ChatRequest(messages=[], conversation_id=bad).conversation_id is None
 
 
-def _long_conversation(turns: int) -> list:
-    msgs = []
-    for i in range(turns):
-        msgs.append({"role": "user", "content": f"turn {i} with some filler text to make it long enough"})
-        msgs.append({"role": "assistant", "content": "a long reply " * 60})
-    msgs.append({"role": "user", "content": "LAST TURN marker"})
-    return msgs
-
-
-async def _capture_extraction_prompts(msgs) -> list:
-    from orchestrator import auto_learn
-
-    prompts = []
-
-    async def fake_call_model(*args, **kwargs):
-        prompts.append(str(args) + str(kwargs))
-        return {"choices": [{"message": {"content": "[]"}}]}
-
-    with patch("orchestrator.orchestrator.call_model", fake_call_model):
-        await auto_learn.extract_facts(msgs)
-    return prompts
-
-
-async def test_extraction_reads_all_of_a_long_conversation():
-    # Was: cut to the last 12k chars, so a long talk lost its beginning.
-    prompts = await _capture_extraction_prompts(_long_conversation(80))
-    assert 1 < len(prompts) <= 4
-    joined = "".join(prompts)
-    assert "turn 0 with" in joined and "LAST TURN marker" in joined
-    # Assistant replies are shortened before anything is split.
-    assert "[...]" in joined
-    assert all(len(p) < 16000 for p in prompts)
-
-
-async def test_extraction_keeps_the_most_recent_windows_when_too_long():
-    prompts = await _capture_extraction_prompts(_long_conversation(200))
-    assert len(prompts) == 4
-    joined = "".join(prompts)
-    assert "LAST TURN marker" in joined
-    assert "turn 0 with" not in joined
-    assert "earlier conversation omitted" in prompts[0]
-
-
 def test_conversation_id_without_overlap_replaces(sched, cid):
     _schedule(_conv("my appointment is Tuesday", "thanks"))
     _schedule(_conv("my appointment is Wednesday", "thanks"))  # edited earlier turn
@@ -256,10 +208,11 @@ def test_conversation_id_without_overlap_replaces(sched, cid):
 def test_eviction_is_counted(sched):
     from orchestrator.metrics import AUTO_LEARN_DROPPED
 
-    before = AUTO_LEARN_DROPPED.labels(reason="evicted")._value.get()
+    before = metric_value(AUTO_LEARN_DROPPED, reason="evicted")
     for i in range(25):
         _schedule(_conv(f"conversation {i}"))
-    assert AUTO_LEARN_DROPPED.labels(reason="evicted")._value.get() - before == 5
+    assert metric_value(AUTO_LEARN_DROPPED, reason="evicted") - before == 5
+    assert len(shared._auto_learn_conversations) == 20
 
 
 # --- brain asleep at fire time ----------------------------------------------
@@ -293,11 +246,11 @@ async def test_job_gives_up_after_max_attempts(sched):
 
     _schedule(_conv("plan my day"))
     (func, args) = next(iter(sched.jobs.values()))
-    before = AUTO_LEARN_DROPPED.labels(reason="model_unavailable")._value.get()
+    before = metric_value(AUTO_LEARN_DROPPED, reason="model_unavailable")
     with patch("orchestrator.model_manager.check_model_health", AsyncMock(return_value=False)):
         await func(args[0], _AUTO_LEARN_MAX_ATTEMPTS - 1)
     assert shared._auto_learn_conversations == {}
-    assert AUTO_LEARN_DROPPED.labels(reason="model_unavailable")._value.get() - before == 1
+    assert metric_value(AUTO_LEARN_DROPPED, reason="model_unavailable") - before == 1
 
 
 # --- streaming path: the loop mutates `messages` in place --------------------

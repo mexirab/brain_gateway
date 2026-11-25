@@ -28,22 +28,23 @@ the whole worktree: `docker run --rm -v "$PWD:/repo:ro" -w /repo gateway_nerves-
 
 from __future__ import annotations
 
-import importlib.util
-import os
-import re
-import sys
-from functools import cache
-from pathlib import Path
-
 import pytest
-import yaml
 
-_REPO = Path(__file__).resolve().parents[2]
-_COMPOSE = _REPO / "docker-compose.yml"
-_MON_COMPOSE = _REPO / "monitoring" / "docker-compose.yml"
-_FW_DIR = _REPO / "scripts" / "container-firewall"
-_SCRIPT = _FW_DIR / "jess_docker_input.py"
-_CONF = _FW_DIR / "jess-docker-input.conf"
+from orchestrator.tests.fixtures_ops import COMPOSE as _COMPOSE
+from orchestrator.tests.fixtures_ops import (
+    FIREWALL_DIR,
+    compose_docs,
+    jess_docker_input,
+    load_mapping,
+    needs,
+    network_members,
+    rel,
+    service_networks,
+)
+from orchestrator.tests.fixtures_ops import MON_COMPOSE as _MON_COMPOSE
+
+_SCRIPT = FIREWALL_DIR / "jess_docker_input.py"
+_CONF = FIREWALL_DIR / "jess-docker-input.conf"
 
 _BRIDGE_OPT = "com.docker.network.bridge.name"
 _HOST_ACCESS = "gateway_nerves_host-access"
@@ -69,117 +70,12 @@ _NETWORKS = [
     ),
 ]
 
-
-def _rel(path: Path) -> str:
-    return str(path.relative_to(_REPO))
-
-
-def _needs(*paths: Path):
-    missing = [_rel(p) for p in paths if not p.is_file()]
-    return pytest.mark.skipif(
-        bool(missing),
-        reason=f"needs a full repo checkout (missing: {', '.join(missing)})",
-    )
-
-
-_needs_compose = _needs(_COMPOSE, _MON_COMPOSE)
-_needs_conf = _needs(_SCRIPT, _CONF)
-
-
-@cache
-def _fw():
-    """The firewall script itself, so the config is parsed exactly as the host parses it."""
-    spec = importlib.util.spec_from_file_location("jess_docker_input_layout_under_test", _SCRIPT)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod  # before exec: @dataclass looks the module up there
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def _load(path: Path) -> dict:
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
-        pytest.fail(f"{_rel(path)} no longer parses as YAML ({exc}); fix it or switch this guard to a text check")
-    assert isinstance(data, dict), f"{_rel(path)} did not parse to a mapping"
-    return data
-
-
-def _service_networks(svc: dict) -> dict[str, dict]:
-    """A service's networks as {key: per-network config}, for the list and the mapping form."""
-    nets = svc.get("networks") or {}
-    if isinstance(nets, list):
-        return {str(n): {} for n in nets}
-    return {str(k): (v or {}) for k, v in nets.items()}
+_needs_compose = needs(_COMPOSE, _MON_COMPOSE)
+_needs_conf = needs(_SCRIPT, _CONF)
 
 
 def _gw_priority(cfg: dict) -> int:
     return int(cfg.get("gw_priority") or 0)
-
-
-def _real_net_name(compose: dict, key: str) -> str:
-    """Docker name of a network key: its `name:` (or old `external: {name: ...}`), else the key itself."""
-    decl = (compose.get("networks") or {}).get(key) or {}
-    ext = decl.get("external")
-    return str(decl.get("name") or (ext.get("name") if isinstance(ext, dict) else None) or key)
-
-
-def _repo_compose_files() -> list[Path]:
-    found = []
-    for root, dirs, files in os.walk(_REPO):
-        dirs[:] = [d for d in dirs if d not in {".git", "node_modules", ".claude", ".next"}]
-        found += [Path(root) / f for f in files if re.fullmatch(r"(docker-)?compose[\w.-]*\.ya?ml", f)]
-    assert _COMPOSE in found and _MON_COMPOSE in found, "the compose-file walk missed a known file; fix the walk"
-    return sorted(found)
-
-
-def _compose_docs() -> list[tuple[Path, dict | None, str]]:
-    """(path, parsed mapping or None when plain YAML can't load it, raw text) for every repo compose file."""
-    out = []
-    for path in _repo_compose_files():
-        text = path.read_text(encoding="utf-8")
-        try:
-            data = yaml.safe_load(text)
-        except yaml.YAMLError:
-            data = None
-        out.append((path, data if isinstance(data, dict) else None, text))
-    return out
-
-
-def _members(defining: Path, key: str, fixed_name: str) -> tuple[set[str], list[str]]:
-    """Who is on a fixed-name network across every repo compose file, as "<file>:<service>".
-
-    Counts a service whose network resolves to `fixed_name` (or is `key` in the defining file), and a
-    sidecar sharing a member's network namespace (network_mode service:<member> / container:<name>),
-    which shares its default route too. Also returns unparseable files that mention the name."""
-    members: set[str] = set()
-    unparsed: list[str] = []
-    containers: set[str] = set()
-    docs = _compose_docs()
-    for path, compose, text in docs:
-        if compose is None:
-            if fixed_name in text:
-                unparsed.append(_rel(path))
-            continue
-        services = {n: s for n, s in (compose.get("services") or {}).items() if isinstance(s, dict)}
-        on = {
-            n
-            for n, svc in services.items()
-            if any(
-                _real_net_name(compose, k) == fixed_name or (path == defining and k == key)
-                for k in _service_networks(svc)
-            )
-        }
-        members |= {f"{_rel(path)}:{n}" for n in on}
-        containers |= {str(services[n].get("container_name") or n) for n in on}
-        modes = {f"service:{n}" for n in on}
-        members |= {f"{_rel(path)}:{n}" for n, svc in services.items() if str(svc.get("network_mode") or "") in modes}
-    modes = {f"container:{c}" for c in containers}
-    for path, compose, _ in docs:
-        for n, svc in ((compose or {}).get("services") or {}).items():
-            if isinstance(svc, dict) and str(svc.get("network_mode") or "") in modes:
-                members.add(f"{_rel(path)}:{n}")
-    return members, unparsed
 
 
 # -- the two dedicated networks ------------------------------------------------
@@ -188,8 +84,8 @@ def _members(defining: Path, key: str, fixed_name: str) -> tuple[set[str], list[
 @_needs_compose
 @pytest.mark.parametrize("compose_path,key,name,bridge,expected", _NETWORKS)
 def test_network_declaration(compose_path, key, name, bridge, expected):
-    decl = (_load(compose_path).get("networks") or {}).get(key)
-    where = f"{_rel(compose_path)} networks.{key}"
+    decl = (load_mapping(compose_path).get("networks") or {}).get(key)
+    where = f"{rel(compose_path)} networks.{key}"
     assert isinstance(decl, dict), f"{where} is missing; the host firewall allow-lists {name!r}"
     assert decl.get("name") == name, (
         f"{where}.name is {decl.get('name')!r}, expected {name!r}: jess-docker-input.conf names the network "
@@ -213,7 +109,7 @@ def test_network_declaration(compose_path, key, name, bridge, expected):
 @_needs_compose
 @pytest.mark.parametrize("compose_path,key,name,bridge,expected", _NETWORKS)
 def test_network_members(compose_path, key, name, bridge, expected):
-    members, unparsed = _members(compose_path, key, name)
+    members, unparsed = network_members(compose_path, key, name)
     assert members == expected and not unparsed, (
         f"on {name}: {sorted(members)!r} (plus unparseable files naming it: {unparsed!r}); expected exactly "
         f"{sorted(expected)!r}. Every member (and every network_mode sidecar of one) gets the host ports of the "
@@ -224,13 +120,13 @@ def test_network_members(compose_path, key, name, bridge, expected):
 @_needs_compose
 @pytest.mark.parametrize("compose_path,key,name,bridge,expected", _NETWORKS)
 def test_network_is_members_default_route(compose_path, key, name, bridge, expected):
-    services = _load(compose_path).get("services") or {}
+    services = load_mapping(compose_path).get("services") or {}
     for member in sorted(expected):
         svc_name = member.split(":", 1)[1]
         svc = services.get(svc_name)
-        assert isinstance(svc, dict), f"{_rel(compose_path)} has no services.{svc_name}; update this guard"
+        assert isinstance(svc, dict), f"{rel(compose_path)} has no services.{svc_name}; update this guard"
         assert "network_mode" not in svc, f"services.{svc_name}.network_mode is set; it must use compose networks"
-        nets = _service_networks(svc)
+        nets = service_networks(svc)
         assert key in nets, f"services.{svc_name}.networks {sorted(nets)!r} doesn't include {key}"
         mine = _gw_priority(nets[key])
         others = {k: _gw_priority(v) for k, v in nets.items() if k != key}
@@ -243,13 +139,13 @@ def test_network_is_members_default_route(compose_path, key, name, bridge, expec
 
 @_needs_compose
 def test_bridge_names_are_covered_by_the_jump():
-    fw = _fw() if _SCRIPT.is_file() else None
+    fw = jess_docker_input() if _SCRIPT.is_file() else None
     declared: dict[str, list[str]] = {}
-    for path, compose, _ in _compose_docs():
+    for path, compose, _ in compose_docs():
         for key, decl in ((compose or {}).get("networks") or {}).items():
             bridge = ((decl or {}).get("driver_opts") or {}).get(_BRIDGE_OPT)
             if bridge:
-                declared.setdefault(str(bridge), []).append(f"{_rel(path)} networks.{key}")
+                declared.setdefault(str(bridge), []).append(f"{rel(path)} networks.{key}")
     for bridge in ("br-jess-hostacc", "br-jess-scrape"):
         assert len(declared.get(bridge, [])) == 1, (
             f"bridge name {bridge!r} is declared by {declared.get(bridge)!r}; it must be exactly one network"
@@ -268,7 +164,7 @@ def test_bridge_names_are_covered_by_the_jump():
 
 @_needs_conf
 def test_conf_allows_only_the_dedicated_networks():
-    allows = _fw().parse_config(_CONF.read_text(encoding="utf-8")).allows
+    allows = jess_docker_input().parse_config(_CONF.read_text(encoding="utf-8")).allows
     nets = {a.network for a in allows}
     dedicated = {_HOST_ACCESS, _HOST_SCRAPE}
     assert nets <= dedicated, (
@@ -299,7 +195,7 @@ def test_conf_allows_only_the_dedicated_networks():
 
 @_needs_conf
 def test_conf_is_observe():
-    mode = _fw().parse_config(_CONF.read_text(encoding="utf-8")).mode
+    mode = jess_docker_input().parse_config(_CONF.read_text(encoding="utf-8")).mode
     assert mode == "observe", (
         f"the repo jess-docker-input.conf says mode {mode}; it stays at observe as the safe default (a first "
         "install copies it to /etc). The owner switches the /etc copy to enforce by hand."

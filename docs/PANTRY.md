@@ -188,7 +188,7 @@ Grafana: "Pantry & Meal Plan" row in `brain_gateway_sre.py` (generations, latenc
 | `frontend/src/lib/pantry-api.ts` | Typed client via `/api/proxy` |
 | `frontend/src/lib/image-resize.ts` | Client-side downscale to 2048 px JPEG |
 | `orchestrator/tests/test_pantry*.py` | Manager, scan pipeline, routes |
-| `orchestrator/tests/test_receipt_scanner.py`, `test_receipt_routes.py` | Receipt parsing/matching/commit, receipt routes |
+| `orchestrator/tests/test_receipt_scanner.py` | Receipt parsing/matching/commit (receipt routes: `test_pantry_routes.py`) |
 | `orchestrator/tests/test_diet_profiles.py`, `test_meal_planner*.py` | Diet settings, planner, plan routes |
 | `orchestrator/tests/test_pantry_consumption.py`, `test_pantry_cook_other.py` | Consumption tracking, off-plan cooks |
 | `frontend/src/components/pantry/PlanTab.test.tsx` | Meal plan tab (vitest): Discard / "Cancel it" reach the API (a double tap sends one request), notices, 409 + network-error handling, Accept notice |

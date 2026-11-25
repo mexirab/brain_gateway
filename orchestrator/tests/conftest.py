@@ -38,6 +38,50 @@ if _REPO_ROOT not in sys.path:
 import pytest  # noqa: E402
 
 # ---------------------------------------------------------------------------
+# Shared fixtures by area
+# ---------------------------------------------------------------------------
+# Each fixtures_<area>.py lists its fixtures in __all__; the end of this file
+# imports them into this module so they are available to every test file
+# (pytest_plugins can't be used: this is not the rootdir conftest). A name
+# exported twice, or one that clashes with a fixture defined here, would
+# silently replace the other, so that is refused at import time.
+_FIXTURE_MODULES = ("loop", "ha_voice", "delivery", "selfcare", "pantry", "memory", "ops", "coder")
+
+# Plain asserts in the shared modules get pytest's rich failure messages too
+# (only test_*.py and conftest.py are rewritten by default). Must run before
+# the modules are first imported.
+pytest.register_assert_rewrite(
+    "orchestrator.tests._helpers", *(f"orchestrator.tests.fixtures_{area}" for area in _FIXTURE_MODULES)
+)
+
+
+def _load_shared_fixtures() -> dict:
+    import importlib
+
+    exported: dict = {}
+    for area in _FIXTURE_MODULES:
+        mod = importlib.import_module(f"orchestrator.tests.fixtures_{area}")
+        for name in mod.__all__:
+            if name in exported:
+                raise pytest.UsageError(
+                    f"fixture {name!r} is exported by fixtures_{exported[name][0]} and fixtures_{area}"
+                )
+            exported[name] = (area, getattr(mod, name))
+    return {name: obj for name, (_, obj) in exported.items()}
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    # No test carries @pytest.mark.asyncio: every async test relies on auto
+    # mode (pyproject.toml; the container command passes -o asyncio_mode=auto).
+    try:
+        mode = config.getini("asyncio_mode")
+    except ValueError:  # the option only exists with pytest-asyncio installed
+        raise pytest.UsageError("pytest-asyncio is required (pip install pytest-asyncio)") from None
+    if mode != "auto":
+        raise pytest.UsageError("run with asyncio_mode=auto (pyproject.toml sets it; else pass -o asyncio_mode=auto)")
+
+
+# ---------------------------------------------------------------------------
 # Test-id length guard
 # ---------------------------------------------------------------------------
 # CI runs ``pytest -v``, which prints every node id. Before pytest 9.2 a test
@@ -174,15 +218,41 @@ def _init_state_store_schema():
     yield
 
 
-@pytest.fixture
-def tmp_db(tmp_path):
-    """Provide a temporary SQLite database path for state_store tests."""
-    db_path = str(tmp_path / "test_state.db")
+@pytest.fixture(scope="session")
+def _state_db_template(tmp_path_factory):
+    """A state_store DB built once per session by the real ``init_db()``."""
     from orchestrator import state_store
 
+    path = str(tmp_path_factory.mktemp("state_db_template") / "template.db")
+    original = state_store.DB_PATH
+    state_store.DB_PATH = path
+    try:
+        state_store.init_db()
+    finally:
+        state_store.DB_PATH = original
+    return path
+
+
+@pytest.fixture
+def tmp_db(tmp_path, _state_db_template):
+    """Provide a fresh, fully initialized state_store DB for one test.
+
+    A file copy of the session template instead of a new ``init_db()`` per
+    test: init_db runs ~100 commits (schema, migrations, exercise seed), each
+    an fsync, which cost seconds per test on a busy disk across 400+ users of
+    this fixture. The copy is byte-for-byte what init_db produced.
+    """
+    import shutil
+
+    from orchestrator import state_store
+
+    db_path = str(tmp_path / "test_state.db")
+    # init_db's connections are all closed, so WAL was checkpointed into the
+    # main file; a leftover -wal would mean the copy could miss pages.
+    assert not os.path.exists(_state_db_template + "-wal"), "template DB still has a WAL file"
+    shutil.copyfile(_state_db_template, db_path)
     original = state_store.DB_PATH
     state_store.DB_PATH = db_path
-    state_store.init_db()
     yield db_path
     state_store.DB_PATH = original
 
@@ -193,3 +263,13 @@ def mode_router():
     from orchestrator.mode_router import ModeRouter
 
     return ModeRouter()
+
+
+# ---------------------------------------------------------------------------
+# Shared fixtures (last, so a clash with a fixture defined above is caught)
+# ---------------------------------------------------------------------------
+_shared_fixtures = _load_shared_fixtures()
+_clashes = sorted(set(_shared_fixtures) & set(globals()))
+if _clashes:
+    raise pytest.UsageError(f"fixtures_*.py export names conftest.py already defines: {_clashes}")
+globals().update(_shared_fixtures)

@@ -7,7 +7,6 @@ the module-level mtime cache is reset around every test. The fetch path is
 respx-mocked — no real network.
 """
 
-import importlib.util
 import json
 import logging
 import os
@@ -15,8 +14,18 @@ from pathlib import Path
 
 import httpx
 import pytest
+import respx
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from orchestrator import exercise_library as el
+from orchestrator import shared, tool_handlers
+from orchestrator.config import settings
+from orchestrator.exercises_seed import EXERCISES
+from orchestrator.metrics import EXERCISE_INFO_LOOKUPS
+from orchestrator.routes_workout import router
+from orchestrator.tests._helpers import REPO_ROOT, load_script, metric_value
+from orchestrator.tool_registry import execute_tool
 
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 16
 
@@ -57,8 +66,6 @@ def _reset_cache():
 @pytest.fixture
 def lib_root(tmp_path, monkeypatch):
     """Point the library at tmp_path/exercise_library (not created)."""
-    from orchestrator.config import settings
-
     root = tmp_path / "exercise_library"
     monkeypatch.setattr(settings, "exercise_library_path", str(root))
     _reset_cache()
@@ -86,9 +93,7 @@ def library(lib_root):
 
 
 def _lookups(result):
-    from orchestrator.metrics import EXERCISE_INFO_LOOKUPS
-
-    return EXERCISE_INFO_LOOKUPS.labels(result=result)._value.get()
+    return metric_value(EXERCISE_INFO_LOOKUPS, result=result)
 
 
 # ---------------------------------------------------------------------------
@@ -97,8 +102,6 @@ def _lookups(result):
 
 
 def test_every_seed_exercise_has_an_alias_decision():
-    from orchestrator.exercises_seed import EXERCISES
-
     missing = [e["name"] for e in EXERCISES if e["name"] not in el._ALIASES]
     assert missing == [], f"add these to exercise_library._ALIASES (id or None): {missing}"
 
@@ -422,8 +425,6 @@ def _assert_untouched(root: Path, snap: dict):
 
 
 async def test_get_capped_ok_and_oversized():
-    import respx
-
     with respx.mock:
         respx.get("https://example.test/a").mock(return_value=httpx.Response(200, content=b"x" * 10))
         async with httpx.AsyncClient() as client:
@@ -433,8 +434,6 @@ async def test_get_capped_ok_and_oversized():
 
 
 async def test_get_capped_raises_on_http_error():
-    import respx
-
     with respx.mock:
         respx.get("https://example.test/a").mock(return_value=httpx.Response(404))
         async with httpx.AsyncClient() as client:
@@ -443,8 +442,6 @@ async def test_get_capped_raises_on_http_error():
 
 
 async def test_fetch_success_installs_library_and_meta(old_library, lib_root, capsys):
-    import respx
-
     with respx.mock(assert_all_called=True) as m:
         _mock_upstream(m, _upstream(3))
         rc = await el._fetch()
@@ -465,8 +462,6 @@ async def test_fetch_success_installs_library_and_meta(old_library, lib_root, ca
 
 
 async def test_fetch_into_fresh_dir(lib_root):
-    import respx
-
     with respx.mock as m:
         _mock_upstream(m, _upstream(1))
         assert await el._fetch() == 0
@@ -474,8 +469,6 @@ async def test_fetch_into_fresh_dir(lib_root):
 
 
 async def test_fetch_network_error_leaves_library_intact(old_library, lib_root):
-    import respx
-
     with respx.mock as m:
         m.get(_JSON_URL).mock(side_effect=httpx.ConnectError("boom"))
         assert await el._fetch() == 1
@@ -492,50 +485,39 @@ async def test_fetch_network_error_leaves_library_intact(old_library, lib_root):
     ],
 )
 async def test_fetch_bad_index_leaves_library_intact(old_library, lib_root, response):
-    import respx
-
     with respx.mock as m:
         m.get(_JSON_URL).mock(return_value=response)
         assert await el._fetch() == 1
     _assert_untouched(lib_root, old_library)
 
 
-async def test_fetch_too_many_photo_failures_leaves_library_intact(old_library, lib_root):
-    import respx
-
-    # 4 photos, 1 failure = 25% > 5%.
-    def body(rel):
-        return httpx.Response(503) if rel == "Lift_1/0.jpg" else httpx.Response(200, content=JPEG)
-
-    with respx.mock as m:
-        _mock_upstream(m, _upstream(2), body)
-        assert await el._fetch() == 1
-    _assert_untouched(lib_root, old_library)
+def _bad_photo(rel):
+    """Photo Lift_1/0.jpg fails; every other one downloads."""
+    return httpx.Response(503) if rel == "Lift_1/0.jpg" else httpx.Response(200, content=JPEG)
 
 
-async def test_fetch_non_jpeg_counts_as_failure(old_library, lib_root):
-    import respx
-
-    def body(rel):
-        if rel == "Lift_0/1.jpg":
-            return httpx.Response(200, content=b"<html>rate limited</html>")
-        return httpx.Response(200, content=JPEG)
-
-    with respx.mock as m:
-        _mock_upstream(m, _upstream(2), body)
-        assert await el._fetch() == 1
-    _assert_untouched(lib_root, old_library)
+def _html_photo(rel):
+    if rel == "Lift_0/1.jpg":
+        return httpx.Response(200, content=b"<html>rate limited</html>")
+    return httpx.Response(200, content=JPEG)
 
 
-async def test_fetch_oversized_photo_counts_as_failure(old_library, lib_root, monkeypatch):
-    import respx
+def _oversized_photo(rel):
+    return httpx.Response(200, content=JPEG + b"\x00" * 100 if rel == "Lift_0/0.jpg" else JPEG)
 
-    monkeypatch.setattr(el, "_MAX_IMAGE_BYTES", len(JPEG) + 5)
 
-    def body(rel):
-        content = JPEG + b"\x00" * 100 if rel == "Lift_0/0.jpg" else JPEG
-        return httpx.Response(200, content=content)
-
+# 2 entries x 2 frames = 4 photos: 1 failure is 25% > the 5% threshold.
+@pytest.mark.parametrize(
+    "body,max_bytes",
+    [
+        pytest.param(_bad_photo, None, id="http-error"),
+        pytest.param(_html_photo, None, id="non-jpeg"),
+        pytest.param(_oversized_photo, len(JPEG) + 5, id="oversized"),
+    ],
+)
+async def test_fetch_too_many_photo_failures_leaves_library_intact(old_library, lib_root, monkeypatch, body, max_bytes):
+    if max_bytes:
+        monkeypatch.setattr(el, "_MAX_IMAGE_BYTES", max_bytes)
     with respx.mock as m:
         _mock_upstream(m, _upstream(2), body)
         assert await el._fetch() == 1
@@ -543,8 +525,6 @@ async def test_fetch_oversized_photo_counts_as_failure(old_library, lib_root, mo
 
 
 async def test_fetch_partial_under_threshold_installs_and_returns_1(old_library, lib_root):
-    import respx
-
     # 11 entries × 2 = 22 photos; 1 failure = 4.5% ≤ 5% → installs.
     # Frame 0 of Lift_3 failed → Lift_3 keeps 0 frames (0..k-1 contiguous),
     # even though frame 1 landed.
@@ -563,8 +543,6 @@ async def test_fetch_partial_under_threshold_installs_and_returns_1(old_library,
 
 
 async def test_fetch_already_up_to_date_short_circuits(lib_root, capsys):
-    import respx
-
     _write_library(lib_root, meta_sha=el.SOURCE_SHA)
     snap = _snapshot(lib_root)
     with respx.mock as m:  # no routes: any request would raise
@@ -575,8 +553,6 @@ async def test_fetch_already_up_to_date_short_circuits(lib_root, capsys):
 
 
 async def test_fetch_force_ignores_up_to_date(lib_root):
-    import respx
-
     _write_library(lib_root, meta_sha=el.SOURCE_SHA)
     with respx.mock as m:
         _mock_upstream(m, _upstream(1))
@@ -585,8 +561,6 @@ async def test_fetch_force_ignores_up_to_date(lib_root):
 
 
 async def test_fetch_corrupt_meta_does_not_short_circuit(lib_root):
-    import respx
-
     _write_library(lib_root)
     (lib_root / "meta.json").write_text("{nope", encoding="utf-8")
     with respx.mock as m:
@@ -595,8 +569,6 @@ async def test_fetch_corrupt_meta_does_not_short_circuit(lib_root):
 
 
 async def test_fetch_install_failure_restores_previous(old_library, lib_root, monkeypatch):
-    import respx
-
     real_replace = os.replace
 
     def flaky_replace(src, dst):
@@ -623,8 +595,6 @@ def test_main_check_without_library(lib_root, capsys):
 
 
 def test_main_check_with_library(library, capsys):
-    from orchestrator.exercises_seed import EXERCISES
-
     assert el.main(["check"]) == 0
     out = capsys.readouterr().out
     assert f"/{len(EXERCISES)} catalog exercises have photos." in out
@@ -638,11 +608,6 @@ def test_main_check_with_library(library, capsys):
 
 @pytest.fixture
 def client():
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    from orchestrator.routes_workout import router
-
     app = FastAPI()
     app.include_router(router)
     return TestClient(app)
@@ -732,14 +697,10 @@ def test_route_photo_404_without_library(client, lib_root):
 
 @pytest.fixture
 def workouts_on(monkeypatch):
-    from orchestrator import shared
-
     monkeypatch.setattr(shared, "WORKOUTS_ENABLED", True)
 
 
 async def _how_to(exercise):
-    from orchestrator import tool_handlers
-
     return await tool_handlers._reg_workout_status({"action": "how_to", "exercise": exercise})
 
 
@@ -777,16 +738,12 @@ async def test_tool_how_to_requires_exercise(library, workouts_on, exercise):
 
 
 async def test_tool_how_to_respects_workouts_disabled(library, monkeypatch):
-    from orchestrator import shared
-
     monkeypatch.setattr(shared, "WORKOUTS_ENABLED", False)
     out = await _how_to("Glute Ham Raise")
     assert out == "Workout tracking isn't enabled on this install."
 
 
 async def test_tool_how_to_via_registry(library, workouts_on):
-    from orchestrator.tool_registry import execute_tool
-
     out = json.loads(await execute_tool("workout_status", {"action": "how_to", "exercise": "Dumbbell Renegade Row"}))
     assert out["reference"] == "Alternating Renegade Row"
 
@@ -795,15 +752,10 @@ async def test_tool_how_to_via_registry(library, workouts_on):
 # scripts/backup_state.py exclusion
 # ---------------------------------------------------------------------------
 
-_BACKUP_SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "backup_state.py"
-
 
 @pytest.fixture
 def backup_state():
-    spec = importlib.util.spec_from_file_location("backup_state_excl_under_test", _BACKUP_SCRIPT)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    return load_script(REPO_ROOT / "scripts" / "backup_state.py", "backup_state_excl_under_test")
 
 
 @pytest.mark.parametrize(

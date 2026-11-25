@@ -228,29 +228,22 @@ async def _assert_outcome(expected, **kwargs):
     assert deltas == {o: (1.0 if o == expected else 0.0) for o in outcomes}
 
 
-async def test_run_outcome_opt_out():
-    conv = [{"role": "user", "content": "Don't remember this, but I am thinking about switching jobs soon."}]
-    await _assert_outcome("opt_out", conv=conv)
+_OPT_OUT_CONV = [{"role": "user", "content": "Don't remember this, but I am thinking about switching jobs soon."}]
 
 
-async def test_run_outcome_no_facts_on_valid_empty_array():
-    await _assert_outcome("no_facts", content="[]")
-
-
-async def test_run_outcome_error_on_llm_failure():
-    await _assert_outcome("error", llm_exc=ConnectionError())
-
-
-async def test_run_outcome_error_on_parse_failure():
-    await _assert_outcome("error", content="no JSON here, sorry")
-
-
-async def test_run_outcome_stored():
-    await _assert_outcome("stored")
-
-
-async def test_run_outcome_duplicates_only():
-    await _assert_outcome("duplicates_only", duplicate=True)
+@pytest.mark.parametrize(
+    "expected, kwargs",
+    [
+        pytest.param("opt_out", {"conv": _OPT_OUT_CONV}, id="opt-out"),
+        pytest.param("no_facts", {"content": "[]"}, id="valid-empty-array"),
+        pytest.param("error", {"llm_exc": ConnectionError()}, id="llm-failure"),
+        pytest.param("error", {"content": "no JSON here, sorry"}, id="parse-failure"),
+        pytest.param("stored", {}, id="stored"),
+        pytest.param("duplicates_only", {"duplicate": True}, id="duplicates-only"),
+    ],
+)
+async def test_run_outcome(expected, kwargs):
+    await _assert_outcome(expected, **kwargs)
 
 
 async def test_run_outcome_error_when_every_store_fails():

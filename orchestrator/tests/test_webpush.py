@@ -4,7 +4,6 @@ No network: sends are exercised with `_send_one` monkeypatched, plus a
 pywebpush smoke where `webpush` (or the HTTP POST under it) is faked.
 """
 
-import asyncio
 import base64
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -13,6 +12,9 @@ import pytest
 
 from orchestrator import shared, state_store, webpush_manager  # noqa: F401
 from orchestrator.config import settings
+from orchestrator.metrics import WEBPUSH_SEND_TOTAL
+from orchestrator.tests._helpers import metric_value
+from orchestrator.tests.fixtures_delivery import drain_tasks
 
 APPLE = "https://web.push.apple.com/abc"
 FCM = "https://fcm.googleapis.com/fcm/send/x"
@@ -63,9 +65,7 @@ def _insert(endpoint, created_at=None, last_ok_at=None):
 
 
 def _send_total(result):
-    from orchestrator.metrics import WEBPUSH_SEND_TOTAL
-
-    return WEBPUSH_SEND_TOTAL.labels(result=result)._value.get()
+    return metric_value(WEBPUSH_SEND_TOTAL, result=result)
 
 
 # ===========================================================================
@@ -313,75 +313,57 @@ async def test_send_to_all_no_subscribers(wp_on, monkeypatch):
 # ===========================================================================
 
 
-@pytest.fixture
-def capture_send(monkeypatch):
-    calls = []
-
-    async def _fake(title, body, url="/chat", tag=None):
-        calls.append({"title": title, "body": body, "url": url, "tag": tag})
-        return {"sent": 1, "failed": 0}
-
-    monkeypatch.setattr(webpush_manager, "send_to_all", _fake)
-    return calls
-
-
-async def _drain():
-    pending = list(webpush_manager._bg_tasks)
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
-
-
-async def test_fire_inbox_push_reminder_shows_text(wp_on, capture_send):
+async def test_fire_inbox_push_reminder_shows_text(wp_on, delivery_capture_push):
     _insert(APPLE)
     webpush_manager.fire_inbox_push({"id": "i1", "kind": "reminder", "ref": "r1", "text": "take bins out"})
-    await _drain()
-    assert capture_send == [{"title": "Jess", "body": "take bins out", "url": "/chat", "tag": "i1"}]
+    await drain_tasks()
+    assert delivery_capture_push == [{"title": "Jess", "body": "take bins out", "url": "/chat", "tag": "i1"}]
 
 
-async def test_fire_inbox_push_medication_is_generic_even_with_show_text(wp_on, capture_send):
+async def test_fire_inbox_push_medication_is_generic_even_with_show_text(wp_on, delivery_capture_push):
     _insert(APPLE)
     assert settings.webpush_show_text is True
     webpush_manager.fire_inbox_push({"id": "i2", "kind": "selfcare", "ref": "medication", "text": "Take DrugName 10mg"})
-    await _drain()
-    assert len(capture_send) == 1
-    assert capture_send[0]["body"] == "Check-in waiting"
-    assert "DrugName" not in capture_send[0]["body"]
+    await drain_tasks()
+    assert len(delivery_capture_push) == 1
+    assert delivery_capture_push[0]["body"] == "Check-in waiting"
+    assert "DrugName" not in delivery_capture_push[0]["body"]
 
 
-async def test_fire_inbox_push_other_selfcare_shows_text(wp_on, capture_send):
+async def test_fire_inbox_push_other_selfcare_shows_text(wp_on, delivery_capture_push):
     _insert(APPLE)
     webpush_manager.fire_inbox_push({"id": "i3", "kind": "selfcare", "ref": "water", "text": "drink water"})
-    await _drain()
-    assert capture_send[0]["body"] == "drink water"
+    await drain_tasks()
+    assert delivery_capture_push[0]["body"] == "drink water"
 
 
-async def test_fire_inbox_push_show_text_off(wp_on, capture_send, monkeypatch):
+async def test_fire_inbox_push_show_text_off(wp_on, delivery_capture_push, monkeypatch):
     monkeypatch.setattr(settings, "webpush_show_text", False, raising=False)
     _insert(APPLE)
     webpush_manager.fire_inbox_push({"id": "i4", "kind": "reminder", "ref": "r", "text": "secret"})
-    await _drain()
-    assert capture_send[0]["body"] == "Reminder waiting"
+    await drain_tasks()
+    assert delivery_capture_push[0]["body"] == "Reminder waiting"
 
 
-async def test_fire_inbox_push_truncates_and_handles_empty(wp_on, capture_send):
+async def test_fire_inbox_push_truncates_and_handles_empty(wp_on, delivery_capture_push):
     _insert(APPLE)
     webpush_manager.fire_inbox_push({"id": "i5", "kind": "reminder", "ref": "r", "text": "x" * 500})
     webpush_manager.fire_inbox_push({"id": "i6", "kind": "reminder", "ref": "r", "text": ""})
-    await _drain()
-    bodies = sorted((c["body"] for c in capture_send), key=len)
+    await drain_tasks()
+    bodies = sorted((c["body"] for c in delivery_capture_push), key=len)
     assert bodies[0] == "Jess"
     assert len(bodies[1]) == 240
 
 
-async def test_fire_inbox_push_no_subscribers_or_disabled(wp_on, capture_send, monkeypatch):
+async def test_fire_inbox_push_no_subscribers_or_disabled(wp_on, delivery_capture_push, monkeypatch):
     webpush_manager.fire_inbox_push({"id": "i7", "kind": "reminder", "ref": "r", "text": "x"})
-    await _drain()
-    assert capture_send == []
+    await drain_tasks()
+    assert delivery_capture_push == []
     monkeypatch.setattr(settings, "webpush_enabled", False, raising=False)
     _insert(APPLE)
     webpush_manager.fire_inbox_push({"id": "i8", "kind": "reminder", "ref": "r", "text": "x"})
-    await _drain()
-    assert capture_send == []
+    await drain_tasks()
+    assert delivery_capture_push == []
 
 
 # ===========================================================================
@@ -518,34 +500,22 @@ def test_public_key_none_when_disabled(wp_off):
 # ===========================================================================
 
 
-@pytest.fixture
-def client():
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    from orchestrator.api_routes import router
-
-    app = FastAPI()
-    app.include_router(router)
-    return TestClient(app)
-
-
-def test_route_public_key_disabled(client, wp_off):
-    r = client.get("/api/webpush/public-key")
+def test_route_public_key_disabled(delivery_api_client, wp_off):
+    r = delivery_api_client.get("/api/webpush/public-key")
     assert r.status_code == 200
     assert r.json() == {"ok": True, "enabled": False, "public_key": None, "devices": 0}
 
 
-def test_route_public_key_enabled(client, wp_on):
-    r = client.get("/api/webpush/public-key")
+def test_route_public_key_enabled(delivery_api_client, wp_on):
+    r = delivery_api_client.get("/api/webpush/public-key")
     body = r.json()
     assert body["ok"] is True and body["enabled"] is True
     assert len(body["public_key"]) == 87
     assert body["devices"] == 0
 
 
-def test_route_subscribe_disabled_409(client, wp_off):
-    r = client.post("/api/webpush/subscribe", json=_sub())
+def test_route_subscribe_disabled_409(delivery_api_client, wp_off):
+    r = delivery_api_client.post("/api/webpush/subscribe", json=_sub())
     assert r.status_code == 409
     assert r.json()["error"] == "disabled"
     assert _rows() == {}
@@ -560,49 +530,51 @@ def test_route_subscribe_disabled_409(client, wp_off):
         ([1, 2], "bad_body"),
     ],
 )
-def test_route_subscribe_bad_body_400(client, wp_on, body, err):
-    r = client.post("/api/webpush/subscribe", json=body)
+def test_route_subscribe_bad_body_400(delivery_api_client, wp_on, body, err):
+    r = delivery_api_client.post("/api/webpush/subscribe", json=body)
     assert r.status_code == 400
     assert r.json()["error"] == err
     assert _rows() == {}
 
 
-def test_route_subscribe_non_json_400(client, wp_on):
-    r = client.post("/api/webpush/subscribe", content=b"not json", headers={"content-type": "application/json"})
+def test_route_subscribe_non_json_400(delivery_api_client, wp_on):
+    r = delivery_api_client.post(
+        "/api/webpush/subscribe", content=b"not json", headers={"content-type": "application/json"}
+    )
     assert r.status_code == 400
 
 
-def test_route_subscribe_ok_then_unsubscribe(client, wp_on):
-    r = client.post("/api/webpush/subscribe", json=_sub())
+def test_route_subscribe_ok_then_unsubscribe(delivery_api_client, wp_on):
+    r = delivery_api_client.post("/api/webpush/subscribe", json=_sub())
     assert r.status_code == 200
     assert r.json() == {"ok": True, "devices": 1}
-    r = client.post("/api/webpush/unsubscribe", json={"endpoint": APPLE})
+    r = delivery_api_client.post("/api/webpush/unsubscribe", json={"endpoint": APPLE})
     assert r.json() == {"ok": True, "removed": True, "devices": 0}
 
 
-def test_route_subscribe_cap_409(client, wp_on):
+def test_route_subscribe_cap_409(delivery_api_client, wp_on):
     for i in range(webpush_manager.MAX_SUBSCRIPTIONS):
         _insert(f"{APPLE}{i}")
-    r = client.post("/api/webpush/subscribe", json=_sub(endpoint=f"{APPLE}-new"))
+    r = delivery_api_client.post("/api/webpush/subscribe", json=_sub(endpoint=f"{APPLE}-new"))
     assert r.status_code == 409
     assert r.json()["error"] == "too_many_devices"
 
 
-def test_route_unsubscribe_bad_endpoint(client, wp_on):
-    r = client.post("/api/webpush/unsubscribe", json={"endpoint": "http://x"})
+def test_route_unsubscribe_bad_endpoint(delivery_api_client, wp_on):
+    r = delivery_api_client.post("/api/webpush/unsubscribe", json={"endpoint": "http://x"})
     assert r.status_code == 400
-    r = client.post("/api/webpush/unsubscribe", json=[1])
+    r = delivery_api_client.post("/api/webpush/unsubscribe", json=[1])
     assert r.status_code == 400
 
 
-def test_route_test_disabled_409(client, wp_off):
-    assert client.post("/api/webpush/test").status_code == 409
+def test_route_test_disabled_409(delivery_api_client, wp_off):
+    assert delivery_api_client.post("/api/webpush/test").status_code == 409
 
 
-def test_route_test_counts(client, wp_on, monkeypatch):
+def test_route_test_counts(delivery_api_client, wp_on, monkeypatch):
     _insert(APPLE)
     monkeypatch.setattr(webpush_manager, "_send_one", lambda s, d: "ok")
-    r = client.post("/api/webpush/test")
+    r = delivery_api_client.post("/api/webpush/test")
     assert r.json() == {"ok": True, "sent": 1, "failed": 0}
 
 

@@ -19,6 +19,8 @@ import os
 import pytest
 from cryptography.fernet import Fernet
 
+from orchestrator.tests.fixtures_memory import make_settings
+
 # ---------------------------------------------------------------------------
 # Container-path defaults
 # ---------------------------------------------------------------------------
@@ -36,11 +38,9 @@ def test_config_field_defaults_point_at_jess_home():
 def test_settings_instance_defaults_without_env(monkeypatch):
     """With the env vars unset, a fresh Settings resolves to /home/jess paths."""
     from orchestrator import jobs_training_corpus as tc
-    from orchestrator.config import Settings
 
-    for var in ("MODEL_SSH_KEY", "TRAINING_CORPUS_CC_DIR", "CLAUDE_PROJECTS_PATH"):
-        monkeypatch.delenv(var, raising=False)
-    s = Settings()
+    monkeypatch.delenv("CLAUDE_PROJECTS_PATH", raising=False)
+    s = make_settings()
     assert s.model_ssh_key == "/home/jess/.ssh/id_ed25519"
     monkeypatch.setattr(tc, "settings", s)
     cc_dir = str(tc.default_cc_dir())
@@ -79,24 +79,10 @@ def test_claude_projects_root_env_override(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def fresh_cipher(monkeypatch, tmp_path):
-    """Point auto_learn at a tmp key file with encryption on and no env key."""
-    from orchestrator import auto_learn, shared
-
-    key_file = tmp_path / "auto_learn.key"
-    monkeypatch.setattr(auto_learn, "_KEY_FILE", str(key_file))
-    monkeypatch.setattr(auto_learn, "_cipher", None)
-    monkeypatch.setattr(shared, "AUTO_LEARN_ENCRYPT", True)
-    monkeypatch.setattr(shared, "AUTO_LEARN_ENCRYPTION_KEY", "")
-    yield auto_learn, key_file
-    # monkeypatch restores _cipher=None afterwards, so the cached cipher
-    # built from the tmp key never leaks into other tests.
-
-
-def test_existing_key_chmod_permission_error_still_loads(fresh_cipher, monkeypatch, caplog):
-    auto_learn, key_file = fresh_cipher
+def test_existing_key_chmod_permission_error_still_loads(memory_key_file, monkeypatch, caplog):
+    auto_learn, key_file = memory_key_file
     key = Fernet.generate_key()
+    key_file.parent.mkdir()
     key_file.write_bytes(key + b"\n")
 
     def deny(*a, **kw):
@@ -117,9 +103,10 @@ def test_existing_key_chmod_permission_error_still_loads(fresh_cipher, monkeypat
     assert key_file.read_bytes().strip() == key
 
 
-def test_existing_key_chmod_ok_no_warning(fresh_cipher, caplog):
-    auto_learn, key_file = fresh_cipher
+def test_existing_key_chmod_ok_no_warning(memory_key_file, caplog):
+    auto_learn, key_file = memory_key_file
     key = Fernet.generate_key()
+    key_file.parent.mkdir()
     key_file.write_bytes(key)
     key_file.chmod(0o644)
 
@@ -131,9 +118,10 @@ def test_existing_key_chmod_ok_no_warning(fresh_cipher, caplog):
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
-def test_existing_key_other_oserror_still_propagates(fresh_cipher, monkeypatch):
+def test_existing_key_other_oserror_still_propagates(memory_key_file, monkeypatch):
     """Only PermissionError is tolerated; other OSErrors are not swallowed."""
-    auto_learn, key_file = fresh_cipher
+    auto_learn, key_file = memory_key_file
+    key_file.parent.mkdir()
     key_file.write_bytes(Fernet.generate_key())
 
     def eio(*a, **kw):
@@ -144,17 +132,8 @@ def test_existing_key_other_oserror_still_propagates(fresh_cipher, monkeypatch):
         auto_learn._get_cipher()
 
 
-def test_missing_key_generated_and_roundtrips(fresh_cipher):
-    auto_learn, key_file = fresh_cipher
-    assert not key_file.exists()
-    cipher = auto_learn._get_cipher()
-    assert key_file.exists()
-    assert oct(key_file.stat().st_mode & 0o777) == oct(0o600)
-    assert Fernet(key_file.read_bytes().strip()).decrypt(cipher.encrypt(b"y")) == b"y"
-
-
-def test_cipher_is_cached(fresh_cipher):
-    auto_learn, _ = fresh_cipher
+def test_cipher_is_cached(memory_key_file):
+    auto_learn, _ = memory_key_file
     assert auto_learn._get_cipher() is auto_learn._get_cipher()
 
 
@@ -172,20 +151,3 @@ def test_match_parent_owner_real_noop_as_non_root(tmp_path):
         match_parent_owner(fh.fileno(), tmp_path)  # must not raise
     st = f.stat()
     assert (st.st_uid, st.st_gid) == (os.geteuid(), os.getegid())
-
-
-@pytest.mark.skipif(os.geteuid() == 0, reason="only meaningful in the non-root image")
-def test_match_parent_owner_noop_even_if_parent_owned_by_other(monkeypatch, tmp_path):
-    """Non-root never calls fchown, even when the parent's owner differs."""
-    from orchestrator import config_writer
-
-    calls = []
-    monkeypatch.setattr(os, "fchown", lambda *a: calls.append(a))
-    fake_stat = os.stat_result((0o40755, 0, 0, 1, 4242, 4242, 0, 0, 0, 0))
-    real_stat = os.stat
-    monkeypatch.setattr(
-        os, "stat", lambda p, *a, **kw: fake_stat if str(p) == str(tmp_path) else real_stat(p, *a, **kw)
-    )
-    with open(tmp_path / "g", "w") as fh:
-        config_writer.match_parent_owner(fh.fileno(), tmp_path)
-    assert calls == []

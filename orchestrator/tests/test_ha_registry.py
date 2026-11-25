@@ -1,9 +1,13 @@
-"""Tests for the dashboard /home enrichment:
+"""Tests for the dashboard /home enrichment and the registry the HA guard reads:
 
 - ``ha_registry.get_registry_meta`` — WS registry read → {entity: area/category/hidden},
   device-area inheritance, caching, never raises, metrics;
+- ``ha_registry.ensure_fresh`` — a chat/voice turn never waits on a refresh when
+  a cache exists; a slow HA still backs off and is counted;
 - ``GET /api/ha/entities`` — area/category/brightness/volume fields, entities
-  hidden in HA left out, ``rooms_available``.
+  hidden in HA left out, ``rooms_available``;
+- ``HomeAssistantClient.refresh_entities`` — shared fetch, back-off, cache TTL,
+  ``last_refresh_ok``.
 """
 
 import asyncio
@@ -11,12 +15,14 @@ import json
 import time
 from datetime import timedelta
 
-import httpx
 import pytest
+import websockets
 
-from orchestrator import api_routes, ha_registry, shared
-from orchestrator.ha_integration import HomeAssistantClient
-from orchestrator.metrics import HA_REGISTRY_FETCH
+from orchestrator import api_routes, ha_guard, ha_registry, shared
+from orchestrator.ha_integration import Entity
+from orchestrator.metrics import HA_REGISTRY_ENTITIES, HA_REGISTRY_FETCH
+from orchestrator.schemas import HACommandRequest
+from orchestrator.tests._helpers import metric_value
 
 ENTITY_REG = {
     "entity_categories": {"0": "config", "1": "diagnostic"},
@@ -73,8 +79,6 @@ def _reset():
 
 
 def _patch_ws(monkeypatch, ws_factory):
-    import websockets
-
     calls = []
 
     def connect(url, **kw):
@@ -109,9 +113,9 @@ class TestRegistry:
     @pytest.mark.parametrize("ws", [lambda: FakeWS(auth_ok=False), lambda: FakeWS(fail_cmd=True)])
     async def test_failure_returns_empty_and_counts(self, monkeypatch, ws):
         _patch_ws(monkeypatch, ws)
-        before = HA_REGISTRY_FETCH.labels(result="error")._value.get()
+        before = metric_value(HA_REGISTRY_FETCH, result="error")
         assert await ha_registry.get_registry_meta("http://ha.test:8123", "tok") == {}
-        assert HA_REGISTRY_FETCH.labels(result="error")._value.get() == before + 1
+        assert metric_value(HA_REGISTRY_FETCH, result="error") == before + 1
 
     async def test_failure_keeps_last_good_and_backs_off(self, monkeypatch):
         _patch_ws(monkeypatch, FakeWS)
@@ -165,17 +169,19 @@ STATES = [
 
 
 @pytest.fixture
-async def ha(monkeypatch):
+async def ha(ha_voice_ha_client, monkeypatch):
     monkeypatch.setattr(shared, "HA_TOOL_DENY_ENTITIES", "")
     monkeypatch.setattr(shared, "HELIOS_PLUG_ENTITY", "switch.helios_plug")
-    c = HomeAssistantClient(
-        url="http://ha.test:8123",
-        token="t",
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=STATES))),
-    )
+    c, _ = await ha_voice_ha_client(STATES, populate=False)
     monkeypatch.setattr(api_routes, "ha_client", c)
-    yield c
-    await c._http.aclose()
+    return c
+
+
+@pytest.fixture
+async def counting_client(ha_voice_ha_client):
+    """A client over STATES that hasn't fetched yet; ``fake.calls`` counts fetches,
+    ``fake.status = 500`` makes HA fail."""
+    return await ha_voice_ha_client(STATES, populate=False)
 
 
 class TestEntitiesRoute:
@@ -224,50 +230,31 @@ class TestEntitiesRoute:
 
 class TestCommandUnknownEntity:
     async def test_unknown_entity_is_404_not_false_success(self, ha):
-        from orchestrator.schemas import HACommandRequest
-
         resp = await api_routes.execute_ha_command(HACommandRequest(entity_id="light.not_there", service="turn_on"))
         assert resp.status_code == 404
         assert json.loads(resp.body) == {"ok": False, "error": "Unknown entity"}
 
 
 class TestRefreshResilience:
-    @pytest.fixture
-    def counting_client(self):
-        state = {"calls": 0, "fail": False}
-
-        async def handler(request):
-            state["calls"] += 1
-            await asyncio.sleep(0.05)
-            if state["fail"]:
-                return httpx.Response(500)
-            return httpx.Response(200, json=STATES)
-
-        c = HomeAssistantClient(
-            url="http://ha.test:8123",
-            token="t",
-            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-        )
-        return c, state
-
     async def test_concurrent_refreshes_share_one_fetch(self, counting_client):
-        c, state = counting_client
+        c, fake = counting_client
+        fake.delay = 0.05  # all eight start while the first fetch is in flight
         await asyncio.gather(*(c.refresh_entities(max_age_seconds=3) for _ in range(8)))
-        assert state["calls"] == 1
+        assert fake.calls == 1
 
     async def test_failure_backs_off(self, counting_client):
-        c, state = counting_client
-        state["fail"] = True
+        c, fake = counting_client
+        fake.status = 500
         await c.refresh_entities(max_age_seconds=3)
         await c.refresh_entities(max_age_seconds=3)
-        assert state["calls"] == 1 and c.last_refresh_ok is False
+        assert fake.calls == 1 and c.last_refresh_ok is False
         await c.refresh_entities(force=True)  # forced refresh ignores the back-off
-        assert state["calls"] == 2
+        assert fake.calls == 2
 
     async def test_entities_reports_stale_state(self, counting_client, monkeypatch):
-        c, state = counting_client
+        c, fake = counting_client
         await c.refresh_entities(force=True)
-        state["fail"] = True
+        fake.status = 500
         c._last_refresh -= timedelta(seconds=10)
         monkeypatch.setattr(api_routes, "ha_client", c)
         _patch_ws(monkeypatch, FakeWS)
@@ -275,10 +262,8 @@ class TestRefreshResilience:
         assert out["state_ok"] is False and out["total"] > 0  # last known states still served
 
     async def test_unknown_entity_with_ha_down_is_502(self, counting_client, monkeypatch):
-        from orchestrator.schemas import HACommandRequest
-
-        c, state = counting_client
-        state["fail"] = True
+        c, fake = counting_client
+        fake.status = 500
         monkeypatch.setattr(api_routes, "ha_client", c)
         resp = await api_routes.execute_ha_command(HACommandRequest(entity_id="light.not_there", service="turn_on"))
         assert resp.status_code == 502
@@ -296,8 +281,6 @@ class TestRegistryFailureConcurrency:
 
             async def __aexit__(self, *a):
                 return False
-
-        import websockets
 
         monkeypatch.setattr(websockets, "connect", lambda url, **kw: SlowFail())
         out = await asyncio.gather(*(ha_registry.get_registry_meta("http://ha.test:8123", "tok") for _ in range(5)))
@@ -317,56 +300,75 @@ class TestRegistryFailureConcurrency:
 
 
 def _ent(entity_id, attrs, state="on"):
-    from orchestrator.ha_integration import Entity
-
     return Entity.from_ha_state({"entity_id": entity_id, "state": state, "attributes": attrs})
 
 
+_LIGHT_BRIGHTNESS = {"supported_color_modes": ["brightness"]}
+
+
 class TestEntityViewEdgeCases:
-    def test_light_without_color_modes_uses_brightness_attribute(self):
-        out = ha_registry.entity_view(_ent("light.a", {"brightness": 200}), {})
-        assert out["supports_brightness"] is True and out["brightness"] == 200
-
-    def test_light_without_color_modes_or_brightness_is_onoff(self):
-        out = ha_registry.entity_view(_ent("light.a", {}, state="off"), {})
-        assert out["supports_brightness"] is False
-        assert out["brightness"] is None and out["is_group"] is False
-
-    def test_non_list_color_modes_falls_back_to_brightness_attribute(self):
-        with_b = ha_registry.entity_view(_ent("light.a", {"supported_color_modes": "brightness", "brightness": 5}), {})
-        without_b = ha_registry.entity_view(_ent("light.b", {"supported_color_modes": "brightness"}), {})
-        assert with_b["supports_brightness"] is True
-        assert without_b["supports_brightness"] is False
-
-    def test_onoff_only_light_ignores_stray_brightness_attribute(self):
-        out = ha_registry.entity_view(_ent("light.a", {"supported_color_modes": ["onoff"], "brightness": 255}), {})
-        assert out["supports_brightness"] is False
-
-    def test_off_light_brightness_none_and_non_int_dropped(self):
-        off = ha_registry.entity_view(
-            _ent("light.a", {"supported_color_modes": ["brightness"], "brightness": None}, state="off"), {}
-        )
-        bad = ha_registry.entity_view(_ent("light.b", {"supported_color_modes": ["xy"], "brightness": "128"}), {})
-        assert off["brightness"] is None and off["supports_brightness"] is True
-        assert bad["brightness"] is None
-
-    def test_group_flag_requires_list_of_members(self):
-        out = ha_registry.entity_view(_ent("light.a", {"entity_id": "light.b"}), {})
-        assert out["is_group"] is False
-
-    def test_media_player_missing_and_bad_attributes(self):
-        out = ha_registry.entity_view(_ent("media_player.a", {"volume_level": "loud", "media_title": 42}), {})
-        assert out["volume"] is None and out["media_title"] is None
-        empty = ha_registry.entity_view(_ent("media_player.b", {}, state="off"), {})
-        assert empty["volume"] is None and empty["media_title"] is None
-
-    def test_media_volume_zero_is_kept(self):
-        out = ha_registry.entity_view(_ent("media_player.a", {"volume_level": 0}), {})
-        assert out["volume"] == 0
-
-    def test_climate_missing_or_non_numeric_temps(self):
-        out = ha_registry.entity_view(_ent("climate.a", {"current_temperature": "warm"}, state="off"), {})
-        assert out["current_temperature"] is None and out["temperature"] is None
+    @pytest.mark.parametrize(
+        "entity_id, attrs, state, expected",
+        [
+            pytest.param(
+                "light.a", {"brightness": 200}, "on", {"supports_brightness": True, "brightness": 200}, id="no-modes"
+            ),
+            pytest.param(
+                "light.a", {}, "off", {"supports_brightness": False, "brightness": None, "is_group": False}, id="onoff"
+            ),
+            pytest.param(
+                "light.a",
+                {"supported_color_modes": "brightness", "brightness": 5},
+                "on",
+                {"supports_brightness": True},
+                id="modes-str-with-brightness",
+            ),
+            pytest.param(
+                "light.b", {"supported_color_modes": "brightness"}, "on", {"supports_brightness": False}, id="modes-str"
+            ),
+            pytest.param(
+                "light.a",
+                {"supported_color_modes": ["onoff"], "brightness": 255},
+                "on",
+                {"supports_brightness": False},
+                id="onoff-stray-brightness",
+            ),
+            pytest.param(
+                "light.a",
+                {**_LIGHT_BRIGHTNESS, "brightness": None},
+                "off",
+                {"brightness": None, "supports_brightness": True},
+                id="off-light",
+            ),
+            pytest.param(
+                "light.b",
+                {"supported_color_modes": ["xy"], "brightness": "128"},
+                "on",
+                {"brightness": None},
+                id="non-int-brightness",
+            ),
+            pytest.param("light.a", {"entity_id": "light.b"}, "on", {"is_group": False}, id="group-needs-list"),
+            pytest.param(
+                "media_player.a",
+                {"volume_level": "loud", "media_title": 42},
+                "on",
+                {"volume": None, "media_title": None},
+                id="media-bad-attrs",
+            ),
+            pytest.param("media_player.b", {}, "off", {"volume": None, "media_title": None}, id="media-no-attrs"),
+            pytest.param("media_player.a", {"volume_level": 0}, "on", {"volume": 0}, id="volume-zero-kept"),
+            pytest.param(
+                "climate.a",
+                {"current_temperature": "warm"},
+                "off",
+                {"current_temperature": None, "temperature": None},
+                id="climate-bad-temps",
+            ),
+        ],
+    )
+    def test_view_fields(self, entity_id, attrs, state, expected):
+        out = ha_registry.entity_view(_ent(entity_id, attrs, state=state), {})
+        assert {k: out[k] for k in expected} == expected
 
     def test_other_domains_get_only_base_fields(self):
         out = ha_registry.entity_view(_ent("switch.a", {"brightness": 10, "volume_level": 0.5}), {"area": "Room A"})
@@ -374,8 +376,6 @@ class TestEntityViewEdgeCases:
         assert out["area"] == "Room A" and out["category"] is None
 
     def test_none_attributes_do_not_crash(self):
-        from orchestrator.ha_integration import Entity
-
         e = Entity(entity_id="light.a", domain="light", friendly_name="A", state="on", attributes=None)
         out = ha_registry.entity_view(e, {})
         assert out["supports_brightness"] is False and out["brightness"] is None
@@ -391,11 +391,11 @@ class TestRegistryRecovery:
         monkeypatch.setattr(ha_registry, "_failed_at", time.monotonic() - ha_registry.FAILURE_RETRY_SECONDS - 1)
 
         calls = _patch_ws(monkeypatch, FakeWS)
-        before = HA_REGISTRY_FETCH.labels(result="ok")._value.get()
+        before = metric_value(HA_REGISTRY_FETCH, result="ok")
         meta = await ha_registry.get_registry_meta("http://ha.test:8123", "tok")
         assert len(calls) == 1 and meta["light.desk"]["area"] == "Office"
         assert ha_registry._failed_at == 0.0
-        assert HA_REGISTRY_FETCH.labels(result="ok")._value.get() == before + 1
+        assert metric_value(HA_REGISTRY_FETCH, result="ok") == before + 1
 
     async def test_cache_expiry_triggers_refetch(self, monkeypatch):
         calls = _patch_ws(monkeypatch, FakeWS)
@@ -412,63 +412,157 @@ class TestRegistryRecovery:
 
 
 class TestRefreshCacheSemantics:
-    @pytest.fixture
-    def counting_client(self):
-        state = {"calls": 0, "fail": False}
-
-        async def handler(request):
-            state["calls"] += 1
-            if state["fail"]:
-                return httpx.Response(500)
-            return httpx.Response(200, json=STATES)
-
-        c = HomeAssistantClient(
-            url="http://ha.test:8123",
-            token="t",
-            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-        )
-        return c, state
-
     async def test_default_path_honours_cache_ttl(self, counting_client):
         """Chat callers (no max_age) still get the 5-min cache, not a fetch per turn."""
-        c, state = counting_client
+        c, fake = counting_client
         await c.refresh_entities()
         c._last_refresh -= timedelta(seconds=60)
         await c.refresh_entities()
-        assert state["calls"] == 1
+        assert fake.calls == 1
         c._last_refresh -= c.cache_ttl
         await c.refresh_entities()
-        assert state["calls"] == 2
+        assert fake.calls == 2
 
     async def test_max_age_overrides_ttl(self, counting_client):
-        c, state = counting_client
+        c, fake = counting_client
         await c.refresh_entities()
         c._last_refresh -= timedelta(seconds=10)
         await c.refresh_entities(max_age_seconds=5)
-        assert state["calls"] == 2
+        assert fake.calls == 2
 
     async def test_successful_refresh_clears_backoff(self, counting_client):
-        c, state = counting_client
-        state["fail"] = True
-        await c.refresh_entities(max_age_seconds=3)
+        c, fake = counting_client
+        assert c.last_refresh_ok is True  # before any fetch
+        fake.status = 500
+        assert await c.refresh_entities(max_age_seconds=3) == 0
         assert c._last_failure is not None and c.last_refresh_ok is False
-        state["fail"] = False
+        fake.status = 200
         n = await c.refresh_entities(force=True)
         assert n == len(STATES)
         assert c._last_failure is None and c.last_refresh_ok is True
+        assert c.has_entities()
 
     async def test_backoff_expires(self, counting_client):
-        c, state = counting_client
-        state["fail"] = True
+        c, fake = counting_client
+        fake.status = 500
         await c.refresh_entities(max_age_seconds=3)
         c._last_failure -= c.FAILURE_BACKOFF + timedelta(seconds=1)
-        state["fail"] = False
+        fake.status = 200
         await c.refresh_entities(max_age_seconds=3)
-        assert state["calls"] == 2 and c.last_refresh_ok is True
+        assert fake.calls == 2 and c.last_refresh_ok is True
 
-    async def test_failure_keeps_cached_entities(self, counting_client):
-        c, state = counting_client
+    @pytest.mark.parametrize("failure", ["http-500", "connect-error"])
+    async def test_failure_keeps_cached_entities(self, counting_client, failure):
+        c, fake = counting_client
         n = await c.refresh_entities()
-        state["fail"] = True
+        if failure == "http-500":
+            fake.status = 500
+        else:
+            fake.fail = True
         assert await c.refresh_entities(force=True) == n
+        assert c.last_refresh_ok is False  # the flag flips; the old cache stays
         assert c.get_entity("light.desk") is not None
+
+
+# What get_registry_meta returns for the HA guard's category check.
+GUARD_META = {
+    "light.kitchen": {"area": "Kitchen", "category": None, "hidden": False},
+    "switch.porch_widget_toggle": {"area": "Porch", "category": "config", "hidden": False},
+}
+
+
+class TestEnsureFresh:
+    """ha_registry.ensure_fresh: a chat/voice turn never waits on a refresh
+    when a cache exists, and a slow HA still backs off and is counted."""
+
+    async def test_warm_cache_returns_without_waiting(self, monkeypatch):
+        started = asyncio.Event()
+
+        async def slow_fetch(url, token):
+            started.set()
+            await asyncio.sleep(30)
+
+        monkeypatch.setattr(ha_registry, "_fetch", slow_fetch)
+        monkeypatch.setattr(ha_registry, "_cache", {"light.kitchen": {"category": None}})
+        t0 = time.monotonic()
+        await ha_registry.ensure_fresh("http://ha.test:8123", "t")
+        assert time.monotonic() - t0 < 0.5
+        await asyncio.wait_for(started.wait(), 1)
+        ha_registry._refresh_task.cancel()
+
+    async def test_cold_cache_waits_capped_and_slow_fetch_backs_off(self, monkeypatch):
+        async def slow_fetch(url, token):
+            await asyncio.sleep(30)
+
+        monkeypatch.setattr(ha_registry, "_fetch", slow_fetch)
+        monkeypatch.setattr(ha_registry, "FETCH_TIMEOUT_SECONDS", 0.3)
+        before = metric_value(HA_REGISTRY_FETCH, result="error")
+        t0 = time.monotonic()
+        await ha_registry.ensure_fresh("http://ha.test:8123", "t", wait_seconds=0.1)
+        assert time.monotonic() - t0 < 0.25
+        # The shielded fetch runs on to its own timeout and records the failure.
+        await asyncio.wait_for(asyncio.shield(ha_registry._refresh_task), 2)
+        assert ha_registry._failed_at > 0
+        assert metric_value(HA_REGISTRY_FETCH, result="error") == before + 1
+
+    async def test_success_sets_entity_gauge(self, monkeypatch):
+        async def fetch(url, token):
+            return dict(GUARD_META)
+
+        monkeypatch.setattr(ha_registry, "_fetch", fetch)
+        await ha_registry.ensure_fresh("http://ha.test:8123", "t")
+        assert ha_registry.cached_meta() == GUARD_META
+        assert metric_value(HA_REGISTRY_ENTITIES) == len(GUARD_META)
+
+    async def test_concurrent_calls_start_one_fetch(self, monkeypatch):
+        calls = 0
+        release = asyncio.Event()
+
+        async def fetch(url, token):
+            nonlocal calls
+            calls += 1
+            await release.wait()
+            return dict(GUARD_META)
+
+        monkeypatch.setattr(ha_registry, "_fetch", fetch)
+        waiters = [
+            asyncio.create_task(ha_registry.ensure_fresh("http://ha.test:8123", "t", wait_seconds=2)) for _ in range(3)
+        ]
+        await asyncio.sleep(0.05)
+        release.set()
+        await asyncio.gather(*waiters)
+        assert calls == 1
+        assert ha_registry.cached_meta() == GUARD_META
+
+    async def test_failed_refresh_keeps_last_good_cache(self, monkeypatch):
+        async def boom(url, token):
+            raise RuntimeError("down")
+
+        monkeypatch.setattr(ha_registry, "_fetch", boom)
+        monkeypatch.setattr(ha_registry, "_cache", dict(GUARD_META))
+        await ha_registry.ensure_fresh("http://ha.test:8123", "t")
+        await ha_registry._refresh_task
+        assert ha_registry._failed_at > 0
+        # The guard keeps refusing from the last good registry read.
+        assert ha_guard.device_setting_reason("switch.porch_widget_toggle") == "registry"
+
+    @pytest.mark.parametrize("url,token", [("", "t"), ("ha.test:8123", "t"), ("http://ha.test:8123", "")])
+    async def test_unconfigured_never_fetches_or_raises(self, monkeypatch, url, token):
+        async def fetch(url, token):
+            raise AssertionError("must not fetch")
+
+        monkeypatch.setattr(ha_registry, "_fetch", fetch)
+        await ha_registry.ensure_fresh(url, token, wait_seconds=0.5)
+        await ha_registry._refresh_task
+        assert ha_registry.cached_meta() == {}
+
+    async def test_unchanged_registry_keeps_tool_schema_cache(self, monkeypatch):
+        async def fetch(url, token):
+            return dict(GUARD_META)
+
+        monkeypatch.setattr(ha_registry, "_fetch", fetch)
+        monkeypatch.setattr(ha_registry, "_cache", dict(GUARD_META))
+        monkeypatch.setattr(shared, "_ha_tool_cache", {"warm": True})
+        await ha_registry.get_registry_meta("http://ha.test:8123", "t")
+        assert ha_registry._fetched_at > 0
+        assert shared._ha_tool_cache == {"warm": True}

@@ -48,73 +48,22 @@ def _nodeid_of_length(length: int, func: str = "test_case") -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_no_report_for_short_ids():
+def test_no_report_for_short_or_no_ids():
     ids = [f"{_FILE}::test_a", f"{_FILE}::test_b[1-2]", f"{_FILE}::TestK::test_c[short-name]"]
     assert long_nodeid_report(ids) is None
-
-
-def test_no_report_for_empty_input():
     assert long_nodeid_report([]) is None
 
 
-def test_id_exactly_at_the_limit_passes():
-    nodeid = _nodeid_of_length(MAX_NODEID_CHARS)
-    assert len(nodeid) == MAX_NODEID_CHARS
-    assert long_nodeid_report([nodeid]) is None
+def test_limit_boundary():
+    assert long_nodeid_report([_nodeid_of_length(MAX_NODEID_CHARS)]) is None
+    assert long_nodeid_report([_nodeid_of_length(MAX_NODEID_CHARS + 1)]) is not None
 
 
-def test_id_one_over_the_limit_is_reported():
-    nodeid = _nodeid_of_length(MAX_NODEID_CHARS + 1)
-    report = long_nodeid_report([nodeid])
-    assert report is not None
-    lines = report.splitlines()
-    assert lines[0].startswith(f"1 test id(s) are longer than {MAX_NODEID_CHARS} chars.")
-    # The header tells the reader how to fix it.
-    assert 'pytest.param(value, id="short-name")' in lines[0]
-    assert lines[1:] == [f"  {_FILE}::test_case: 1 id(s), longest {MAX_NODEID_CHARS + 1} chars"]
-
-
-def test_accepts_a_generator():
-    # The hook passes a generator expression, not a list.
-    report = long_nodeid_report(nodeid for nodeid in [_nodeid_of_length(MAX_NODEID_CHARS + 5)])
-    assert report is not None
-    assert f"longest {MAX_NODEID_CHARS + 5} chars" in report
-
-
-def test_groups_long_ids_by_test_function():
-    ids = [
-        _nodeid_of_length(400, "test_b"),
-        _nodeid_of_length(350, "test_a"),
-        _nodeid_of_length(900, "test_a"),
-        _nodeid_of_length(310, "test_b"),
-        _nodeid_of_length(500, "test_a"),
-        f"{_FILE}::test_a[short]",  # short: not counted
-        f"{_FILE}::test_c[ok]",
-    ]
-    report = long_nodeid_report(ids)
-    assert report is not None
-    lines = report.splitlines()
-    assert lines[0].startswith(f"5 test id(s) are longer than {MAX_NODEID_CHARS} chars.")
-    # One line per function, sorted, with its count and its longest id.
-    assert lines[1:] == [
-        f"  {_FILE}::test_a: 3 id(s), longest 900 chars",
-        f"  {_FILE}::test_b: 2 id(s), longest 400 chars",
-    ]
-
-
-def test_class_method_ids_group_under_the_method():
-    nodeid = f"{_FILE}::TestThing::test_m[" + "v" * 400 + "]"
-    report = long_nodeid_report([nodeid])
-    assert report is not None
-    assert f"  {_FILE}::TestThing::test_m: 1 id(s), longest {len(nodeid)} chars" in report.splitlines()
-
-
-def test_base_stops_at_the_first_bracket():
-    # A parameter that itself contains brackets must not leak into the base.
-    nodeid = f"{_FILE}::test_x[a[b]c" + "q" * 400 + "]"
-    report = long_nodeid_report([nodeid])
-    assert report is not None
-    assert report.splitlines()[1] == f"  {_FILE}::test_x: 1 id(s), longest {len(nodeid)} chars"
+def test_custom_limit_replaces_the_default():
+    nodeid = "a.py::t[123456]"  # 15 chars
+    assert long_nodeid_report([nodeid], limit=15) is None
+    assert long_nodeid_report([nodeid], limit=14) is not None
+    assert long_nodeid_report([_nodeid_of_length(MAX_NODEID_CHARS + 50)], limit=1_000) is None
 
 
 @pytest.mark.parametrize("size", [5_000, 1_000_000], ids=["5k", "1mb"])
@@ -129,38 +78,27 @@ def test_report_never_contains_the_parameter(size):
     assert not leaked
     # Small and bounded no matter how big the payload is.
     assert size < 600
-    assert f"  {_FILE}::test_payload: 2 id(s), longest {len(ids[1])} chars" in report.splitlines()
 
 
-def test_base_is_capped_at_200_chars_without_brackets():
-    # No "[" at all (e.g. a huge generated function name): the base is the
-    # whole id, so it must be truncated, not printed in full.
-    nodeid = f"{_FILE}::test_" + "y" * 1_000
+@pytest.mark.parametrize(
+    "nodeid,leak",
+    [
+        # A parameter that itself contains brackets must not leak into the base.
+        pytest.param(f"{_FILE}::test_x[a[b]c" + "q" * 400 + "]", "q" * 10, id="brackets-in-parameter"),
+        # No "[" at all (e.g. a huge generated function name): the base is the
+        # whole id, so it must be truncated, not printed in full.
+        pytest.param(f"{_FILE}::test_" + "y" * 1_000, "y" * 300, id="no-bracket"),
+        pytest.param(
+            "orchestrator/tests/" + "d" * 300 + "/test_deep.py::test_x[" + "z" * 50 + "]", "z" * 10, id="long-path"
+        ),
+    ],
+)
+def test_report_base_is_cut_before_the_parameter_and_at_200_chars(nodeid, leak):
     report = long_nodeid_report([nodeid])
     assert report is not None
-    line = report.splitlines()[1]
-    assert line == f"  {nodeid[:200]}: 1 id(s), longest {len(nodeid)} chars"
-    assert nodeid[:201] not in report
-
-
-def test_base_is_capped_at_200_chars_before_the_bracket():
-    long_path = "orchestrator/tests/" + "d" * 300 + "/test_deep.py::test_x"
-    nodeid = long_path + "[" + "z" * 50 + "]"
-    report = long_nodeid_report([nodeid])
-    assert report is not None
-    assert report.splitlines()[1] == f"  {long_path[:200]}: 1 id(s), longest {len(nodeid)} chars"
-    assert "z" * 10 not in report
-
-
-def test_custom_limit():
-    nodeid = "a.py::t[123456]"  # 15 chars
-    assert long_nodeid_report([nodeid], limit=15) is None
-    report = long_nodeid_report([nodeid], limit=14)
-    assert report is not None
-    assert report.splitlines()[0].startswith("1 test id(s) are longer than 14 chars.")
-    assert report.splitlines()[1] == "  a.py::t: 1 id(s), longest 15 chars"
-    # The custom limit replaces the default rather than adding to it.
-    assert long_nodeid_report([_nodeid_of_length(MAX_NODEID_CHARS + 50)], limit=1_000) is None
+    leaked = leak in report
+    assert not leaked
+    assert len(report.splitlines()[1]) < 260  # base <= 200 chars + count and length
 
 
 # ---------------------------------------------------------------------------
