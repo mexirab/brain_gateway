@@ -271,8 +271,11 @@ def build() -> dict:
             unit="none",
             description=(
                 "Per-utterance /api/stt/transcribe results per minute (mic button + "
-                "hands-free call). A high share of 'empty' means the call-mode voice "
-                "detector is false-triggering on room noise; unreachable = Helios asleep."
+                "hands-free call; the metric can't tell them apart). 'empty' = nothing "
+                "heard: in call mode usually the voice detector false-triggering on room "
+                "noise, from the mic button a recording of near-silence (the dashboard "
+                "says 'Didn't catch anything'). Recordings the phone dropped before "
+                "upload never show here. unreachable = Helios asleep."
             ),
         ),
         timeseries(

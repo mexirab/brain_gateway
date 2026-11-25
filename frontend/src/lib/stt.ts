@@ -11,6 +11,15 @@ export class STTUnavailableError extends Error {
 }
 
 /**
+ * How both the mic button and call mode open the mic: voice processing on
+ * (echo cancellation, noise suppression, auto gain). Open it only after
+ * setting the audio session to 'play-and-record' (see audio-session.ts).
+ */
+export const MIC_CONSTRAINTS: MediaStreamConstraints = {
+  audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+};
+
+/**
  * Best recording format this browser supports. Safari before 18.4 has no
  * webm in MediaRecorder; the STT server decodes anything via ffmpeg.
  */
