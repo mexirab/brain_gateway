@@ -546,13 +546,30 @@ Daily 7am scheduled job (`orchestrator/jobs_self_audit.py`) that queries Loki fo
 | `SELF_AUDIT_OUTPUT_DIR` | `/app/data/self_audits` | Directory for `YYYY-MM-DD.md` markdown reports. Host-mounted via the existing `/app/data` bind. |
 | `SELF_AUDIT_LLM_TIMEOUT_SEC` | `120` | Per-call timeout for the diagnose-each-cluster `call_model` invocation (no-investigator path). |
 | `SELF_AUDIT_LOKI_LIMIT_PER_GROUP` | `1500` | Lines sampled per Loki source group (clamped 50–5000). A group that hits it is reported as truncated (`bgw_self_audit_truncated_total{group}`); counts stay exact. |
-| `SELF_AUDIT_INVESTIGATE` | `false` | Turn on the read-only investigator (tool loop) for daily runs and enable `POST /api/self_audit/alert`. Needs Helios awake; never wakes it (asleep → deterministic digest). |
+| `SELF_AUDIT_INVESTIGATE` | `false` | Turn on the read-only investigator (tool loop) for daily runs and enable `POST /api/self_audit/alert`. On the local brain it needs Helios awake and never wakes it (asleep → deterministic digest); with `SELF_AUDIT_CLAUDE_API_KEY` it runs on Claude instead (below). |
 | `SELF_AUDIT_REPO_PATH` | `/opt/gateway_mvp` | Read-only repo mount the investigator's file tools read, behind a path allow-list (`.env`, `data/`, `credentials/`, token files, rendered configs, `docs/internal/` denied). |
 | `SELF_AUDIT_INVESTIGATE_MAX_ROUNDS` | `12` | Max model rounds per daily investigation (clamped 2–30). Alert runs use 6. |
 | `SELF_AUDIT_INVESTIGATE_MAX_TOOL_CALLS` | `30` | Max tool calls per investigation (clamped 1–80). |
 | `SELF_AUDIT_INVESTIGATE_MAX_SECONDS` | `600` | Wall-time budget per daily investigation (clamped 60–1800). Alert runs use 300 s. |
 | `SELF_AUDIT_WEBHOOK_TOKEN` | _empty_ | Scoped bearer Alertmanager uses for `POST /api/self_audit/alert` — accepted on that exact path only. < 24 chars is discarded at startup (even with the audit off). `scripts/generate-configs.sh` writes it to `monitoring/alertmanager/self_audit_webhook_token` and renders the receiver only when it is ≥ 24 chars and `SELF_AUDIT_INVESTIGATE=true`. |
 | `SELF_AUDIT_ALERT_LOOKBACK_HOURS` | `3` | Loki window for alert-triggered runs (clamped 1–24). |
+| `SELF_AUDIT_CLAUDE_API_KEY` | _empty_ | Anthropic API key: the investigator runs on Claude instead of the local brain. Empty = local brain, as before. Whitespace stripped; a value that doesn't start with `sk-ant-` (or is under 20 chars) is discarded at startup with an error log. Use a dedicated key. |
+| `SELF_AUDIT_CLAUDE_MODEL` | `claude-opus-5-5` | Model id. Must match `claude-[a-z0-9-]{1,60}`, else the investigator stays local. Spend is priced from a table in `self_investigator.py`; an id not in it is priced high (overestimates). |
+| `SELF_AUDIT_CLAUDE_EFFORT` | `medium` | `low` \| `medium` \| `high` \| `xhigh` \| `max`; anything else → `medium` (warning log). |
+| `SELF_AUDIT_CLAUDE_MONTHLY_USD` | `40` | Estimated monthly spend cap (UTC calendar month). At the cap the local brain takes over until the 1st; alert-triggered runs stop using Claude at 75 % of it. `0`, negative or non-finite = Claude off. |
+
+`self_audit_claude_enabled` is derived (key valid + model id valid + cap > 0); setting `SELF_AUDIT_CLAUDE_ENABLED` in `.env` does nothing.
+
+**Claude backend.** Needs `SELF_AUDIT_ENABLED` + `JESS_ADVANCED` + `SELF_AUDIT_INVESTIGATE` too; then `brain-orchestrator` calls `https://api.anthropic.com` (base URL fixed in code; `ANTHROPIC_BASE_URL` is ignored). Anthropic sees the system prompt, the secret-redacted task (cluster samples, alert payload) and every tool result: allow-listed repo files (public) and any Loki line from the last 24 h. Besides the orchestrator's own lines (no personal content, but HA entity ids), that covers frontend, Grafana (login name, LogQL queries), Prometheus, Loki, promtail, redis, Conjure and the Helios journal — owner-accepted 2026-11-24. Runs while Helios sleeps. The local brain takes over when: the month's estimated spend reached the cap (alert runs: 75 %), 8 paid runs in a UTC day (any trigger, `POST /api/self_audit/run` included), a counter in `app_state` (`self_audit_claude_usd_YYYY-MM`, `self_audit_claude_runs_YYYY-MM-DD`) is unreadable (fails closed), or the FIRST Claude call fails (auth, billing, model, rate_limit, server, connection, bad_request, refusal, other). A later call that fails is not retried locally: a transient error gets one tool-less call for the final report, anything else ends the run as `error`. The spend figure is an estimate from token usage; the Anthropic Console usage page is the truth and a Console spend limit is the hard cap.
+
+To turn it on (owner):
+
+1. Anthropic Console: create a dedicated API key; set a spend limit (e.g. about $50/month).
+2. Jupiter `.env`: `SELF_AUDIT_CLAUDE_API_KEY=sk-ant-…` (optionally the other three).
+3. `docker compose up -d --force-recreate orchestrator` (a plain restart doesn't reread `.env`).
+4. Test: `POST /api/self_audit/run` (bearer `API_TOKEN`). The report's Note line and the digest say "Investigated by Claude · ~$X of $40 this month"; a skip says why and "investigated by the local brain".
+
+Metrics, alert and runbook: `monitoring/README.md` → Self-audit investigator on Claude.
 
 ## Web search (SearXNG)
 

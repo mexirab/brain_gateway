@@ -46,6 +46,7 @@ DOMAIN_CAP_RATIO = 0.60
 
 SECRET_PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    re.compile(r"sk-(?:ant|proj|svcacct|admin)-[A-Za-z0-9_\-]{20,}"),
     re.compile(r"ghp_[A-Za-z0-9]{20,}"),
     re.compile(r"AIza[0-9A-Za-z_\-]{20,}"),
     re.compile(r"(?i)api[_-]?key['\"]?\s*[:=]\s*['\"][A-Za-z0-9_\-]{16,}"),

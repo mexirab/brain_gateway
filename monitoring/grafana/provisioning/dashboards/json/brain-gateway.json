@@ -14433,8 +14433,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by (trigger, result) (increase(bgw_self_investigator_runs_total[1d]))",
-          "legendFormat": "run {{trigger}} {{result}}",
+          "expr": "sum by (trigger, result, backend) (increase(bgw_self_investigator_runs_total[1d]))",
+          "legendFormat": "run {{trigger}} {{result}} ({{backend}})",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -14530,6 +14530,314 @@
       "id": 192
     },
     {
+      "type": "stat",
+      "title": "Claude Investigator Spend (this month)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "bgw_self_investigator_claude_spend_usd",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Estimated USD the investigator spent on Claude this calendar month (UTC), from token usage x a price table in self_investigator.py. At SELF_AUDIT_CLAUDE_MONTHLY_USD the investigator goes back to the local brain until the 1st. Check against the Anthropic Console.",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 430
+      },
+      "id": 193
+    },
+    {
+      "type": "stat",
+      "title": "Claude Cap Used",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "100 * bgw_self_investigator_claude_spend_usd / (bgw_self_investigator_claude_cap_usd > 0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Share of SELF_AUDIT_CLAUDE_MONTHLY_USD used. 'No data' = Claude investigator off (no SELF_AUDIT_CLAUDE_API_KEY). 100% = runs use the local brain until next month.",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 430
+      },
+      "id": 194
+    },
+    {
+      "type": "timeseries",
+      "title": "Claude Tokens (/day)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (kind) (increase(bgw_self_investigator_claude_tokens_total[1d]))",
+          "legendFormat": "{{kind}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Tokens per day by kind. cache_read should dominate input (the prompt cache works); output includes thinking, which Opus 5.5 always does.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 430
+      },
+      "id": 195
+    },
+    {
+      "type": "timeseries",
+      "title": "Claude Skipped \u2192 Local Brain (/day)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (reason) (increase(bgw_self_investigator_claude_fallback_total[1d])) > 0",
+          "legendFormat": "{{reason}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Runs that wanted Claude but ran on the local brain. cap = monthly cap (or the counter unreadable), daily_cap = 8 paid runs today; the first call failed with auth (bad key), billing (credit / Console spend limit), model (404), rate_limit, server, connection, bad_request, refusal, other. auth/billing/model/bad_request/other for 3 days = SelfInvestigatorClaudeUnavailable.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 430
+      },
+      "id": 196
+    },
+    {
       "type": "row",
       "title": "Deploys (CI \u2192 Jupiter)",
       "collapsed": false,
@@ -14538,9 +14846,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 430
+        "y": 438
       },
-      "id": 193
+      "id": 197
     },
     {
       "type": "stat",
@@ -14602,9 +14910,9 @@
         "h": 6,
         "w": 4,
         "x": 0,
-        "y": 431
+        "y": 439
       },
-      "id": 194
+      "id": 198
     },
     {
       "type": "stat",
@@ -14676,9 +14984,9 @@
         "h": 6,
         "w": 4,
         "x": 4,
-        "y": 431
+        "y": 439
       },
-      "id": 195
+      "id": 199
     },
     {
       "type": "stat",
@@ -14754,9 +15062,9 @@
         "h": 6,
         "w": 4,
         "x": 8,
-        "y": 431
+        "y": 439
       },
-      "id": 196
+      "id": 200
     },
     {
       "type": "stat",
@@ -14836,9 +15144,9 @@
         "h": 6,
         "w": 4,
         "x": 12,
-        "y": 431
+        "y": 439
       },
-      "id": 197
+      "id": 201
     },
     {
       "type": "timeseries",
@@ -14922,9 +15230,9 @@
         "h": 6,
         "w": 8,
         "x": 16,
-        "y": 431
+        "y": 439
       },
-      "id": 198
+      "id": 202
     },
     {
       "type": "row",
@@ -14935,9 +15243,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 437
+        "y": 445
       },
-      "id": 199
+      "id": 203
     },
     {
       "type": "logs",
@@ -14976,9 +15284,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 438
+        "y": 446
       },
-      "id": 200
+      "id": 204
     },
     {
       "type": "logs",
@@ -15017,9 +15325,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 438
+        "y": 446
       },
-      "id": 201
+      "id": 205
     }
   ]
 }

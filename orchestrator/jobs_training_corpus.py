@@ -81,7 +81,10 @@ _NOISE_PREFIXES = (
 # Secret / ciphertext patterns. Shared shape with
 # scripts/build_embedding_corpus.py — keep the two in sync when adding rules.
 SECRET_PATTERNS = (
-    re.compile(r"sk-[A-Za-z0-9]{20,}"),  # OpenAI / Anthropic
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),  # OpenAI
+    # Anthropic (sk-ant-api03-…) and current OpenAI keys (sk-proj-, sk-svcacct-,
+    # sk-admin-) carry - and _, which the pattern above stops at.
+    re.compile(r"sk-(?:ant|proj|svcacct|admin)-[A-Za-z0-9_\-]{20,}"),
     re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),  # GitHub
     re.compile(r"AIza[0-9A-Za-z_\-]{20,}"),  # Google
     re.compile(r"xox[baprs]-[A-Za-z0-9\-]{20,}"),  # Slack

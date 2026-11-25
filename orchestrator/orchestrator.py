@@ -1323,8 +1323,10 @@ async def _startup_logic():
     # Gated by JESS_ADVANCED (operator feature, requires Loki + Pushover stack).
     if shared.SELF_AUDIT_ENABLED and shared.JESS_ADVANCED:
         from orchestrator.jobs_self_audit import run_self_audit, seed_last_run_gauge
+        from orchestrator.self_investigator import refresh_claude_spend_gauge
 
         seed_last_run_gauge()
+        refresh_claude_spend_gauge()  # month-to-date estimate survives restarts
         scheduler.add_job(
             run_self_audit,
             trigger="cron",

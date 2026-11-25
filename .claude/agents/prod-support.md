@@ -153,7 +153,7 @@ curl -sG 'http://localhost:3100/loki/api/v1/query_range' \
 
 ## What to NEVER Log
 
-Loki keeps 30 days and the nightly self-audit (F-014) feeds WARNING+ lines to the LLM and a Pushover digest — anything logged is effectively copied twice. At **any** level, DEBUG included:
+Loki keeps 30 days and the nightly self-audit (F-014) feeds WARNING+ lines to the LLM and a Pushover digest; its investigator can read any Loki line from the last 24 h and, with `SELF_AUDIT_CLAUDE_API_KEY` set, sends them to Anthropic's API — anything logged is effectively copied off the log store. At **any** level, DEBUG included:
 
 - Secrets: API keys, HA tokens, Google OAuth tokens, calendar `htmlLink`s
 - User/personal content:

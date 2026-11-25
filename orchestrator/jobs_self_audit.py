@@ -766,6 +766,43 @@ def _save_audit_report_sync(
 
 # --- Digest (Pushover + dashboard inbox) -------------------------------------
 
+_CLAUDE_SKIP_TEXT = {
+    "cap": "monthly Claude cap reached",
+    "daily_cap": "daily Claude run limit reached",
+    "auth": "Claude key rejected",
+    "billing": "Claude credit or spend limit used up",
+    "model": "Claude model id not found",
+    "rate_limit": "Claude rate-limited",
+    "server": "Claude API down",
+    "connection": "Claude API unreachable",
+    "bad_request": "Claude request rejected",
+    "refusal": "Claude declined",
+}
+
+
+def _investigator_note(inv: dict[str, Any]) -> str:
+    """One digest line saying who investigated. Built from our own labels and
+    numbers only (it goes to Pushover's cloud)."""
+    from orchestrator.self_investigator import claude_spend_this_month
+
+    skipped = inv.get("claude_skipped")
+    why = _CLAUDE_SKIP_TEXT.get(str(skipped), "Claude unavailable") if skipped else ""
+    if inv.get("result") == "brain_asleep":
+        return (
+            f"{why} and Helios asleep — log digest only" if why else "Helios asleep — log digest only, no investigation"
+        )
+    if inv.get("backend") == "claude":
+        spent = claude_spend_this_month()
+        money = (
+            f" · ~${spent:.2f} of ${settings.self_audit_claude_monthly_usd:g} this month" if spent is not None else ""
+        )
+        if inv.get("result") == "error":
+            return f"Claude investigation failed partway{money}"
+        return f"Investigated by Claude{money}"
+    if why:
+        return f"{why} — investigated by the local brain"
+    return ""
+
 
 def _source_problems(groups: list[dict[str, Any]] | None) -> str:
     if not groups:
@@ -1106,8 +1143,8 @@ async def _run_self_audit_locked(trigger: str, alert: dict[str, Any]) -> dict[st
             alert=alert,
         )
         raw_diagnosis = inv.get("report")
+        note = _investigator_note(inv)
         if inv.get("result") == "brain_asleep":
-            note = "Helios asleep — log digest only, no investigation"
             reason = "brain_asleep"
     else:
         prompt = _build_audit_prompt(clusters, lookback, groups)

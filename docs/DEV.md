@@ -53,6 +53,8 @@ docker logs brain-orchestrator --tail 50 -f
 # the data/ mount is needed by test_palace_system_wing.py, which reads data/palace.yaml)
 docker run --rm -v "$PWD/orchestrator:/app/orchestrator:ro" -v "$PWD/scripts:/app/scripts:ro" -v "$PWD/data:/app/data_repo:ro" -w /app gateway_nerves-orchestrator \
   sh -c "pip install -q pytest pytest-asyncio respx && python -m pytest -o asyncio_mode=auto -p no:cacheprovider orchestrator/tests -q"
+# The image carries the deployed requirements.txt: a branch that adds a package (e.g. anthropic + httpx2/httpcore2,
+# 2026-11-24) must add its pinned lines to that pip install until it deploys, or collection fails on the import.
 
 # Rebuild the frontend
 docker compose up -d --build --force-recreate frontend
