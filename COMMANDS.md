@@ -330,9 +330,30 @@ python3 -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode())'
 docker run --rm -it -v <dir>:/config -v <dir>/.cache:/cache ghcr.io/esphome/esphome:stable \
   -s name <node> run atom-echo-jess.yaml --device <ip>
 
-# After changing any VOICE_SATELLITE_* in .env (VOICE_SATELLITE_DEVICES: no spaces) — check it sources, then recreate
+# After changing any VOICE_SATELLITE_* / VOICE_MATCH_* in .env (VOICE_SATELLITE_DEVICES, VOICE_MATCH_DEVICES: no spaces) — check it sources, then recreate
 bash -c 'set -euo pipefail; set -a; source .env' && echo ok
 docker compose up -d --force-recreate orchestrator
+```
+
+### Voice match (satellite TV filter; `docs/VOICE_AND_TTS.md` → Voice match)
+```bash
+# Once after the deploy (and after a restore): download the pinned speaker model
+docker exec brain-orchestrator python -m orchestrator.voice_match fetch
+
+# Enroll (bridge OFF first: VOICE_SATELLITE_ENABLED=false + recreate; record needs the device's one connection)
+docker exec -it brain-orchestrator python -m orchestrator.voice_match record <device-node-name> me1   # then me2, me3; ~20 s each
+docker exec brain-orchestrator python -m orchestrator.voice_match enroll owner me1 me2 me3           # >= 0.5 per clip = good; deletes the clips (--keep-clips to keep)
+
+# Voiceprints: list ids / delete one / score a recorded clip at the current threshold
+docker exec brain-orchestrator python -m orchestrator.voice_match list
+docker exec brain-orchestrator python -m orchestrator.voice_match remove <id>
+docker exec brain-orchestrator python -m orchestrator.voice_match score <clip>
+
+# Ready? Verdicts + likely false rejects per device; per-question lines (score, never who)
+curl -s localhost:9090/api/v1/query --data-urlencode 'query=bgw_satellite_voice_match_ready' | jq '.data.result'
+curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (device,result)(increase(bgw_satellite_voice_match_total[24h]))' | jq '.data.result'
+curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (device)(increase(bgw_satellite_voice_match_retry_total[24h]))' | jq '.data.result'
+docker logs brain-orchestrator 2>&1 | grep -i "voice match" | tail -20
 ```
 
 ### Load a new voice clone (Qwen3-TTS rollback only — disabled; VoxCPM2 has no `/voices/load`, see `docs/VOICE_AND_TTS.md`)

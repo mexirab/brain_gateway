@@ -18,7 +18,7 @@ is tiny (~15 MB) and has never had a backup:
   - data/app/ subdirs    self-audits, budget summaries, imports, meal photos,
                          paperless inbox, training corpus
                          (NOT exercise_library/ — reconstructable, nor pantry_photos/ —
-                         transient; see EXCLUDE_DIRS)
+                         transient, nor voice_match/ — biometric; see EXCLUDE_DIRS)
   - data/documents/      document vault uploads (DOCUMENTS_PATH default) — the
                          original files; only their extracted text is in the DBs.
                          Covered only while DOCUMENTS_PATH stays under data/
@@ -104,6 +104,9 @@ METRICS_PATH = os.environ.get("JESS_BACKUP_METRICS_PATH", "").strip()
 # photos — re-fetch with `python -m orchestrator.exercise_library fetch`.
 # pantry_photos: transient review photos of the inside of the home, deleted on
 # commit/discard — never worth keeping in 30 rotated archives on two machines.
+# voice_match: the voiceprints are biometric (kept on this box only, never in
+# rotated archives on two machines; re-enroll after a restore) and the model
+# re-downloads (`python -m orchestrator.voice_match fetch`).
 EXCLUDE_DIRS = {
     "hf_cache",
     "backups",
@@ -111,6 +114,7 @@ EXCLUDE_DIRS = {
     "exercise_library.new",
     "exercise_library.old",
     "pantry_photos",
+    "voice_match",
 }
 EXCLUDE_DIR_PREFIXES = ("app-backup-",)
 

@@ -4,6 +4,49 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Voice satellite: voice match, a per-room TV filter (2026-11-25)
+
+Branch `feat/voice-match`. A TV or game false-woke a satellite mic and Jess answered its dialogue. On devices listed in `VOICE_MATCH_DEVICES`, the bridge now scores the captured question against enrolled voiceprints before Helios, STT and the brain. Below `VOICE_MATCH_THRESHOLD` the turn ends silently. New decision D14. It is a TV filter, **not a security control**: a recording passes, and D8 (anyone in the room has full access) stays the security assumption in every room. Detail: `docs/VOICE_AND_TTS.md` → Voice match; spec: `orchestrator/voice_match.py` module docstring.
+
+### Upgrade action
+
+- None for the merge: `VOICE_MATCH_DEVICES` is empty by default (the deploy rebuilds the orchestrator image for `kaldi-native-fbank`).
+- To turn it on for a room (owner: the TV room only): `fetch` the model, turn the bridge off, `record` three clips on that room's device, `enroll`, set `VOICE_MATCH_DEVICES`, turn the bridge back on. Steps: `docs/VOICE_AND_TTS.md` → Voice match → Set up. In that room guests and family need enrolling too.
+
+### Orchestrator
+
+- New `orchestrator/voice_match.py`: `VoiceMatcher` (WeSpeaker ResNet34-LM ONNX speaker model, CC-BY-4.0, pinned revision + sha256, hashed on every load; 80-bin Kaldi fbank via `kaldi-native-fbank`; onnxruntime on the orchestrator CPU, ~40–80 ms a question, in its own 2-thread pool, ≤ 2 calls in flight), voiceprint file (JSON, ≤ 8 ids, refused if made with another model), enrollment (leave-one-out quality check), model `fetch` (atomic, size + time capped, checksum-verified). CLI `python -m orchestrator.voice_match fetch|record|enroll|list|remove|score`.
+- `voice_satellite.py`: `_check_voice` runs right after listening ends, on the VAD's speech span. Verdicts `recognized` | `not_recognized` | `contested` | `too_short` (turned away silently; turn result `not_recognized`; the rate-limit slot is freed) | `unavailable` | `failed` (fail open: the turn goes ahead unchecked). `WakeArbiter` remembers claims another device also heard, so a turned-away claim can be `contested`. One matcher is shared by every voice-match device, and an upkeep task re-checks the model + voiceprints every 5 min. The verdict never reaches the chat call. Turn lines gain a `voice_match=…ms` stage.
+- New env vars `VOICE_MATCH_DEVICES`, `VOICE_MATCH_THRESHOLD` (0.35), `VOICE_MATCH_MODEL_PATH`, `VOICE_MATCH_VOICEPRINTS_PATH`. `validate_voice_satellite_config` counts config problems for a name that isn't a configured device, a bad threshold (falls back to 0.35), and a voiceprint path outside a `voice_match` directory (voice match stays off).
+- Known limit: one "Hey Jess" heard by two devices, and the voice-match room reports first. It may not recognize a voice from the next room, and nobody answers (`contested`).
+- `requirements.txt`: `kaldi-native-fbank==1.22.3` (exact; re-check scores before a bump), `onnxruntime>=1.17,<2` (already present through chromadb; the floor is the API used).
+
+### Privacy
+
+- Voiceprints are biometric: file 600 in a 700 directory named `voice_match`, never logged or served by an API. `scripts/backup_state.py` leaves every `voice_match/` directory out of the nightly backup (re-enroll after a restore).
+- Enrollment clips are the one exception to D9 (mic audio never written to disk): `record` writes bare-named clips to `voice_match/clips/` (600), and `enroll` deletes them after success unless `--keep-clips`.
+- Logs carry the score, scored audio length and a fixed verdict or reason, never the voiceprint id or the transcript.
+
+### Monitoring
+
+- New `bgw_satellite_voice_match_total{result,device}`, `bgw_satellite_voice_match_score{device}` (histogram), `bgw_satellite_voice_match_ready{device}` (no series when voice match is off), `bgw_satellite_voice_match_retry_total{device}` (turned away, then recognized within 30 s = likely false reject). New turn result `not_recognized`.
+- New quiet alert `VoiceMatchFailing` (per device: ready 0, or ≥ 2 `unavailable`/`failed` in 1 h, for 10 m; `pushover-quiet`, 24h repeat, same route as `VoiceSatelliteDisconnected`). `VoiceSatelliteConfigInvalid` text covers the `VOICE_MATCH_*` problems.
+- Grafana "Voice Satellite": a ready line in Connected, new "Voice Match Results (24h)" and "Voice Match Scores by Band (24h)", false-wake series includes `not_recognized`.
+
+### Measured
+
+- Once, 2026-11-25 (one owner, one TV show, one mic, read-aloud speech). At 0.35, on 2–3 s of speech: owner 98–100 % recognized, owner talking over the TV 92–100 %, TV alone 0 %; on 1.5 s pieces 95 / 84 / 0 %. TV highest score 0.30.
+
+### Tests
+
+- New `orchestrator/tests/test_voice_match.py` (81 tests: speech span, voiceprint file, matcher + pool, enrollment, CLI, `fetch` via respx, `record` with a stubbed client; two real-model tests run only with `VOICE_MATCH_TEST_MODEL`). `test_voice_satellite.py`: 44 new (verdicts, fail-open, contested claims, rate limit, the verdict never reaching the chat call, upkeep, config). `test_backup_state.py`: `voice_match/` stays out of the archive.
+
+### Docs
+
+- `CLAUDE.md`, `docs/VOICE_AND_TTS.md` (Voice match, D14, D9 exception, False wakes, Known limits), `docs/ENV_VARS.md`, `docs/BACKUP.md`, `docs/PRIVACY.md`, `docs/JESS_QUICK_START.md`, `monitoring/README.md`, `TECHNICAL_REFERENCE.md`, `COMMANDS.md`, `ROADMAP.md`, `.env.example`.
+
+---
+
 ## [Unreleased] — Dashboard chat mic button: near-silence fix (2026-11-25)
 
 Branch `fix/chat-mic-button`. Frontend only. On an iPhone the `/chat` mic button started recording near-silence (one recording transcribed to nothing, another to one word) and on an empty transcript silently went back to the mic icon. Call mode and the server were fine. Root cause not confirmed (likely an iOS change).

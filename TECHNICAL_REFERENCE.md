@@ -102,7 +102,7 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 | GET | `/api/announcements/history` | Recent announcement history (optional `?limit=`, `?type=`) |
 | GET | `/api/announcements/stats` | Success rates, per-speaker breakdown, latency |
 
-**Voice satellite** (ATOM Echo → Jess, `orchestrator/voice_satellite.py`, default off): no HTTP route. The orchestrator connects out to each device's ESPHome native API (:6053; one or more devices, one per room) and calls `cloud_brain.chat(..., stream=False, is_voice=True)` in-process. Replies go through `_announce_voice(..., announcement_type="voice_reply", record_history=False, …)`, so they never appear in `/api/announcements/history` or `/stats`; the Cast speaker fetches the reply from `/api/audio/{filename}` (a reply over 200 chars as a progressive `s-<token>.wav` stream). Flags of `_announce_voice`: `docs/VOICE_AND_TTS.md` → TTS Pacing. Everything else: `docs/VOICE_AND_TTS.md` → Voice satellite.
+**Voice satellite** (ATOM Echo → Jess, `orchestrator/voice_satellite.py`, default off): no HTTP route. The orchestrator connects out to each device's ESPHome native API (:6053; one or more devices, one per room) and calls `cloud_brain.chat(..., stream=False, is_voice=True)` in-process. Replies go through `_announce_voice(..., announcement_type="voice_reply", record_history=False, …)`, so they never appear in `/api/announcements/history` or `/stats`; the Cast speaker fetches the reply from `/api/audio/{filename}` (a reply over 200 chars as a progressive `s-<token>.wav` stream). Flags of `_announce_voice`: `docs/VOICE_AND_TTS.md` → TTS Pacing. Voice match (D14, `orchestrator/voice_match.py`, per room `VOICE_MATCH_DEVICES`): no route either. The question is scored in-process before Helios/STT/brain, and the verdict is never passed to `cloud_brain.chat`. Operator CLI `python -m orchestrator.voice_match fetch|record|enroll|list|remove|score`. Voiceprints are never served by any API. Everything else: `docs/VOICE_AND_TTS.md` → Voice satellite / Voice match.
 
 ### Reminders & Focus
 
@@ -1299,6 +1299,7 @@ See `.env.example` for full list. Key vars:
 | RESEARCH_HELPER_ENABLED, RESEARCH_CONTEXT7_API_KEY | `look_it_up` research helper — see `docs/ENV_VARS.md` → Research helper |
 | CODER_* | Coder box gate (default off; `CODER_SUBNET`/`CODER_GATE_ADDRESS`/`CODER_BOX_RANGE` also read by compose) — see `docs/ENV_VARS.md` → Coder box gate |
 | VOICE_SATELLITE_* | Voice satellite (ATOM Echo → Jess; device list `name@ip=speaker,…` or single-device host IP / node name / room speaker, shared port + API key, Helios wait, progressive TTS) — see `docs/ENV_VARS.md` → Voice satellite |
+| VOICE_MATCH_* | Voice match for the satellite (`VOICE_MATCH_DEVICES` node names, empty = off; `VOICE_MATCH_THRESHOLD` 0.35; model + voiceprint paths, which must sit in a `voice_match` dir) — see `docs/ENV_VARS.md` → Voice satellite |
 | DEPLOY_DRIFT_REPO, DEPLOY_MARKER_PATH, DEPLOY_DRIFT_GITHUB_TOKEN | Deploy drift check (`DeployDrift`; empty repo = off) — see `docs/ENV_VARS.md` → Deploy drift |
 
 ## External APIs

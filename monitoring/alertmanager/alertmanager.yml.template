@@ -175,10 +175,11 @@ route:
         - alertname="AnnouncementSpeakerUnavailable"
       receiver: "pushover-quiet"
       repeat_interval: 24h
-    # Voice satellite offline (an unplugged device stays offline for days) or
-    # a config problem (stays until .env is fixed) — once a day is enough.
+    # Voice satellite offline (an unplugged device stays offline for days), a
+    # config problem (stays until .env is fixed) or voice match not working
+    # (stays until the model is fetched / voices enrolled) — once a day is enough.
     - matchers:
-        - alertname=~"VoiceSatelliteDisconnected|VoiceSatelliteConfigInvalid"
+        - alertname=~"VoiceSatelliteDisconnected|VoiceSatelliteConfigInvalid|VoiceMatchFailing"
       receiver: "pushover-quiet"
       repeat_interval: 24h
     # MovementSensorFailing: the phone's movement sensor can't be read — a

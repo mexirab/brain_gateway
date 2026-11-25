@@ -11198,6 +11198,18 @@
           "range": true,
           "instant": false,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "max by (device) (bgw_satellite_voice_match_ready)",
+          "legendFormat": "{{device}} voice match ready",
+          "range": true,
+          "instant": false,
+          "refId": "B"
         }
       ],
       "fieldConfig": {
@@ -11256,7 +11268,7 @@
           "sort": "desc"
         }
       },
-      "description": "1 = the bridge holds the device's API connection. No data = VOICE_SATELLITE_ENABLED is off.",
+      "description": "1 = the bridge holds the device's API connection. No data = VOICE_SATELLITE_ENABLED is off. voice match ready (VOICE_MATCH_DEVICES rooms only): 1 = model + voiceprints loaded, 0 = that room answers any voice (alert VoiceMatchFailing).",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -11462,8 +11474,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by (wake_word) (increase(bgw_satellite_turn_total{result=~\"no_speech|empty_transcript\"}[24h]))",
-          "legendFormat": "{{wake_word}} nothing said",
+          "expr": "sum by (wake_word) (increase(bgw_satellite_turn_total{result=~\"no_speech|empty_transcript|not_recognized\"}[24h]))",
+          "legendFormat": "{{wake_word}} nothing said / not a known voice",
           "range": true,
           "instant": false,
           "refId": "B"
@@ -11525,7 +11537,7 @@
           "sort": "desc"
         }
       },
-      "description": "A wake followed by nothing said is almost always a false wake.",
+      "description": "A wake followed by nothing said is almost always a false wake. In voice-match rooms a TV or game wake ends as not_recognized (not a known voice) instead \u2014 a guest does too.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -11891,6 +11903,214 @@
       "id": 154
     },
     {
+      "type": "timeseries",
+      "title": "Voice Match Results (24h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (device, result) (increase(bgw_satellite_voice_match_total[24h]))",
+          "legendFormat": "{{device}} {{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (device) (increase(bgw_satellite_voice_match_retry_total[24h]))",
+          "legendFormat": "{{device}} retried",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Rooms in VOICE_MATCH_DEVICES only (no data = voice match off). recognized = an enrolled voice, answered. Turned away silently: not_recognized (TV, game, a guest), contested (another device heard the wake word too \u2014 maybe the owner from the next room), too_short. unavailable / failed = it could not check, so the turn went ahead unchecked (fail open; alert VoiceMatchFailing). retried = turned away, then recognized within 30 s: most likely a false reject of the owner \u2014 a rising count means the threshold is too strict for that room.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 344
+      },
+      "id": 155
+    },
+    {
+      "type": "timeseries",
+      "title": "Voice Match Scores by Band (24h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (device) (increase(bgw_satellite_voice_match_score_bucket{le=\"0.25\"}[24h]))",
+          "legendFormat": "{{device}} < 0.25 (clearly not enrolled)",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (device) (increase(bgw_satellite_voice_match_score_bucket{le=\"0.45\"}[24h])) - sum by (device) (increase(bgw_satellite_voice_match_score_bucket{le=\"0.25\"}[24h]))",
+          "legendFormat": "{{device}} 0.25-0.45 (near the threshold)",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (device) (increase(bgw_satellite_voice_match_score_count[24h])) - sum by (device) (increase(bgw_satellite_voice_match_score_bucket{le=\"0.45\"}[24h]))",
+          "legendFormat": "{{device}} > 0.45 (clearly enrolled)",
+          "range": true,
+          "instant": false,
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "How many questions scored in each band (1 = same voice as an enrolled one). Measured: owner ~0.4-0.8, TV <= 0.3; VOICE_MATCH_THRESHOLD (default 0.35) sits in the middle band. A big middle band = the threshold decides a lot of questions \u2014 check retried and the per-question `voice match ... score=` lines in Loki before moving it.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 344
+      },
+      "id": 156
+    },
+    {
       "type": "row",
       "title": "Telegram Bot",
       "collapsed": false,
@@ -11899,9 +12119,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 344
+        "y": 352
       },
-      "id": 155
+      "id": 157
     },
     {
       "type": "timeseries",
@@ -11984,9 +12204,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 345
+        "y": 353
       },
-      "id": 156
+      "id": 158
     },
     {
       "type": "timeseries",
@@ -12070,9 +12290,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 345
+        "y": 353
       },
-      "id": 157
+      "id": 159
     },
     {
       "type": "timeseries",
@@ -12156,9 +12376,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 345
+        "y": 353
       },
-      "id": 158
+      "id": 160
     },
     {
       "type": "row",
@@ -12169,9 +12389,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 353
+        "y": 361
       },
-      "id": 159
+      "id": 161
     },
     {
       "type": "stat",
@@ -12237,9 +12457,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 354
+        "y": 362
       },
-      "id": 160
+      "id": 162
     },
     {
       "type": "stat",
@@ -12305,9 +12525,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 354
+        "y": 362
       },
-      "id": 161
+      "id": 163
     },
     {
       "type": "timeseries",
@@ -12391,9 +12611,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 354
+        "y": 362
       },
-      "id": 162
+      "id": 164
     },
     {
       "type": "stat",
@@ -12459,9 +12679,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 354
+        "y": 362
       },
-      "id": 163
+      "id": 165
     },
     {
       "type": "row",
@@ -12472,9 +12692,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 362
+        "y": 370
       },
-      "id": 164
+      "id": 166
     },
     {
       "type": "stat",
@@ -12540,9 +12760,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 363
+        "y": 371
       },
-      "id": 165
+      "id": 167
     },
     {
       "type": "timeseries",
@@ -12626,9 +12846,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 363
+        "y": 371
       },
-      "id": 166
+      "id": 168
     },
     {
       "type": "timeseries",
@@ -12712,9 +12932,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 363
+        "y": 371
       },
-      "id": 167
+      "id": 169
     },
     {
       "type": "row",
@@ -12725,9 +12945,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 371
+        "y": 379
       },
-      "id": 168
+      "id": 170
     },
     {
       "type": "stat",
@@ -12797,9 +13017,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 372
+        "y": 380
       },
-      "id": 169
+      "id": 171
     },
     {
       "type": "timeseries",
@@ -12883,9 +13103,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 372
+        "y": 380
       },
-      "id": 170
+      "id": 172
     },
     {
       "type": "timeseries",
@@ -12969,9 +13189,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 372
+        "y": 380
       },
-      "id": 171
+      "id": 173
     },
     {
       "type": "logs",
@@ -13010,9 +13230,9 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 380
+        "y": 388
       },
-      "id": 172
+      "id": 174
     },
     {
       "type": "row",
@@ -13023,9 +13243,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 388
+        "y": 396
       },
-      "id": 173
+      "id": 175
     },
     {
       "type": "timeseries",
@@ -13109,9 +13329,9 @@
         "h": 8,
         "w": 4,
         "x": 0,
-        "y": 389
+        "y": 397
       },
-      "id": 174
+      "id": 176
     },
     {
       "type": "timeseries",
@@ -13219,9 +13439,9 @@
         "h": 8,
         "w": 4,
         "x": 4,
-        "y": 389
+        "y": 397
       },
-      "id": 175
+      "id": 177
     },
     {
       "type": "timeseries",
@@ -13317,9 +13537,9 @@
         "h": 8,
         "w": 4,
         "x": 8,
-        "y": 389
+        "y": 397
       },
-      "id": 176
+      "id": 178
     },
     {
       "type": "logs",
@@ -13358,9 +13578,9 @@
         "h": 8,
         "w": 4,
         "x": 12,
-        "y": 389
+        "y": 397
       },
-      "id": 177
+      "id": 179
     },
     {
       "type": "timeseries",
@@ -13444,9 +13664,9 @@
         "h": 8,
         "w": 4,
         "x": 16,
-        "y": 389
+        "y": 397
       },
-      "id": 178
+      "id": 180
     },
     {
       "type": "timeseries",
@@ -13530,9 +13750,9 @@
         "h": 8,
         "w": 4,
         "x": 20,
-        "y": 389
+        "y": 397
       },
-      "id": 179
+      "id": 181
     },
     {
       "type": "timeseries",
@@ -13628,9 +13848,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 397
+        "y": 405
       },
-      "id": 180
+      "id": 182
     },
     {
       "type": "timeseries",
@@ -13738,9 +13958,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 397
+        "y": 405
       },
-      "id": 181
+      "id": 183
     },
     {
       "type": "stat",
@@ -13810,9 +14030,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 397
+        "y": 405
       },
-      "id": 182
+      "id": 184
     },
     {
       "type": "row",
@@ -13823,9 +14043,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 405
+        "y": 413
       },
-      "id": 183
+      "id": 185
     },
     {
       "type": "stat",
@@ -13886,9 +14106,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 406
+        "y": 414
       },
-      "id": 184
+      "id": 186
     },
     {
       "type": "timeseries",
@@ -13972,9 +14192,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 406
+        "y": 414
       },
-      "id": 185
+      "id": 187
     },
     {
       "type": "stat",
@@ -14035,9 +14255,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 406
+        "y": 414
       },
-      "id": 186
+      "id": 188
     },
     {
       "type": "timeseries",
@@ -14125,9 +14345,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 414
+        "y": 422
       },
-      "id": 187
+      "id": 189
     },
     {
       "type": "stat",
@@ -14193,9 +14413,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 414
+        "y": 422
       },
-      "id": 188
+      "id": 190
     },
     {
       "type": "stat",
@@ -14261,9 +14481,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 414
+        "y": 422
       },
-      "id": 189
+      "id": 191
     },
     {
       "type": "stat",
@@ -14329,9 +14549,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 422
+        "y": 430
       },
-      "id": 190
+      "id": 192
     },
     {
       "type": "timeseries",
@@ -14415,9 +14635,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 422
+        "y": 430
       },
-      "id": 191
+      "id": 193
     },
     {
       "type": "timeseries",
@@ -14525,9 +14745,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 422
+        "y": 430
       },
-      "id": 192
+      "id": 194
     },
     {
       "type": "stat",
@@ -14589,9 +14809,9 @@
         "h": 5,
         "w": 6,
         "x": 0,
-        "y": 430
+        "y": 438
       },
-      "id": 193
+      "id": 195
     },
     {
       "type": "stat",
@@ -14661,9 +14881,9 @@
         "h": 5,
         "w": 6,
         "x": 6,
-        "y": 430
+        "y": 438
       },
-      "id": 194
+      "id": 196
     },
     {
       "type": "timeseries",
@@ -14747,9 +14967,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 430
+        "y": 438
       },
-      "id": 195
+      "id": 197
     },
     {
       "type": "timeseries",
@@ -14833,9 +15053,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 430
+        "y": 438
       },
-      "id": 196
+      "id": 198
     },
     {
       "type": "row",
@@ -14846,9 +15066,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 438
+        "y": 446
       },
-      "id": 197
+      "id": 199
     },
     {
       "type": "stat",
@@ -14910,9 +15130,9 @@
         "h": 6,
         "w": 4,
         "x": 0,
-        "y": 439
+        "y": 447
       },
-      "id": 198
+      "id": 200
     },
     {
       "type": "stat",
@@ -14984,9 +15204,9 @@
         "h": 6,
         "w": 4,
         "x": 4,
-        "y": 439
+        "y": 447
       },
-      "id": 199
+      "id": 201
     },
     {
       "type": "stat",
@@ -15062,9 +15282,9 @@
         "h": 6,
         "w": 4,
         "x": 8,
-        "y": 439
+        "y": 447
       },
-      "id": 200
+      "id": 202
     },
     {
       "type": "stat",
@@ -15144,9 +15364,9 @@
         "h": 6,
         "w": 4,
         "x": 12,
-        "y": 439
+        "y": 447
       },
-      "id": 201
+      "id": 203
     },
     {
       "type": "timeseries",
@@ -15230,9 +15450,9 @@
         "h": 6,
         "w": 8,
         "x": 16,
-        "y": 439
+        "y": 447
       },
-      "id": 202
+      "id": 204
     },
     {
       "type": "row",
@@ -15243,9 +15463,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 445
+        "y": 453
       },
-      "id": 203
+      "id": 205
     },
     {
       "type": "logs",
@@ -15284,9 +15504,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 446
+        "y": 454
       },
-      "id": 204
+      "id": 206
     },
     {
       "type": "logs",
@@ -15325,9 +15545,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 446
+        "y": 454
       },
-      "id": 205
+      "id": 207
     }
   ]
 }

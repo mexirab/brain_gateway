@@ -45,6 +45,15 @@ py-vapid==1.9.2
 # Exact pin: 44.16.1 is the newest release that accepts cryptography <45
 # (44.20+ need >=46.0.7, 46.x need >=48). Bump together with the cryptography pin.
 aioesphomeapi==44.16.1
+# Voice match (voice_match.py): Kaldi fbank features for the speaker model.
+# Exact pin (the features must match what the model was trained on), and a
+# settled release on purpose: it is a native extension inside the orchestrator
+# process. 1.22.3 (2025-10) gives scores identical to 1.23.3 on the measurement
+# clips; re-run that check (voice_match docstring) before any bump. The model
+# runs on onnxruntime, already here through chromadb; the floor is the
+# SessionOptions API voice_match uses.
+kaldi-native-fbank==1.22.3
+onnxruntime>=1.17,<2
 
 # Document processing
 PyMuPDF>=1.25,<2.0

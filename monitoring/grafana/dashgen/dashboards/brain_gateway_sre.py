@@ -1632,9 +1632,16 @@ def build() -> dict:
     satellite_row = [
         timeseries(
             "Connected",
-            [("max by (device) (bgw_satellite_connected)", "{{device}}")],
+            [
+                ("max by (device) (bgw_satellite_connected)", "{{device}}"),
+                ("max by (device) (bgw_satellite_voice_match_ready)", "{{device}} voice match ready"),
+            ],
             unit="none",
-            description="1 = the bridge holds the device's API connection. No data = VOICE_SATELLITE_ENABLED is off.",
+            description=(
+                "1 = the bridge holds the device's API connection. No data = VOICE_SATELLITE_ENABLED is off. "
+                "voice match ready (VOICE_MATCH_DEVICES rooms only): 1 = model + voiceprints loaded, 0 = that "
+                "room answers any voice (alert VoiceMatchFailing)."
+            ),
         ),
         timeseries(
             "Connect Attempts by Result (1h)",
@@ -1657,12 +1664,15 @@ def build() -> dict:
                     "{{wake_word}} wakes",
                 ),
                 (
-                    'sum by (wake_word) (increase(bgw_satellite_turn_total{result=~"no_speech|empty_transcript"}[24h]))',
-                    "{{wake_word}} nothing said",
+                    'sum by (wake_word) (increase(bgw_satellite_turn_total{result=~"no_speech|empty_transcript|not_recognized"}[24h]))',
+                    "{{wake_word}} nothing said / not a known voice",
                 ),
             ],
             unit="none",
-            description="A wake followed by nothing said is almost always a false wake.",
+            description=(
+                "A wake followed by nothing said is almost always a false wake. In voice-match rooms a TV "
+                "or game wake ends as not_recognized (not a known voice) instead — a guest does too."
+            ),
         ),
         timeseries(
             "How Listening Ended (24h)",
@@ -1717,12 +1727,56 @@ def build() -> dict:
                 "the TTS is slower than speech (contention with other TTS callers, or a slower voice)."
             ),
         ),
+        timeseries(
+            "Voice Match Results (24h)",
+            [
+                ("sum by (device, result) (increase(bgw_satellite_voice_match_total[24h]))", "{{device}} {{result}}"),
+                ("sum by (device) (increase(bgw_satellite_voice_match_retry_total[24h]))", "{{device}} retried"),
+            ],
+            unit="none",
+            description=(
+                "Rooms in VOICE_MATCH_DEVICES only (no data = voice match off). recognized = an enrolled voice, "
+                "answered. Turned away silently: not_recognized (TV, game, a guest), contested (another device "
+                "heard the wake word too — maybe the owner from the next room), too_short. unavailable / failed "
+                "= it could not check, so the turn went ahead unchecked (fail open; alert VoiceMatchFailing). "
+                "retried = turned away, then recognized within 30 s: most likely a false reject of the owner — "
+                "a rising count means the threshold is too strict for that room."
+            ),
+        ),
+        timeseries(
+            "Voice Match Scores by Band (24h)",
+            [
+                (
+                    'sum by (device) (increase(bgw_satellite_voice_match_score_bucket{le="0.25"}[24h]))',
+                    "{{device}} < 0.25 (clearly not enrolled)",
+                ),
+                (
+                    'sum by (device) (increase(bgw_satellite_voice_match_score_bucket{le="0.45"}[24h])) - '
+                    'sum by (device) (increase(bgw_satellite_voice_match_score_bucket{le="0.25"}[24h]))',
+                    "{{device}} 0.25-0.45 (near the threshold)",
+                ),
+                (
+                    "sum by (device) (increase(bgw_satellite_voice_match_score_count[24h])) - "
+                    'sum by (device) (increase(bgw_satellite_voice_match_score_bucket{le="0.45"}[24h]))',
+                    "{{device}} > 0.45 (clearly enrolled)",
+                ),
+            ],
+            unit="none",
+            description=(
+                "How many questions scored in each band (1 = same voice as an enrolled one). Measured: owner "
+                "~0.4-0.8, TV <= 0.3; VOICE_MATCH_THRESHOLD (default 0.35) sits in the middle band. A big "
+                "middle band = the threshold decides a lot of questions — check retried and the per-question "
+                "`voice match ... score=` lines in Loki before moving it."
+            ),
+        ),
     ]
     row, y = grid_row(satellite_row[:3], y, heights=[8, 8, 8])
     panels.extend(row)
     row, y = grid_row(satellite_row[3:6], y, heights=[8, 8, 8])
     panels.extend(row)
-    row, y = grid_row(satellite_row[6:], y, heights=[8, 8])
+    row, y = grid_row(satellite_row[6:8], y, heights=[8, 8])
+    panels.extend(row)
+    row, y = grid_row(satellite_row[8:], y, heights=[8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Telegram Bot
