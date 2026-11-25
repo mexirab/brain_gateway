@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { EnergyVad, rmsOf } from '@/lib/vad';
-import { pickRecorderMime, transcribe, STTUnavailableError } from '@/lib/stt';
+import { MIC_CONSTRAINTS, pickRecorderMime, transcribe, STTUnavailableError } from '@/lib/stt';
 import { setAudioSessionType, type AudioSessionType } from '@/lib/audio-session';
 
 /**
@@ -43,13 +43,6 @@ const EMPTY_BACKOFF_MAX_MS = 5_000;
 const IDLE_CALL_END_MS = 5 * 60_000;
 // How long iOS gets to resume an interrupted AudioContext (call/Siri/alarm).
 const INTERRUPT_GRACE_MS = 1_500;
-// While the mic is open iOS runs the whole audio session in "phone call"
-// mode (voice processing): Jess's reply sounds like a walkie-talkie, with
-// static/pops. So the mic is released as soon as an utterance is recorded and
-// re-acquired after her reply — she then plays through the normal media path.
-const MIC_CONSTRAINTS: MediaStreamConstraints = {
-  audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-};
 
 interface WakeLockSentinelLike { release: () => Promise<void> }
 
@@ -124,7 +117,14 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
     });
   }, []);
 
-  /** Close the mic (iOS leaves "phone call" audio mode once nothing captures). */
+  /**
+   * Close the mic (iOS leaves "phone call" audio mode once nothing captures).
+   * While the mic is open (MIC_CONSTRAINTS, voice processing on) iOS runs the
+   * whole audio session in "phone call" mode: Jess's reply sounds like a
+   * walkie-talkie, with static/pops. So the mic is released as soon as an
+   * utterance is recorded and re-acquired after her reply — she then plays
+   * through the normal media path.
+   */
   const releaseMic = useCallback((next: AudioSessionType = 'playback') => {
     streamRef.current?.getTracks().forEach((t) => { t.onended = null; t.stop(); });
     streamRef.current = null;

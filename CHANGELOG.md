@@ -4,6 +4,28 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Dashboard chat mic button: near-silence fix (2026-11-25)
+
+Branch `fix/chat-mic-button`. Frontend only. On an iPhone the `/chat` mic button started recording near-silence (one recording transcribed to nothing, another to one word) and on an empty transcript silently went back to the mic icon. Call mode and the server were fine. Root cause not confirmed (likely an iOS change).
+
+### Frontend
+- `hooks/useVoiceRecorder.ts` opens the mic like call mode: audio session `play-and-record` before `getUserMedia` with `MIC_CONSTRAINTS` (moved to `lib/stt.ts`, shared with `useVoiceCall.ts`); back to `auto` on release, before the upload.
+- Never fails silently: own on-screen message for nothing heard ("Didn't catch anything"), nothing recorded, mic muted by the phone, recording stopped on its own, page hidden, 3-minute limit, no stop event within 3 s (with nothing recorded), mic not open within 20 s. Dropped recordings are never uploaded.
+- Screen wake lock while recording; mic released on unmount; a second tap while the mic opens is ignored.
+- `[mic]` `console.warn` diagnostics (Safari Web Inspector), numbers only: open delay, track settings, session type/state, per-stop duration/bytes/MIME/track state/mute count, transcript length, transcribe error message.
+- `ChatInput.tsx`: reply-audio unlock moved from the mic's start tap to its stop tap (after `recorder.stop()`; an unconfirmed suspect — call mode still unlocks on start). "Opening the mic…" state (placeholder, spinner, `aria-busy`); stop never greyed out while recording; Send and the call button disabled while the mic is busy; mic error text `text-sm`; pulse respects reduced motion.
+
+### Monitoring
+- Grafana "Dashboard STT Outcomes" description: `empty` from the mic button = near-silence; recordings dropped before upload never show there.
+
+### Tests
+- New `frontend/src/hooks/useVoiceRecorder.test.tsx`, `frontend/src/components/chat/ChatInput.test.tsx`.
+
+### Docs
+- `docs/VOICE_AND_TTS.md` (new Mic button paragraph, iOS autoplay, known limits), `docs/FRONTEND.md`, `docs/JESS_QUICK_START.md`.
+
+---
+
 ## [Unreleased] — Test suite streamlined (2026-11-25)
 
 Branch `chore/streamline-tests`. `orchestrator/tests/`: 165 → 151 test files, ~91k → ~79k lines, ~9,500 → 9,185 tests, all passing. No behavior change. Conventions: `docs/DEV.md` → Writing tests.

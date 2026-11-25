@@ -472,11 +472,27 @@ The dashboard `/chat` page speaks Jess's replies, including on iOS Safari (needs
 
 **Flow:** streamed reply → `lib/speech-text.ts` (strip code blocks, inline code, URLs, link targets, markdown, tables, emoji, lone surrogates; split into sentences as they complete; merge <12-char fragments; `splitLong()` cuts any segment over 400 chars — after a comma/semicolon/em dash past a third of the window, else at a space, else a hard cut that never splits a surrogate pair — so each request stays under the backend cap; spoken budget `SPEECH_MAX_CHARS` = 1200 chars (same as Telegram `TELEGRAM_VOICE_REPLY_MAX_CHARS`), then "The rest is on screen.") → `lib/speech-queue.ts` (per-segment `POST /api/tts/synthesize` while still streaming, ≤2 in flight per tab, ordered playback) → `hooks/useTTSPlayback.ts`.
 
-**iOS autoplay:** WebKit rejects `play()` that runs seconds after the tap (`NotAllowedError` — the old hook swallowed it, so no audio on iPhone). The hook keeps ONE `HTMLAudioElement`, unlocks it by playing a tiny silent WAV synchronously inside the send/mic/speaker-toggle/replay tap, and reuses it for every clip.
+**iOS autoplay:** WebKit rejects `play()` that runs seconds after the tap (`NotAllowedError` — the old hook swallowed it, so no audio on iPhone). The hook keeps ONE `HTMLAudioElement`, unlocks it by playing a tiny silent WAV synchronously inside the send/mic-stop/call/speaker-toggle/replay tap, and reuses it for every clip. The mic button unlocks on its stop tap, right after `recorder.stop()`, not its start tap, so nothing plays while iOS opens the mic (an unconfirmed suspect, see Mic button); call mode still unlocks on its start tap.
 
 **When it speaks:**
 - Mic-sent message → always spoken reply (walkie-talkie), even with the speaker toggle off.
 - Typed message → follows the speaker toggle (localStorage `tts_enabled`, per device, default off).
+
+**Mic button (`hooks/useVoiceRecorder.ts`, push-to-talk):** tap to record, tap again to transcribe. Opens the mic the way call mode does: `navigator.audioSession.type` = `play-and-record` before `getUserMedia` with `MIC_CONSTRAINTS` (`lib/stt.ts`, shared with call mode: echo cancellation, noise suppression, auto gain); releasing the mic sets `auto` before the upload, so the reply plays through the normal media path. While the mic opens: "Opening the mic…" placeholder + spinner, a second tap is ignored. Send and the call button are disabled while the mic is busy (opening, recording, transcribing); stop is never greyed out while recording. Screen wake lock while recording (auto-lock would hide the page). Mic released on unmount.
+
+Never fails silently; each failure shows its own message under the input:
+
+| Case | Uploaded? |
+|------|-----------|
+| Empty transcript ("Didn't catch anything"; "your phone muted the microphone" if the track was muted while recording) | yes |
+| Nothing recorded (0 bytes) | no |
+| Browser ended the recording on its own | no (dropped) |
+| Page hidden mid-recording or while the mic opened | no (dropped) |
+| 3-minute limit (`MAX_RECORDING_MS`) | no (dropped) |
+| No stop event within 3 s and nothing recorded ("didn't finish") | no |
+| Mic didn't open within 20 s (`MIC_OPEN_TIMEOUT_MS`) | no |
+
+Plus the existing permission / https / no mic / mic busy / unsupported / Helios asleep / transcription failed messages. **Diagnostics:** `[mic]` `console.warn` lines (Safari Web Inspector), numbers only, never audio or text: tap → recorder start in ms, track settings, audio session type/state; per stop: duration, bytes, MIME type, track state, mute count; transcript length on success; error message only on a transcribe failure.
 
 **Voice mode (backend):** thinking on voice turns is controlled by `VOICE_THINKING_ENABLED` (default `false`; read at process start, change with `docker compose up -d --force-recreate orchestrator` — see `docs/ENV_VARS.md`). The startup log shows it: `CloudBrain initialized (… voice_thinking=…)`. **Live deployment: `true` since 2026-10-24** — required by the Qwen3.8-Flash-Next brain (see Why the switch); the 27B rollback runs with `false`.
 
@@ -504,21 +520,23 @@ The dashboard `/chat` page speaks Jess's replies, including on iOS Safari (needs
 
 **Metrics:** `bgw_dashboard_tts_total{result}` (`ok|unreachable|timeout|upstream_error|not_configured|bad_request|too_long`, pre-initialized). `bgw_voice_tts_seconds` observes SUCCESSFUL synth only, fed by `/v1/audio/speech` and `/api/tts/synthesize` (one sample per segment; buckets extend to 15 s and 20 s). Grafana TTS Synthesis row (`brain_gateway_sre.py`): "Dashboard TTS Outcomes" (replaced "TTS Call Rate"), "TTS Sentences (24h)" (was "TTS Calls (24h)"); TTS latency panel thresholds 3 s yellow / 6 s red (per-clip median is ~2–3 s live).
 
-**Tests:** `orchestrator/tests/test_tts_synthesize_route.py`, `frontend/src/lib/speech-text.test.ts`, `frontend/src/lib/speech-queue.test.ts`.
+**Tests:** `orchestrator/tests/test_tts_synthesize_route.py`, `frontend/src/lib/speech-text.test.ts`, `frontend/src/lib/speech-queue.test.ts`, `frontend/src/hooks/useVoiceRecorder.test.tsx`, `frontend/src/components/chat/ChatInput.test.tsx`.
 
 **Known limits:**
+- Mic button near-silence (Nov 2026: on an iPhone recordings transcribed to nothing or one word, the button silently went back to the mic icon; call mode and the server were fine): root cause not confirmed, likely an iOS change. The fix copies how call mode opens the mic, and moves the unlock off the start tap (a suspect).
+- Mic-button failures before the upload never reach the server (no log, no `bgw_dashboard_stt_total` count): the on-screen message is the diagnostic. If it happens, tell Claude what it said; the `[mic]` console lines (above) give the numbers.
 - Stop / 503 cancels only the browser fetch — the orchestrator + TTS server still finish up to 2 in-flight sentences.
 - TTS server has 2 worker threads: a speaking tab can delay an announcement or Telegram voice reply by ~one sentence.
 - 500 emoji (2000 bytes) still pass the server caps (the client strips emoji anyway).
 - TTS unreachable (the Jupiter TTS server stopped): the first sentence waits for the connect failure (typically a few seconds) before "voice is offline".
 - ElevenLabs/OpenAI TTS backends: auto-spoken replies are sent to that provider.
-- iOS behaviour verified only in Chromium with an injected iOS-like per-element `play()` policy, not yet on a real iPhone.
+- iOS behaviour: spoken replies and call mode confirmed on a real iPhone (2026-10-14); the Nov 2026 mic-button changes are tested only in jsdom (vitest), not yet on the phone.
 
 ## Hands-free call mode
 
 Continuous voice conversation in `/chat`: speak, Jess answers aloud, she listens again. Builds on Dashboard chat voice replies above.
 
-**Start:** the AudioLines button next to the mic — one tap creates the `AudioContext` inside the tap (iOS), opens the mic with `echoCancellation`/`noiseSuppression`/`autoGainControl`, and takes a screen wake lock. `components/chat/VoiceCallBar.tsx` replaces the input while in a call (phase label, Interrupt, End; focus moves to End, and back to the call button afterwards).
+**Start:** the AudioLines button next to the mic — one tap creates the `AudioContext` inside the tap (iOS), opens the mic with `echoCancellation`/`noiseSuppression`/`autoGainControl` (`MIC_CONSTRAINTS`, `lib/stt.ts`), and takes a screen wake lock. `components/chat/VoiceCallBar.tsx` replaces the input while in a call (phase label, Interrupt, End; focus moves to End, and back to the call button afterwards).
 
 **VAD (`lib/vad.ts`, `EnergyVad`):**
 
@@ -532,7 +550,7 @@ Continuous voice conversation in `/chat`: speak, Jess answers aloud, she listens
 
 **Loop (`hooks/useVoiceCall.ts`):** `MediaRecorder` runs while listening, restarted gaplessly every 3 s of idle (≤ ~3 s lead-in rides along with an utterance) → speech end → **mic released** (tracks stopped, source disconnected) → `POST /api/stt/transcribe` via `lib/stt.ts` → sent to chat as a voice message (reply always spoken) → waits for the spoken reply to finish (`SpeechQueue.begin()`/`beginReply()` return a completion promise) → 350 ms → `ensureRunning()` (AudioContext resume, bounded 1.5 s wait) → **mic re-acquired** (new `getUserMedia` into the call-lifetime analyser; VAD calibration kept) → listening again. No barge-in; Interrupt stops her speech, listening resumes once the reply stream finishes.
 
-**Mic released during replies:** while capture is open iOS runs the audio session in voice-processing ("phone call") mode, which made call-mode replies sound crackly/walkie-talkie (mic-button replies were clear). So the mic is open only while listening; the iOS mic indicator turning off during Jess's reply is expected, not a dropped call. Safari 16.4+: `navigator.audioSession.type` = `playback` while released, `play-and-record` before capture. The type is page-global and sticky, so call `end()` (every exit path goes through it) sets it back to `auto`; a session left on `playback` made iOS refuse capture and broke the plain mic button until reload. The mic button also sets `auto` before `getUserMedia`. Helper: `lib/audio-session.ts` (`setAudioSessionType`, no-op without the API) — anything that sets `playback` must hand back `auto`. Empty transcripts back off 1/2/4/5 s.
+**Mic released during replies:** while capture is open iOS runs the audio session in voice-processing ("phone call") mode, which made call-mode replies sound crackly/walkie-talkie (mic-button replies were clear). So the mic is open only while listening; the iOS mic indicator turning off during Jess's reply is expected, not a dropped call. Safari 16.4+: `navigator.audioSession.type` = `playback` while released, `play-and-record` before capture. The type is page-global and sticky, so call `end()` (every exit path goes through it) sets it back to `auto`; a session left on `playback` made iOS refuse capture and broke the plain mic button until reload. The mic button sets `play-and-record` before `getUserMedia` and `auto` on release (see Mic button). Helper: `lib/audio-session.ts` (`setAudioSessionType`, no-op without the API) — anything that sets `playback` must hand back `auto`. Empty transcripts back off 1/2/4/5 s.
 
 **Call ends on:** End; page hidden; 5 min with nothing said; STT 503 ("Jess can't hear right now — Helios (speech recognition) is asleep"); 3 consecutive STT failures (single failures are skipped); iOS `AudioContext` interruption not recovering within 1.5 s — checked after the first acquire and before each re-acquire ("The call was paused by your phone — tap the call button to start again."); mic can't be re-acquired after a reply ("Couldn't get the microphone back — tap the call button to start again."); mic track ended.
 

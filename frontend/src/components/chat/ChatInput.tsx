@@ -12,8 +12,9 @@ interface ChatInputProps {
   onSend: (text: string, source: SendSource, images: string[]) => void;
   disabled?: boolean;
   /**
-   * Called synchronously at the start of every send/mic tap — the only moment
-   * iOS Safari lets the page unlock audio for the spoken reply.
+   * Called synchronously inside every send tap and the mic's stop tap (not
+   * its start tap, so nothing starts playing while the mic opens). A tap is
+   * the only moment iOS Safari lets the page unlock audio for the spoken reply.
    */
   onUserGesture?: () => void;
   /** Called when recording starts, so Jess stops talking over the user. */
@@ -54,7 +55,7 @@ export default function ChatInput({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photoButtonRef = useRef<HTMLButtonElement>(null);
   const {
-    isRecording, isTranscribing, startRecording, stopRecording, error: micError, clearError: clearMicError,
+    isStarting, isRecording, isTranscribing, startRecording, stopRecording, error: micError, clearError: clearMicError,
   } = useVoiceRecorder();
 
   const handlePhotosPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -105,7 +106,8 @@ export default function ChatInput({
 
   const handleSubmit = () => {
     const trimmed = text.trim();
-    if ((!trimmed && !photos.length) || disabled || preparing) return;
+    // Never while the mic is open: the reply would disable its stop button.
+    if ((!trimmed && !photos.length) || disabled || preparing || isStarting || isRecording || isTranscribing) return;
     onUserGesture?.();
     clearMicError();
     setPhotoError(null);
@@ -132,9 +134,15 @@ export default function ChatInput({
   };
 
   const handleMicClick = async () => {
-    onUserGesture?.(); // before any await — must stay inside the tap
     if (isRecording) {
-      const result = await stopRecording();
+      // stopRecording() stops the recorder before its first await, so the
+      // unlock below still runs inside the tap, once recording is over. The
+      // start tap doesn't unlock, so nothing starts playing while iOS opens
+      // the mic: an unconfirmed suspect from when this button recorded
+      // near-silence (Nov 2026). Call mode still unlocks on its start tap.
+      const pending = stopRecording();
+      onUserGesture?.();
+      const result = await pending;
       if (result?.trim()) {
         // A spoken "what's this?" goes out with the photos waiting above.
         onSend(result.trim(), 'voice', takePhotos());
@@ -146,9 +154,14 @@ export default function ChatInput({
   };
 
   const hasDraft = text.trim().length > 0 || photos.length > 0;
-  const busyMic = isRecording || isTranscribing;
-  // Waiting for a photo to be prepared would otherwise send without it.
-  const micDisabled = disabled || isTranscribing || (preparing && !isRecording);
+  const busyMic = isStarting || isRecording || isTranscribing;
+  // Stop is never greyed out while recording. Otherwise wait for a photo being
+  // prepared (it would be sent without it). Not disabled while the mic opens
+  // (the hook ignores that tap): disabling would drop keyboard focus.
+  const micDisabled = !isRecording && (disabled || isTranscribing || preparing);
+  const micLabel = isStarting ? 'Opening the mic'
+    : isRecording ? 'Stop recording'
+      : isTranscribing ? 'Transcribing' : 'Voice input';
   const photosFull = photos.length >= MAX_CHAT_PHOTOS;
   const photoLabel = photosFull ? `Up to ${MAX_CHAT_PHOTOS} photos per message` : 'Take or attach a photo';
 
@@ -205,8 +218,12 @@ export default function ChatInput({
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           onInput={handleInput}
-          placeholder={isRecording ? 'Listening...' : photos.length ? 'Ask about it…' : 'Message Jess...'}
-          disabled={disabled || isRecording}
+          placeholder={
+            isStarting ? 'Opening the mic…'
+              : isRecording ? 'Listening...'
+                : photos.length ? 'Ask about it…' : 'Message Jess...'
+          }
+          disabled={disabled || isStarting || isRecording}
           rows={1}
           className="flex-1 min-w-0 px-3 py-2.5 bg-surface-raised/60 border border-ink/50 rounded-xl text-sm text-content-primary placeholder-content-muted focus:outline-none focus:border-brand/50 resize-none disabled:opacity-50"
         />
@@ -215,13 +232,14 @@ export default function ChatInput({
           disabled={micDisabled}
           className={`${ICON_BUTTON} ${
             isRecording
-              ? 'bg-danger/30 text-danger animate-pulse'
+              ? 'bg-danger/30 text-danger motion-safe:animate-pulse'
               : 'bg-surface-overlay/30 text-content-secondary hover:bg-surface-overlay/50 hover:text-content-primary'
           } disabled:opacity-30`}
-          title={isRecording ? 'Stop recording' : 'Voice input'}
-          aria-label={isRecording ? 'Stop recording' : 'Voice input'}
+          title={micLabel}
+          aria-label={micLabel}
+          aria-busy={isStarting || isTranscribing}
         >
-          {isTranscribing ? (
+          {isStarting || isTranscribing ? (
             <Loader2 size={18} className="animate-spin" />
           ) : (
             <Mic size={18} />
@@ -234,7 +252,7 @@ export default function ChatInput({
         {hasDraft || !onStartCall ? (
           <button
             onClick={handleSubmit}
-            disabled={disabled || preparing || !hasDraft}
+            disabled={disabled || preparing || !hasDraft || busyMic}
             className={`${ICON_BUTTON} bg-brand/20 text-brand hover:bg-brand/30 disabled:opacity-30`}
             aria-label="Send message"
           >
@@ -265,7 +283,7 @@ export default function ChatInput({
         </div>
       )}
       {micError && !isRecording && (
-        <div role="alert" className="flex items-center justify-between gap-2 mt-2 px-3 py-1 rounded-lg bg-surface-overlay/40 text-xs text-danger">
+        <div role="alert" className="flex items-center justify-between gap-2 mt-2 px-3 py-1 rounded-lg bg-surface-overlay/40 text-sm text-danger">
           <span>{micError}</span>
           <button
             onClick={clearMicError}
