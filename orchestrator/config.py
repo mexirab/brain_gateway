@@ -983,15 +983,18 @@ class Settings(BaseSettings):
             object.__setattr__(self, "helios_plug_monitor_enabled", False)
         # Entity ids are interpolated into HA REST URLs (GET /api/states/{id}),
         # so validate their format defensively even though they come from
-        # operator config — mirrors ha_integration.call_service. A malformed id
-        # disables the feature rather than emitting a broken request at runtime.
+        # operator config — same pattern as ha_guard.ENTITY_ID_RE (which
+        # ha_integration.call_service uses; not imported: ha_guard imports this
+        # module). fullmatch: match + $ would accept a trailing newline. A
+        # malformed id disables the feature rather than emitting a broken
+        # request at runtime.
         if self.helios_wake_enabled or self.helios_plug_monitor_enabled:
             import logging
             import re
 
-            _ENTITY_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
+            _ENTITY_RE = re.compile(r"[a-z_]{1,64}\.[a-z0-9_]{1,128}")
             for field_name in ("helios_plug_entity", "helios_plug_power_sensor"):
-                if not _ENTITY_RE.match(getattr(self, field_name)):
+                if not _ENTITY_RE.fullmatch(getattr(self, field_name)):
                     logging.getLogger(__name__).error(
                         "[CONFIG] %s=%r is not a valid HA entity id (domain.object); "
                         "disabling Helios wake-on-demand and plug monitoring.",

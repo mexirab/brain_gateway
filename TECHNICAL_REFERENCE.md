@@ -716,7 +716,7 @@ Rows expired, or revoked, more than 30 days ago are pruned on each mint.
 
 | Check | Refusal |
 |-------|---------|
-| `entity_id` matches `[a-z_]+\.[a-z0-9_]{1,128}`, `service` matches `[a-z_]{1,64}`, `data` is an object | format error |
+| `entity_id` matches `[a-z_]{1,64}\.[a-z0-9_]{1,128}`, `service` matches `[a-z_]{1,64}`, `data` is an object | format error |
 | Domain in `HA_LISTED_DOMAINS` (alarm etc. not callable) | "the X domain can't be controlled from chat" |
 | Not denied: `HA_TOOL_DENY_ENTITIES` globs + the Helios plug object id in any domain (power goes through `helios_power` only) | "X can't be controlled from chat" |
 | Not a device setting (skipped only for structured `/api/ha/command`, `allow_device_settings=True`): source `registry` = cached entity_category `config`/`diagnostic`; `name` = object-id word naming a camera/motion/privacy/detection/recording/LED/IR/notification-style setting (any entity — many camera integrations don't categorise their switches; `led`/`indicator` ignored for `light`, `record` for `media_player`); `member` = scene/light group whose state `entity_id` members (one level) include one | "X is a device setting and can't be changed from chat"; metric `bgw_ha_device_setting_refused_total{path=tool\|nlp,source}` |

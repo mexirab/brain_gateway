@@ -11,6 +11,8 @@ must use it besides the chat tool:
   camera/motion/LED-style name when the registry is unreadable) are refused on
   the chat and NLP paths, hidden from the tool schema, and still allowed on
   the structured dashboard call.
+- ``HomeAssistantClient.call_service``'s own entity id / service format check
+  (the only check internal callers get) refuses before any HTTP request.
 """
 
 import json
@@ -767,3 +769,54 @@ class TestDashboardListing:
         assert by_id["switch.porch_widget_toggle"]["category"] == "config"
         assert "switch.porch_cam_power_save" in by_id
         assert out["rooms_available"] is True
+
+
+# ---------------------------------------------------------------------------
+# HomeAssistantClient.call_service format check
+# ---------------------------------------------------------------------------
+
+
+class TestCallServiceFormat:
+    """Routines (``ha_action``), wind-down scenes, ambient LED and focus audio
+    call ``call_service`` without ``check_ha_call``: its format check is their
+    only one. A refused call must not make any HTTP request."""
+
+    @pytest.mark.parametrize(
+        "entity_id,service,refused",
+        [
+            pytest.param("light.kitchen", "turn_on", None, id="valid"),
+            pytest.param("scene.movie_night_2", "turn_on", None, id="valid-digits"),
+            pytest.param("media_player.living_room_speaker", "media_stop", None, id="valid-underscores"),
+            pytest.param("light." + "a" * 128, "turn_on", None, id="valid-longest"),
+            pytest.param("light.kitchen\n", "turn_on", "entity_id", id="entity-trailing-newline"),
+            pytest.param("light.kitchen", "turn_on\n", "service", id="service-trailing-newline"),
+            pytest.param("light.kitchen;curl", "turn_on", "entity_id", id="entity-semicolon"),
+            pytest.param("light.kitchen", "turn_on;x", "service", id="service-semicolon"),
+            pytest.param("Light.Kitchen", "turn_on", "entity_id", id="entity-uppercase"),
+            pytest.param("light.kitchen", "Turn_On", "service", id="service-uppercase"),
+            pytest.param("kitchen", "turn_on", "entity_id", id="missing-domain"),
+            pytest.param(".kitchen", "turn_on", "entity_id", id="empty-domain"),
+            pytest.param("light." + "a" * 129, "turn_on", "entity_id", id="entity-too-long"),
+            pytest.param("l" * 65 + ".kitchen", "turn_on", "entity_id", id="domain-too-long"),
+            pytest.param(123, "turn_on", "entity_id", id="entity-not-str"),
+            pytest.param("light.kitchen", ["turn_on"], "service", id="service-not-str"),
+            pytest.param("light.kitchen", "t" * 65, "service", id="service-too-long"),
+        ],
+    )
+    async def test_format_check(self, client, monkeypatch, entity_id, service, refused):
+        from unittest.mock import AsyncMock
+
+        c, fake = client
+        post = AsyncMock(wraps=c._http.post)
+        monkeypatch.setattr(c._http, "post", post)
+        result = await c.call_service(entity_id, service)
+        if refused is None:
+            assert result.success, result.message
+            post.assert_awaited_once()
+            domain = entity_id.split(".", 1)[0]
+            assert fake.service_calls == [(f"/api/services/{domain}/{service}", {"entity_id": entity_id})]
+        else:
+            assert not result.success
+            assert result.message == f"Invalid {refused} format"
+            post.assert_not_called()
+            assert fake.service_calls == []
