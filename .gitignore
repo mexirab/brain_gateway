@@ -139,9 +139,12 @@ secrets.yaml
 # Claude Code runtime artifacts
 .claude/scheduled_tasks.lock
 
-# qwen-code project-scoped runtime (created when running `qwen` in repo dir)
+# qwen-code project-scoped runtime (created when running `qwen` in repo dir).
+# Only the root QWEN.md is tracked: it is the committed Qwen Code briefing
+# (test_qwen_md.py). A QWEN.md anywhere else is qwen `/init` output.
 .qwen/
 QWEN.md
+!/QWEN.md
 # Homepage runtime-generated files (Homepage writes these into the config dir
 # on boot — we only track services/settings/widgets/bookmarks).
 homepage/config/kubernetes.yaml

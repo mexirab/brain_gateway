@@ -1,6 +1,6 @@
 # Brain Gateway
 
-> **For AI assistants (Claude Code, Cursor, etc.):** This file is the developer briefing for AI coding tools working in this repo. End users installing Brain Gateway should read `README.md` instead. Maintainer reference docs (Helios cluster details, historical migration plans) live in `docs/internal/`.
+> **For AI assistants (Claude Code, Cursor, etc.):** This file is the developer briefing for AI coding tools working in this repo. End users installing Brain Gateway should read `README.md` instead. Maintainer reference docs (Helios cluster details, historical migration plans) live in `docs/internal/`. Qwen Code auto-loads `QWEN.md`, a compact version of this briefing (≤10K chars, guarded by `orchestrator/tests/test_qwen_md.py`): a change to the files, hard rules, test command or section names it mentions must update `QWEN.md` too.
 
 Personal AI assistant for ADHD support. Primary model (Qwen3.8-Flash-Next 125B MoE, Unsloth UD-Q3_K_XL MTP GGUF served by llama.cpp `llama-server-primary.service` on Helios, split across the RTX 5090 + RTX PRO 5000, since 2026-10-24) handles conversation and tools in one unified agentic loop. v6 hybrid mode has been removed.
 
