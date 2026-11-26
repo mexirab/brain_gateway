@@ -2,6 +2,8 @@
 name: prod-support
 description: SRE for Brain Gateway. Use to diagnose production issues, check logs/metrics/health, maintain Grafana, and verify cluster health. Invoke after any change that touches startup, scheduler jobs, logging, metrics, or service dependencies — and on any "something's broken" signal.
 tools: Bash, Read, Grep, Glob
+skills:
+  - observability-rules
 ---
 
 ## Role
@@ -18,8 +20,8 @@ Trigger with "prod support", "check logs", "something's broken", "check monitori
 |------|----------|------|
 | Helios | 10.0.0.195 (LAN only — not on Tailscale by design) | **GPU model layer, power-tiered (NOT always-on)**: primary LLM + vision (Qwen3.8-Flash-Next UD-Q3_K_XL MTP GGUF on llama.cpp, `llama-server-primary.service`, split GPU0 RTX 5090 + GPU1 RTX PRO 5000, :8080; rollback = the 27B Q6_K unit `tts/llama-server-primary-27b-q6k.service`, older rollback `vllm-primary.service`), no live TTS (it moved to Jupiter; Helios's `voxcpm-tts` :8004 is a disabled rollback that refuses to start next to the 262K brain, `qwen-tts` :8002 rollback disabled since 2026-10-24), STT (`stt-onnx`, Parakeet v2 ONNX on CPU, :8003); code agent `llama-server-coder` (:8082) retired + disabled 2026-10-16 |
 | Jupiter | 10.0.0.248 | **Always-on hub**: orchestrator (`brain-orchestrator` :8888), frontend, Home Assistant (:8123), Pi-hole (idle, no clients — not the LAN resolver), monitoring host (Prometheus, Grafana, Alertmanager, Loki). **Live TTS**: `voxcpm-tts` (VoxCPM2, systemd, not Docker) on one of two RTX 5080s, bound to `172.17.0.1:8004` (Docker's bridge gateway; containers call it as `http://host.docker.internal:8004`, Jupiter's own shell can't reach it). Its journal is NOT in Loki: `journalctl -u voxcpm-tts`. The other 5080 = experiments, pinned by UUID; a process beside the voice slows or breaks it (`TTSGPUMemoryLow`). GPU exporter `nvidia-gpu-exporter` :9400, NVIDIA module check `nvidia-module-check.timer` (`NvidiaModuleMissing`) |
-| Saturn | 10.0.0.58 | **Backup box**: off-box backup target (the five nightly rsyncs), home of the dead-man's switch (not installed yet), spare RTX 3090 — no runtime services. Down since 2026-11-13 until the 3090 is refitted. Pi-hole secondary (down; not the LAN resolver). Expert model (Qwen3-32B, RTX 3090, :8084) **deprecated 2026-09-28** (`EXPERT_ENABLED=false`) — registry reports it "Not configured (disabled)", which is expected. Former vision host (Qwen3-VL-8B :8010) — out of the runtime path since 2026-09-28 |
-| Uranus | 10.0.0.173 | Test box (2x RTX 5080), not in the runtime path |
+| Saturn | 10.0.0.58 | **Backup box**: off-box backup target (the five nightly rsyncs), home of the dead-man's switch (not installed yet), spare RTX 3090 (24 GB) + RTX 3080 (10 GB) — no runtime services. Up since 2026-11-24. Pi-hole secondary (container not running; not the LAN resolver). Expert model (Qwen3-32B, RTX 3090, :8084) **deprecated 2026-09-28** (`EXPERT_ENABLED=false`) — registry reports it "Not configured (disabled)", which is expected. Former vision host (Qwen3-VL-8B :8010) — out of the runtime path since 2026-09-28 |
+| Uranus | 10.0.0.173 | **Decommissioned** (its two RTX 5080s are now Jupiter's). Prometheus still scrapes it, so its targets read down: that's expected, not an incident |
 
 SSH access: `ssh labadmin@10.0.0.195` (Helios, LAN only; from off the LAN `ssh -J labadmin@jupiter-amds labadmin@10.0.0.195`). The orchestrator runs on Jupiter (`/home/labadmin/gateway_nerves`).
 
@@ -65,25 +67,7 @@ curl -s -X POST http://localhost:8888/v1/chat/completions \
 
 ## Logging Strategy
 
-### Log levels
-- **ERROR**: LLM failures, HA unreachable, DB errors, unhandled exceptions — investigate immediately
-- **WARN**: Slow responses (>10s chat, >5s tool), Helios health check fail, Google token refresh, rate limit approaches
-- **INFO**: Normal request lifecycle, startup/shutdown, tool execution, scheduler events
-- **DEBUG**: extra lifecycle detail (round counts, arg keys, lengths) — dev only. Content rules below apply at every level, DEBUG included
-
-### Log format
-Structured JSON logging via `log_config.configure_logging()` — called in `orchestrator.py` at startup. All modules use `logging.getLogger(__name__)`. Log output is JSON lines with fields: `ts`, `level`, `logger`, `msg`, `request_id`, plus optional extras (`component`, `tool_name`, `latency_ms`). Key log prefixes:
-- `[orchestrator]` — startup, shutdown, HTTP client
-- `[CLOUD_BRAIN]` — chat flow, mode routing, unified-loop orchestration
-- `[UNIFIED_LOOP]` — agentic loop rounds, tool calls, termination
-- `[FOCUS]` — focus timer, Endel audio, Pi-hole blocking (`Site blocking not active: …` at INFO is expected while `FOCUS_BLOCKING_ENABLED=false`)
-- `[MODEL]` — primary-model health checks, backend routing
-- `[STATE]` — SQLite persistence, reminder reload
-- `[SCHEDULER]` — job scheduling, calendar poll, morning briefing
-- `[GOOGLE_AUTH]` — token refresh
-- `[HA]` — entity discovery, service calls
-- `[TTS]` — voice announcements
-- `[PIHOLE]` — focus blocking toggles (silent on this deployment; blocking deprecated)
+Log levels, prefixes and the never-log list are in the preloaded `observability-rules` skill. Check every changed logger call against it.
 
 ### Reading logs
 ```bash
@@ -103,11 +87,11 @@ docker logs brain-orchestrator --since 1h 2>&1 | grep -i warn
 
 ### Loki / LogQL (preferred for anything older than the live tail)
 
-Promtail ships container logs to Loki on Jupiter (loopback-only: `http://localhost:3100` from Jupiter, `http://loki:3100` from containers on `gateway-net`/`monitoring-net`; the Helios promtail is down since 2026-07). For any question that spans more than the current `docker logs` buffer — "how often did this error fire yesterday?", "what was happening before the crash at 14:32?", "show me every `[UNIFIED_LOOP]` round count in the last hour" — query Loki, don't tail Docker.
+Promtail ships container logs to Loki on Jupiter (loopback-only: `http://localhost:3100` from Jupiter, `http://loki:3100` from containers on `gateway-net`/`monitoring-net`; Helios ships its journal through `loki-push-gw`). For any question that spans more than the current `docker logs` buffer — "how often did this error fire yesterday?", "what was happening before the crash at 14:32?", "show me every `[UNIFIED_LOOP]` round count in the last hour" — query Loki, don't tail Docker.
 
 **Query via Grafana Explore**: https://jupiter-amds.tail74fc4a.ts.net:3000/explore (tailnet, login required) or http://localhost:3000/explore from Jupiter (data source: Loki)
 
-**Query via API (from Helios)**:
+**Query via API (from Jupiter)**:
 ```bash
 # Last 15 minutes of orchestrator errors
 curl -sG 'http://localhost:3100/loki/api/v1/query_range' \
@@ -139,41 +123,6 @@ curl -sG 'http://localhost:3100/loki/api/v1/query_range' \
 **When Loki is the wrong tool**: during an active incident where you need the last 30 seconds of live output, `docker logs -f` is faster. Loki has a few-second ingestion delay.
 
 ---
-
-## What to ALWAYS Log / Monitor
-
-- Every chat request: timestamp, mode (explainer/mirror/counterbalance/challenge/baseline), intensity, response time
-- LLM call outcome: backend (primary vs fallback), tokens, response time, success/fail
-- Tool execution: tool name, duration, success/fail (Prometheus: `bgw_tool_call_*`)
-- Primary model health check failures (Helios is always-on — any health failure is a real incident)
-- HA service calls: entity, service, success/fail
-- Scheduler events: reminder delivery, calendar poll, morning briefing
-- Temperature alerts: closet temp warnings (>80F) and critical (>85F)
-- TTS announcements: target speaker, success/fail
-
-## What to NEVER Log
-
-Loki keeps 30 days and the nightly self-audit (F-014) feeds WARNING+ lines to the LLM and a Pushover digest; its investigator can read any Loki line from the last 24 h and, with `SELF_AUDIT_CLAUDE_API_KEY` set, sends them to Anthropic's API — anything logged is effectively copied off the log store. At **any** level, DEBUG included:
-
-- Secrets: API keys, HA tokens, Google OAuth tokens, calendar `htmlLink`s
-- User/personal content:
-  - chat/voice message text, conversation history, raw model output
-  - search/memory/RAG/web/Gmail queries, RAG document bodies, email subjects
-  - reminder/announcement/nudge text, bookmark descriptions
-  - calendar titles/locations, travel destinations, raw phone-calendar events
-  - medication names, meal descriptions
-  - focus/brain-dump/backlog/decomposition/code-agent task text
-  - document titles, Paperless file names
-  - finance side-quest/budget names
-  - HA call `data` values, tool args (log the dict keys)
-  - the user's name, user profile YAML content
-  - mode-router distress tags (mental-state data — log a count)
-- Query strings on HTTP access logs (`log_config.StripQueryStringFilter` on `uvicorn.access` drops them — they carried `?search=`/`?query=` text)
-- `/api/audio/` clip/stream names (tokenless route: the name is the only secret and the clip is a spoken reply; the same filter logs `/api/audio/…`)
-
-**Log instead:** `len()`, ids (`reminder_id`, Google event id, Gmail message id, `quest_id`, task id), categories, counts, dict keys. For unparseable model output, log the parser error + `log_config.content_shape(text)` (content-free: code-fence / think-block / tool-call-block / json-like / text).
-
-**Guard:** `orchestrator/tests/test_no_user_content_in_logs.py` AST-scans every logger call (positional + keyword args, `getLogger()` chains, `self.logger`) and fails on sensitive names/suffixes, sensitive dict keys / `.get()` keys, or any slice. Audited non-personal exceptions (upstream error bodies, config values, tool/instance names) need an inline `# log-safe: <reason>` comment on or directly above the call.
 
 ---
 
@@ -320,21 +269,6 @@ Vision log lines (counts only): WARNING `[VISION] N image part(s) were links or 
 | `bgw_deploy_undeployed_green_since_timestamp_seconds` | Gauge | | CI-pass time of the oldest undeployed green commit (`DeployDrift`) |
 | `bgw_deploy_drift_check_total` | Counter | result | Drift check outcomes (`DeployDriftCheckFailing`) |
 
-### Adding New Metrics
-
-1. **Define the metric** in `orchestrator/metrics.py` using `prometheus_client` (Counter, Histogram, Gauge)
-2. **Import it** in the relevant module and call `.inc()` / `.observe()` / `.set()`
-3. **Verify locally**: `curl http://localhost:8888/metrics | grep bgw_your_metric`
-4. **Add Grafana panel**: Edit dashboard JSON in `monitoring/grafana/provisioning/dashboards/json/`
-5. **Deploy**: `docker compose up -d --build orchestrator && docker restart grafana`
-
-### Adding New Logging
-
-1. Use `logger = logging.getLogger(__name__)` at module top
-2. Use a consistent prefix: `logger.info(f"[MODULE_NAME] message")`
-3. Log at appropriate level (see log levels above)
-4. Never log secrets or user content — see "What to NEVER Log"; the guard test enforces it, `# log-safe: <reason>` for audited exceptions
-
 ---
 
 ## Performance Targets
@@ -406,17 +340,18 @@ Vision log lines (counts only): WARNING `[VISION] N image part(s) were links or 
 
 ## Grafana Dashboards
 
-Grafana runs on Jupiter, bound to 127.0.0.1:3000 — browse via https://jupiter-amds.tail74fc4a.ts.net:3000 (Tailscale Serve, tailnet-only, login required) or localhost:3000 from Jupiter. Dashboard JSON lives at `/opt/gateway_mvp/monitoring/grafana/provisioning/dashboards/json/` and is provisioned into the Jupiter container via nebula-sync / volume mount.
+Grafana runs on Jupiter, bound to 127.0.0.1:3000 — browse via https://jupiter-amds.tail74fc4a.ts.net:3000 (Tailscale Serve, tailnet-only, login required) or localhost:3000 from Jupiter. Dashboards are generated from Python in `monitoring/grafana/dashgen/` (`python monitoring/grafana/dashgen/build.py`); never hand-edit the provisioned JSON.
 
-| Dashboard | UID | URL | Panels | What it's for |
-|-----------|-----|-----|--------|----------------|
-| Brain Gateway Overview | `brain-gateway-overview` | https://jupiter-amds.tail74fc4a.ts.net:3000/d/brain-gateway-overview | 80 | Primary SRE dashboard — request rates, latency, tool usage, LLM health, reminders, focus, temps, all subsystem rollups. Start here. |
-| Brain Gateway Deep Dive | `brain-gateway-deep-dive` | https://jupiter-amds.tail74fc4a.ts.net:3000/d/brain-gateway-deep-dive | 24 | Drill-down — tool-loop round distribution, per-model LLM latency, error-type breakdowns, calendar/Gmail API detail. Use when Overview shows a symptom but not a cause. |
-| Conjure | `conjure-dashboard` | https://jupiter-amds.tail74fc4a.ts.net:3000/d/conjure-dashboard | 26 | Conjure (AI book visualizer) — not Brain Gateway. Only relevant if debugging Uranus/ComfyUI or Jupiter's Conjure API. |
+| Dashboard | UID | Builder (`monitoring/grafana/dashgen/dashboards/`) | What it's for |
+|-----------|-----|---------|----------------|
+| Brain Gateway | `brain-gateway-overview` | `brain_gateway_sre.py` | Primary SRE dashboard — request rates, latency, tools, LLM + llama-server health, every subsystem row. Start here: https://jupiter-amds.tail74fc4a.ts.net:3000/d/brain-gateway-overview |
+| Jess Glance | `jess-glance` | `jess_glance.py` | The closet kiosk's at-a-glance board (viewer user `closet-kiosk`) |
+| Homelab Infrastructure | `homelab-infra` | `homelab_infra.py` | Nodes online, CPU / memory / disk / network per node, GPU temps + utilization, closet temperature |
+| UPS / Power Chain | `ups-power-chain` | `ups.py` | Helios UPS via `nut-exporter` |
 
-**After editing JSON**: `ssh labadmin@10.0.0.248 docker restart grafana` (or let the provisioning reload pick it up). If editing via Grafana UI, export the JSON back to `monitoring/grafana/provisioning/dashboards/json/` and commit — the file is the source of truth, not the running dashboard.
+Edits made in the Grafana UI are lost on the next build: change the builder and re-run `build.py`.
 
-**Prometheus scrapes**: Jupiter's Prometheus scrapes `http://10.0.0.195:8888/metrics` (Helios orchestrator). Verify a new metric is reaching Prometheus before building a panel (Prometheus is loopback-only — run on Jupiter): `curl -s 'http://localhost:9090/api/v1/query?query=<metric_name>'`.
+**Prometheus scrapes**: job `orchestrator` scrapes `${NODE_JUPITER_IP}:8888/metrics` (bearer `api_token`). Verify a new metric is reaching Prometheus before building a panel (Prometheus is loopback-only — run on Jupiter): `curl -s 'http://localhost:9090/api/v1/query?query=<metric_name>'`.
 
 ---
 

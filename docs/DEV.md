@@ -64,7 +64,7 @@ docker compose up -d --build --force-recreate frontend
 docker compose --profile models config
 ```
 
-**Post-change pipeline (mandatory).** Every code change runs through a two-phase review pipeline (code-reviewer + security + prod-support + frontend/hacker + unit-test + docs-updater). Full spec in [`CLAUDE.md`](../CLAUDE.md) → **Post-change review workflow**.
+**Post-change pipeline (mandatory).** Every code change runs through the `review-change` skill: reviewer agents in parallel (code-reviewer + security + prod-support, plus frontend / hacker when the diff warrants), then the `unit-test` and `docs-updater` skills. Spec: [`.claude/skills/review-change/SKILL.md`](../.claude/skills/review-change/SKILL.md).
 
 **Writing tests** (`orchestrator/tests/`):
 

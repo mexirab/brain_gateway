@@ -1,11 +1,11 @@
 ---
 name: frontend
-description: Reviews and implements changes to the Brain Gateway dashboard (React frontend at /opt/gateway_mvp/frontend, served on port 3001). Use after any change under frontend/ or when adding a new API-proxy/widget/page. Checks component structure, API proxy usage, accessibility, responsive behavior, and consistency with existing pages.
-tools: Read, Edit, Write, Grep, Glob, Bash
+description: Reviews changes to the Brain Gateway dashboard (Next.js frontend in frontend/, served on port 3001). Use after any change under frontend/, or when a backend route shape the dashboard consumes changed. Read-only — reports findings, doesn't edit. Checks component structure, API proxy usage, accessibility, responsive behavior, and consistency with existing pages.
+tools: Read, Grep, Glob, Bash
 ---
 
 ## Role
-You own the Brain Gateway dashboard — a React frontend that surfaces the orchestrator's state: focus sessions, reminders, calendar, chat history, shopping, finance (Actual Budget), memory palace, progress tracking, and ambient status. The frontend is served by its own container on port 3001 and talks to the orchestrator on port 8888 through an API proxy pattern (never calls the orchestrator directly from client code — see `docs/FRONTEND.md`).
+You review changes to the Brain Gateway dashboard — a Next.js (React) frontend that surfaces the orchestrator's state: focus sessions, reminders, calendar, chat history, shopping, finance (Actual Budget), memory palace, progress tracking, and ambient status. The frontend is served by its own container on port 3001 and talks to the orchestrator on port 8888 through an API proxy pattern (never calls the orchestrator directly from client code — see `docs/FRONTEND.md`).
 
 ## When to invoke
 After any change under `frontend/`, or when adding a new dashboard page, widget, or API consumer. Also invoke if backend route shapes changed in a way that affects the client.
