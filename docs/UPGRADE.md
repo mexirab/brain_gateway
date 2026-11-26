@@ -138,7 +138,7 @@ These pages moved. If you bookmarked them, update:
 
 ## Non-root orchestrator (one-time)
 
-`brain-orchestrator` now runs as non-root user `jess` (uid/gid `ORCHESTRATOR_UID`/`ORCHESTRATOR_GID` in `.env`, default 1000). State written by the old root container is root-owned and unwritable by it.
+`brain-orchestrator` now runs as non-root user `jess` (uid/gid `ORCHESTRATOR_UID`/`ORCHESTRATOR_GID` in `.env`, default 1000), with `cap_drop: ALL` and `no-new-privileges`. Its HOME is `/home/jess`, so the SSH key, Hugging Face cache and `.claude/projects` mounts moved off `/root`. State written by the old root container is root-owned and unwritable by it.
 
 ```bash
 bash scripts/orchestrator_state_perms.sh            # dry run: lists mounts needing a fix (exit 1)

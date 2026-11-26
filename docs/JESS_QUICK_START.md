@@ -189,7 +189,7 @@ Drop markdown files into your RAG directory (set during install). The assistant 
 | "Remember that the wifi password is on the fridge" | Saves a fact into the memory palace |
 | "What do you know about my morning routine?" | Pulls from RAG + auto-learned facts |
 
-Reindex when you add docs: `docker exec brain-orchestrator python scripts/reindex_rag.py`.
+New or changed files in your RAG folder are picked up automatically within a couple of minutes.
 
 ---
 

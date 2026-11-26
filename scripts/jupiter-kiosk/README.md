@@ -23,7 +23,7 @@ come back within a minute.
 
 **Which GPU:** the monitors hang off the RTX 5080 on PCI bus **0c** (the one with two HDMI ports).
 The voice (`voxcpm-tts`) runs on the bus-**0b** card. Three things keep the kiosk off it:
-- the X config pins X to bus 0c (`BusID` + `ProbeAllGpus "false"`);
+- the X config pins X to bus 0c (`BusID "PCI:12:0:0"`, decimal for 0c, + `ProbeAllGpus "false"`);
 - both units hide the voice card's device files (`InaccessiblePaths=/dev/nvidia0 /dev/dri/card0
   /dev/dri/renderD128`);
 - `kiosk.py --preflight` (ExecStartPre of both units) refuses to start if the display card is the
@@ -50,6 +50,10 @@ card.
 
 `make_logins.py` isn't called `make_secrets.py` because the repo `.gitignore` drops every `*secret*`
 file.
+
+Hand-installed (Install below): CI never deploys any of this. It only lints the folder (ruff check +
+format, `.github/workflows/ci.yml`) and runs `orchestrator/tests/test_jupiter_kiosk.py` and
+`test_jupiter_kiosk_logins.py`, so a merged change reaches the screens only when you re-install it.
 
 ## Install (one-time, as labadmin on Jupiter)
 
@@ -195,6 +199,8 @@ systemd-cgls -u user-$(id -u kiosk).slice    # what the kiosk runs; `systemctl s
 ```
 
 The X server's own log is `/var/lib/jupiter-kiosk/.local/share/xorg/Xorg.0.log`.
+
+No metrics or alerts, by design: a broken kiosk shows on the screens themselves.
 
 **What the log says:**
 - `page not loading (HTTP 502)`: the server behind Tailscale Serve is down or still starting, e.g.

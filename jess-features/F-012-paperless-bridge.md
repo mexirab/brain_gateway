@@ -129,7 +129,7 @@ Response: `{"ok": true, "task_id": "uuid", "paperless_status_url": "..."}` or `{
 | `PAPERLESS_ENABLED` | `false` | Master switch — tool and route return "disabled" when false |
 | `PAPERLESS_URL` | *(empty)* | Paperless server base URL, e.g. `http://10.0.0.248:8777` |
 | `PAPERLESS_API_TOKEN` | *(empty)* | Paperless API token (from Settings → API Tokens in Paperless UI); ≥8 chars required when enabled |
-| `PAPERLESS_INBOX_PATH` | `/app/data/paperless_inbox` | Container-side staging dir; host side is bind-mounted in docker-compose |
+| `PAPERLESS_INBOX_PATH` | `/app/data/paperless_inbox` | Container-side staging dir; on the host it is `data/app/paperless_inbox/` under the checkout (the `/app/data` bind mount) |
 | `PAPERLESS_DEFAULT_TAGS` | *(empty)* | Optional comma-separated tags applied to every upload (e.g. `jess-ingested`) |
 | `PAPERLESS_UPLOAD_TIMEOUT_SECONDS` | `30` | httpx timeout for the upload call |
 
@@ -138,16 +138,16 @@ Response: `{"ok": true, "task_id": "uuid", "paperless_status_url": "..."}` or `{
 ## Security model
 
 - Bearer auth on `/api/paperless/upload` (same as other `/api/*` routes; **not** in `PUBLIC_PREFIXES`).
-- `paperless_save` tool validates `filename` is a **basename only** (no `/` or `..`). File is opened under `PAPERLESS_INBOX_PATH`; a resolved-path sanity check rejects any path that escapes the inbox root (defense against symlink attacks inside the staging dir).
+- `paperless_save` tool validates `filename` is a **basename only** (no `/`, `\`, `..`, absolute path or null byte). File is opened under `PAPERLESS_INBOX_PATH`; a resolved-path sanity check rejects any path that escapes the inbox root (defense against symlink attacks inside the staging dir).
 - Max file size `DOCUMENT_MAX_SIZE_MB` (reuses the existing 100 MB cap that already applies to `/api/paperless/upload` via `_LARGE_UPLOAD_PATHS` in `orchestrator.py`).
 - `PAPERLESS_API_TOKEN` is only sent in the `Authorization` header to the Paperless URL; never logged.
-- Feature-flag auto-disable: if `PAPERLESS_ENABLED=true` but `PAPERLESS_API_TOKEN` is missing/short, the `model_validator` logs an error and flips `paperless_enabled=false`. Orchestrator boots normally.
+- Feature-flag auto-disable: if `PAPERLESS_ENABLED=true` but `PAPERLESS_URL` is missing or `PAPERLESS_API_TOKEN` is missing/short (< 8 chars), the `validate_paperless_config` `model_validator` logs an error and flips `paperless_enabled=false`. It never raises; the orchestrator boots normally.
 
 ---
 
 ## Metrics
 
-- `bgw_paperless_upload_total{result="ok|fail|skipped"}` — Counter. `skipped` fires when the feature is disabled or config is incomplete.
+- `bgw_paperless_upload_total{result="ok|fail|skipped", reason}` — Counter. `skipped` fires when the feature is disabled or config is incomplete. `reason` ∈ `ok|http_4xx|http_5xx|timeout|connect_error|other|disabled|missing_url|missing_token|file_too_large|file_missing`.
 - `bgw_paperless_upload_latency_seconds` — Histogram of orchestrator → Paperless upload round-trip.
 - `bgw_paperless_read_total{op="search|get", result}` — Counter for the read tools. `result` ∈ `ok|not_found|http_4xx|http_5xx|http_other|bad_body|timeout|connect_error|other|disabled|missing_url|missing_token`.
 
@@ -186,7 +186,7 @@ Read-only access to the archive so Jess can answer "when does my car insurance r
 1. In Paperless, create a dedicated **non-superuser** (e.g. `jess`) with: Document view (+ add, for `paperless_save`), Tag / Correspondent / Document type view. No change, delete or admin.
 2. Paperless 2.x object permissions: that user only sees documents it owns, that are shared with it or its group, or that have no owner. Share existing documents via bulk edit → permissions; share new ones with a Workflow "Assign permissions" action. Leave sensitive documents unshared to keep them out of Jess's reach.
 3. Create an API token for that user → `PAPERLESS_API_TOKEN`.
-4. `PAPERLESS_URL` must be reachable from the orchestrator container. If Paperless isn't on `gateway-net`, use the host LAN IP + port; container names and tailnet MagicDNS names may not resolve.
+4. `PAPERLESS_URL` must be reachable from the orchestrator container. If Paperless isn't on `gateway-net`, use the host LAN IP + port; container names and tailnet MagicDNS names may not resolve. On Jupiter Paperless is not on `gateway-net`, so `PAPERLESS_URL=http://10.0.0.248:8777`.
 
 ### Data exposure
 

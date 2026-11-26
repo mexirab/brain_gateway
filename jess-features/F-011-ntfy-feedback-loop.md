@@ -71,7 +71,7 @@ Instead:
 - Each action URL is signed: `sig = HMAC-SHA256(NTFY_HMAC_SECRET, f"{reminder_id}|{action}|{exp}|{extra}")`, truncated to 32 hex chars.
 - `extra` is empty for `ack` and the clamped `minutes` value for `snooze`, so an attacker who sniffs the open-tailnet topic can't replay a snooze URL with `minutes=120` to grind through the user's snooze budget.
 - `exp` is a Unix timestamp ~30 minutes after the reminder fires; beyond it, the signature is refused.
-- `BearerAuthMiddleware` exempts `/api/reminder/ack/` and `/api/reminder/snooze/` prefixes. Both handlers first check `settings.ntfy_enabled` (returning 404 if the feature has been turned off, so stale signed URLs can't outlive the feature), then run the HMAC check before any state mutation.
+- `BearerAuthMiddleware` exempts `/api/reminder/ack/` and `/api/reminder/snooze/` prefixes, for exactly one path segment that passes `bearer_auth.is_public_segment` (`TECHNICAL_REFERENCE.md` → Tokenless paths): a new reminder-id format must fit that rule. Both handlers first check that ntfy or Pushover (F-013) is enabled (`if not (ntfy_enabled or pushover_enabled)` → 404, so stale signed URLs can't outlive the feature), then run the HMAC check before any state mutation.
 - Replay after ack is a no-op: once `ack_at` is set, further POSTs return `{"ok": true, "already_acked": true}` and do NOT re-fire the selfcare bridge. Accepted risk on the open-tailnet topic: an attacker who taps ack within the 30-min window before the user can cause the user's own later tap to land on the idempotent path, meaning the selfcare bridge never fires.
 
 `NTFY_HMAC_SECRET` is required whenever `NTFY_ENABLED=true`. If missing or shorter than 32 chars at startup, the `model_validator` in `config.py` logs a loud error and **auto-disables** `ntfy_enabled` instead of refusing to boot — a missing optional-feature secret should never take down chat, HA, or the scheduler.
@@ -99,8 +99,8 @@ Both return plain JSON: `{"ok": true, ...}`. 403 on bad signature, 404 on unknow
 
 - `orchestrator/config.py` — `NTFY_ENABLED`, `NTFY_URL`, `NTFY_TOPIC`, `NTFY_DEFAULT_PRIORITY`, `NTFY_CALLBACK_BASE_URL`, `NTFY_HMAC_SECRET`, `NTFY_ACK_EXP_SECONDS`, `NTFY_MAX_SNOOZE_COUNT`.
 - `orchestrator/state_store.py` — migrate `reminders` table: add `ack_at`, `acked_via`, `snooze_count`. New helpers `mark_reminder_acked`, `increment_snooze_count`.
-- `orchestrator/reminder_manager.py` — new `deliver_via_ntfy()` with async httpx POST + HMAC-signed action URLs; sibling `_infer_selfcare_action_from_text()` matching `_ACTION_KEYWORDS`.
-- `orchestrator/tool_handlers.py` — `deliver_reminder_job()` also calls `deliver_via_ntfy` when enabled.
+- `orchestrator/reminder_manager.py` — new `deliver_via_ntfy()` with async httpx POST + HMAC-signed action URLs; sibling `infer_selfcare_action_from_text()`, which shares `selfcare_manager.ACTION_KEYWORDS` with `selfcare_log`.
+- `orchestrator/tool_handlers.py` — `deliver_reminder_job()` also dispatches `deliver_via_ntfy` when enabled, fire-and-forget, after the HA Companion push.
 - `orchestrator/api_routes.py` — two new POST routes with HMAC verification and selfcare-bridge dispatch.
 - `orchestrator/orchestrator.py` — `BearerAuthMiddleware.PUBLIC_PREFIXES` gains `/api/reminder/ack/` and `/api/reminder/snooze/`.
 - `orchestrator/metrics.py` — new counters/histogram in the `bgw_ntfy_*` namespace.
@@ -120,6 +120,7 @@ Both return plain JSON: `{"ok": true, ...}`. 403 on bad signature, 404 on unknow
 | `NTFY_HMAC_SECRET` | *(empty)* | 32+ byte hex/base64 secret; **required** when enabled |
 | `NTFY_ACK_EXP_SECONDS` | `1800` | Signature validity window (default 30 min) |
 | `NTFY_MAX_SNOOZE_COUNT` | `5` | Guardrail against indefinite snooze loops |
+| `NTFY_CONFIRM_ENABLED` | `false` | Confirm side-channel (below) |
 
 ---
 

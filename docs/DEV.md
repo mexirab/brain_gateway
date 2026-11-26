@@ -36,7 +36,28 @@ User → Dashboard /chat (or any OpenAI client) → Orchestrator → Unified age
 | `rag/` | RAG ingest script |
 | `monitoring/grafana/dashgen/` | Python generator for the Grafana dashboards (don't hand-edit the JSON) |
 
-The full file map is in [`CLAUDE.md`](../CLAUDE.md) → **Key Files**.
+The load-bearing files, with the rule to know before editing each, are in [`CLAUDE.md`](../CLAUDE.md) → **Key Files**. The rest: Module map below.
+
+---
+
+## Module map
+
+Everything in `orchestrator/` follows `<feature>_manager.py` / `routes_<feature>.py` / `jobs_<feature>.py`, and a module's docstring is usually its spec. Modules that aren't in CLAUDE.md → Key Files but are easy to miss:
+
+| Area | Modules | Documented in |
+|------|---------|---------------|
+| ADHD features | `focus_manager.py` (Pomodoro, ambient audio, body doubling; Pi-hole blocking deprecated here), `brain_dump_manager.py` (capture, categorize, dedup, route to RAG or reminders), `routine_manager.py` (step-by-step morning/evening TTS guidance), `progress_tracker.py` (daily stats, streaks, daily/weekly TTS summaries) | `jess-features/F-00x-*.md` |
+| Settings page backends | `routines_config.py` (`/api/config/routines`: writable shadow `/app/data/routines.yaml` over the read-only `/app/config/routines.yaml`; `merge_with_existing()` keeps power-user step fields; `reload_routines_and_reschedule()` re-registers `routine_<id>` crons), `announcement_routes.py` (announcement category → speaker, `route_for()`, empty = legacy env-var speaker), `selfcare_schedule.py` (`/app/data/selfcare_schedule.yaml` accessors incl. `is_quiet_day`), `recurring_reminders.py` (`expand_due_reminders()` every 5 min: cron rules → one-shot `reminders` rows), `config_writer.py` (`atomic_write_yaml()`, `log_config_change()`, credential-redacting `_redact()`) | each docstring; `TECHNICAL_REFERENCE.md` |
+| Home Assistant | `ha_integration.py` (entity discovery + service-call wrapper), `ha_registry.py` (read-only entity/device/area registries over the WebSocket API, cached 600 s, never raises; feeds `/home` and the `ha_guard` category check) | `TECHNICAL_REFERENCE.md` → Home Assistant |
+| Calendar | `caldav_calendar.py` (Radicale client: REPORT + `<C:expand>` reads, UTC `.ics` PUT with `If-None-Match: *`) | `docs/CALENDAR.md` |
+| Delivery | `inbox.py` + `webpush_manager.py` (dashboard inbox cards; self-hosted VAPID Web Push with an endpoint allow-list) | `docs/FRONTEND.md` → Dashboard Inbox + Web Push |
+| Helios power | `helios_power.py` (wake / sleep / status through the HA smart plug; never raises; default-off `HELIOS_WAKE_ENABLED`) | `TECHNICAL_REFERENCE.md` |
+| Spreadsheets | `grist_client.py` (`GRIST_DOCS` allow-list, label ↔ column-id mapping, `write_unknown` on unconfirmed writes, never raises) | `docs/SPREADSHEETS.md` |
+| Deploy drift | `jobs_deploy_drift.py` (`.last-deployed-sha` vs main's newer CI-green pushes; behind `DEPLOY_DRIFT_REPO`) | its docstring; `monitoring/README.md` → Deploy Drift |
+| Voice satellite | `voice_match.py` (per-room voiceprint filter, a TV filter and not security; CLI `python -m orchestrator.voice_match …`), `audio_stream.py` (progressive WAV streams for long satellite replies) | `docs/VOICE_AND_TTS.md` |
+| Workouts + meals | `workout_manager.py` (plan generator, progression, deload weeks), `workout_setup.py` (program + location CRUD, audited), `exercises_seed.py` (catalog upserted at startup; the seed is the only writer, so manual `exercises` edits are reverted), `exercise_library.py` (operator-fetched how-to photos), `meal_manager.py` (calorie logging, photo estimate) | `docs/WORKOUTS_AND_MEALS.md` |
+| Pantry (F-015) | `pantry_manager.py`, `receipt_scanner.py`, `routes_pantry.py` (mounted only with `PANTRY_ENABLED`), `pantry_consumption.py`, `meal_planner.py`, `diet_profiles.py` | `docs/PANTRY.md` |
+| Helios log shipping | `monitoring/promtail/promtail-helios.yml` (Helios journal only, no Docker socket → `loki-push-gw` on Jupiter) | `monitoring/README.md` |
 
 ---
 
@@ -108,6 +129,7 @@ docker compose --profile models config
 - To hold deploys, stop the runner service (`sudo systemctl stop actions.runner.mexirab-brain_gateway.jupiter.service`). Cancelling a deploy run does not hold its commit back if an older deploy is still to run (the catch-up ships it).
 - A commit that changes `ci.yml` is never caught up by an older run; if its own deploy run shows as cancelled, re-run it.
 - Adding a CI job: list it in the deploy job's `needs:` (the catch-up counts passed jobs against that list). Renaming the deploy job: update the `"Deploy to Jupiter"` string in the catch-up's jq filter.
+- Every job has `timeout-minutes`: a hung step on the self-hosted runner otherwise blocks every later deploy.
 - A timed-out deploy writes no marker: the next deploy (or a re-run) rebuilds the same changes; until then the box may be half-deployed.
 
 Why (2026-10-26): a deploy failed with "Cannot fast-forward to multiple branches" because a `git fetch` run in the live checkout rewrote `.git/FETCH_HEAD` under the job's `git pull`, and deploys could ship commits whose CI hadn't finished.
@@ -116,14 +138,13 @@ Why (2026-10-26): a deploy failed with "Cannot fast-forward to multiple branches
 
 ## Reference cluster
 
-The maintainer's deployment is a 4-node cluster centered on Helios. Brain Gateway itself runs as a single-box appliance — the cluster shape is **not** required for end users.
+The maintainer's deployment is a 3-node cluster: Jupiter is the always-on hub, Helios the power-tiered GPU box, Saturn the backup box. Brain Gateway itself runs as a single-box appliance — the cluster shape is **not** required for end users.
 
 | Node | IP | GPU | Role |
 |------|-----|-----|------|
 | Helios | 10.0.0.195 | RTX 5090 + RTX PRO 5000 | GPU model layer only: primary LLM, STT (the code agent model was retired 2026-10-16 and the `code_agent` tool removed 2026-10-21). Power-tiered — asleep most of the time, woken on demand via an HA smart plug. |
-| Jupiter | 10.0.0.248 | 2× RTX 5080 | Always-on hub: orchestrator (:8888), frontend (:3001, served as https://<host>.<tailnet>.ts.net via Tailscale Serve), Home Assistant (:8123), monitoring stack (Prometheus, Grafana, Loki), Pi-hole primary, live TTS (VoxCPM2 on one 5080, host systemd unit; the other 5080 is for experiments) |
-| Saturn | 10.0.0.58 | RTX 3090 | Backup box: off-box backup target, home of the dead-man's switch (not installed yet), spare 3090; no runtime services (the former vision and expert models are out of the runtime path) |
-| Uranus | 10.0.0.173 | 2× RTX 5080 (probably the cards now in Jupiter — to confirm) | Test box; currently unreachable (not part of the runtime path) |
+| Jupiter | 10.0.0.248 | 2× RTX 5080 | Always-on hub: orchestrator (:8888), frontend (:3001, served as https://<host>.<tailnet>.ts.net via Tailscale Serve), Home Assistant (:8123), monitoring stack (Prometheus, Grafana, Loki), Pi-hole (idle; not the LAN resolver), live TTS (VoxCPM2 on one 5080, host systemd unit; the other 5080 is for experiments) |
+| Saturn | 10.0.0.58 | RTX 3090 + RTX 3080 | Backup box: off-box backup target, home of the dead-man's switch (not installed yet), spare GPUs; no runtime services (the former vision and expert models are out of the runtime path) |
 
 For Helios-specific details (Tailscale cert, GPU layout, kiosk display, etc.), see [`docs/internal/HELIOS_INFRASTRUCTURE.md`](internal/HELIOS_INFRASTRUCTURE.md).
 

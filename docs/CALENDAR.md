@@ -6,25 +6,23 @@ iCloud calendars. Work Exchange meetings come in separately via the iPhone Short
 Build plan and later milestones (Jess reading/writing CalDAV, retiring Google):
 `docs/internal/CALENDAR_SELF_HOST_PLAN.md`.
 
-Status (2026-10-15): Milestones 1, 3 (server side) and 4 are built.
+Status: Milestones 1–4 are done (since 2026-10-18).
 - M1: Radicale is running, reachable over tailnet HTTPS, with backups and alerts.
-- M3: the work-calendar sync route is hardened.
-- M4: Jess reads and writes calendars through `orchestrator/calendar_sources.py`.
-
-Milestone 4 is on branch `feat/radicale-calendar` (PR #83) and is **not deployed**
-until that merges. The owner still has to do M2 (move the iPhone over) and the
-Shortcut half of M3.
+- M2: the iPhone uses CalDAV.
+- M3: the work-calendar sync route is hardened and the work Shortcut runs.
+- M4: Jess reads and writes calendars through `orchestrator/calendar_sources.py`
+  (and `orchestrator/caldav_calendar.py`).
 
 ## Layout
 
 | What | Where |
 |------|-------|
-| Compose project | `radicale/docker-compose.yml` (own project, like `homeassistant/`) |
+| Compose project | `radicale/docker-compose.yml` (own project, like `homeassistant/`), run from the live checkout's `radicale/` |
 | Server config + access rules | `radicale/config/config`, `radicale/config/rights` (committed, mounted `:ro`) |
 | Calendars (runtime state) | `/home/labadmin/radicale/data/collections/` — outside the repo |
 | Logins (bcrypt htpasswd) | `/home/labadmin/radicale/secrets/users` — chmod 600 in a 700 dir, outside the repo; directory-mounted at `/secrets` |
 | Owner's initial password | `/home/labadmin/radicale/owner-password.txt` — chmod 600; delete once it's in your password manager |
-| Jess's login | `CALDAV_URL=http://radicale:5232`, `CALDAV_USERNAME`, `CALDAV_PASSWORD` plus `CALDAV_CALENDAR_HOME=/owner/` in `.env` — read by `orchestrator/caldav_calendar.py` once PR #83 is deployed |
+| Jess's login | `CALDAV_URL=http://radicale:5232`, `CALDAV_USERNAME`, `CALDAV_PASSWORD` plus `CALDAV_CALENDAR_HOME=/owner/` in `.env` — read by `orchestrator/caldav_calendar.py` |
 | Backups | `/home/labadmin/radicale/backups/` (30 kept) + `saturn:/home/labadmin/calendar-backups/` |
 
 Image: `tomsquest/docker-radicale:3.8.3.0` pinned by digest (Radicale 3.8.3). Runs as
@@ -132,8 +130,15 @@ which merges three sources into one list:
   - a work sync older than `PHONE_CALENDAR_MAX_AGE_HOURS` (26 h, which allows one missed daily run);
   - a sync whose events are all unreadable.
 
-  A work sync that has never happened is just "not set up", not a failure. The
-  dashboard card shows "Couldn't reach … calendar".
+  A work sync that has never happened is just "not set up", not a failure.
+  `calendar_sources.get_events()` returns the gaps in
+  `CalendarResponse.failed_sources`, and every caller reports them:
+  `check_calendar` and the morning/evening briefings say which calendar they
+  couldn't reach, ambient status reads "unknown", the dashboard card shows
+  "Couldn't reach … calendar", and the wind-down nudge drops its tomorrow line
+  rather than say "nothing early tomorrow". `get_calendar()` is a facade with
+  the old Google-client surface, so older callers keep their call shapes
+  (module docstring).
 - **Duplicates collapse.** Same title + start time = one event, preferring
   personal over work over Google, which matters while Google and Radicale both
   hold your history.
@@ -247,10 +252,10 @@ phone, set `title` to a fixed text such as "Busy" in step 2. Alerts and briefing
 then say "Busy" but keep the times.
 
 **From the dashboard:** the calendar card's **Open** link (top right) opens
-this web UI. It is set by `CALENDAR_WEB_URL` in `.env` and appears after the #83
-deploy.
+this web UI. It is set by `CALENDAR_WEB_URL` in `.env`.
 The **Calendar** page (`/calendar`) shows the merged calendar as a Monday–Sunday
-week, with a **Manage calendars** link to the same web UI.
+week (`GET /api/calendar/range`, `TECHNICAL_REFERENCE.md` → Calendar & Email),
+with a **Manage calendars** link to the same web UI.
 
 ## Run / upgrade
 

@@ -3,7 +3,7 @@
 > **Status (2026-09-29): focus-mode site blocking is DEPRECATED for this deployment.** `FOCUS_BLOCKING_ENABLED=false` in `.env`.
 > - LAN DNS moved back to the router (Orbi) after recurring issues even with the 2026-08-18 Pi-hole redundancy setup — LAN clients no longer resolve through Pi-hole.
 > - The device that needed blocking (a managed work laptop) uses corporate DNS over its own path, so no home DNS filter can reach it.
-> - Saturn's Pi-hole is down with Saturn; Jupiter's `pihole` container still runs but has no clients; `nebula-sync` stopped since July 2026.
+> - Saturn's Pi-hole container is not running (checked 2026-11-26); Jupiter's `pihole` container still runs but has no clients; `nebula-sync` stopped since July 2026.
 >
 > Everything else in focus mode (timers, sprints/body doubling, check-ins, ambient audio, breaks) is unchanged and working. The blocking code stays in the product for other installs (compose default `FOCUS_BLOCKING_ENABLED=false`).
 >

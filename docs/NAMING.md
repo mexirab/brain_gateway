@@ -89,7 +89,7 @@ tier; the deeper tiers are optional and high-cost.
 **Tier 3 — identifiers (CODE CHANGE — out of scope for docs; large blast radius):**
 - Repo rename `mexirab/brain_gateway` → would break clone URLs, existing
   branches/PRs, and every doc link. Highest cost; lowest marginal benefit.
-- Docker compose project name (`gateway_mvp`), container names
+- Docker compose project name (`gateway_nerves`, from the checkout's directory), container names
   (`brain-orchestrator`), metric namespace (`bgw_*`), env-var prefixes
   (`JESS_*` vs `BGW_*` are already mixed). These are deep and load-bearing;
   renaming them is a migration, not a rebrand, and is **explicitly not

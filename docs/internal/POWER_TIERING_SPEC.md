@@ -2,6 +2,10 @@
 
 > Status: DRAFT (2026-06-14) · Owner: Nadim · Author: planning session
 > Supersedes the "Helios is always-on" assumption baked into README/CLAUDE.md.
+>
+> **Update:** built. Phase B (orchestrator on Jupiter) is live since 2026-06-26. Phase C
+> was built as **PT-C**: Helios is powered through its Home Assistant smart plug, not
+> Wake-on-LAN (2026-06-25). What actually runs: §11. §§1–10 are the original plan.
 
 ## 1. Problem
 
@@ -238,3 +242,53 @@ dir on the always-on host; run the CLAUDE.md review pipeline on the Python diffs
 5. **OPEN — voice-down behavior.** Confirm push-only (ntfy/Pushover) is acceptable when
    Helios is asleep, or whether a tiny always-on CPU TTS on Jupiter is wanted later.
 ```
+
+## 11. As built: PT-C (HA smart plug, 2026-06-25)
+
+Helios is asleep most of the time. Jupiter runs the orchestrator, frontend and Home
+Assistant 24/7 (§4 as planned), and powers Helios on demand through Home Assistant.
+
+**Why a smart plug, not WoL (§8):** Wake-on-LAN is a dead end on Helios's Aquantia
+`atlantic` NIC. Helios hangs off a TP-Link Tapo smart plug instead, switched through HA. It
+reuses `HA_URL` / `HA_TOKEN`: no `python-kasa`, no TP-Link credentials. The BIOS is set to
+`AC Back = Last State`, so restoring plug power boots Helios only if it was running when the
+power was cut.
+
+**Rules:**
+- **Wake is automatic** from the brain-asleep chat path. `cloud_brain._maybe_wake_helios`
+  fires a debounced, fire-and-forget `wake_helios()` (strong-ref task set, never awaited:
+  the ~2 min boot is longer than any request), and the asleep reply says Helios is waking.
+- **Sleep is manual only.** No idle auto-sleep. Sleep = `switch.turn_off` while Helios runs:
+  a hard power cut, safe because Helios is stateless (all DBs and ChromaDB live on Jupiter;
+  it only reloads model servers on boot). Sleep refuses while the coder box uses the brain
+  (`docs/CODER.md`).
+- **Default off:** `HELIOS_WAKE_ENABLED` (its own flag, not `JESS_ADVANCED`).
+  `config.py` `validate_helios_wake_config` auto-disables it (logs, never raises) when
+  `HA_URL` / `HA_TOKEN` is missing or a plug entity id is malformed (they go into HA REST
+  URLs), and clamps a negative debounce.
+- The Helios plug can't be switched from the `home_assistant` tool or the dashboard: power
+  goes through `helios_power` only (`ha_guard` always denies the plug).
+
+**Code:** `orchestrator/helios_power.py` owns `wake_helios()`, `sleep_helios()` and
+`helios_power_status()` (switch, watts, inferred `running|asleep|unknown`; above 30 W counts
+as running). Self-contained httpx, never raises (returns an error dict), and increments its
+metric exactly once per call, like the F-011 / F-013 managers. The wake debounce is a
+module-level monotonic timestamp; the slot is claimed optimistically before the HA call so
+two near-simultaneous wakes send one `turn_on`. An unreachable status read is the normal
+asleep state, so the 60 s poll logs only on state changes.
+
+**Surfaces:** bearer-gated `POST /api/helios/wake`, `POST /api/helios/sleep`,
+`GET /api/helios/power` (409 when disabled, 502 on HA error); tool `helios_power`
+(`{action: wake|sleep|status}`, hidden from the model via `HELIOS_TOOL_NAMES` unless enabled;
+the handler stays registered and self-gates); scheduler job `helios_status_poll` (60 s) keeps
+`bgw_helios_plug_watts` / `bgw_helios_running` fresh. `HELIOS_PLUG_MONITOR_ENABLED` runs that
+poll read-only with wake off (it never switches the plug; `/api/helios/*` still 409s).
+
+**Manual ops:** `~/plug.sh on|off|state|power` on Jupiter (HA-based) and
+`scripts/start-helios.sh` / `stop-helios.sh` / `helios-status.sh`. The orchestrator never
+shells out; it calls the HA REST API.
+
+**Reference:** env vars + metrics `docs/ENV_VARS.md` → Helios wake-on-demand (PT-C); API +
+tool shapes `TECHNICAL_REFERENCE.md` → Helios Power (PT-C) and → helios_power; alerts
+(`HeliosPoweredButUnreachable` is the only paging Helios-outage signal and needs one of the
+two flags on) `monitoring/README.md` → Helios Health Alerts.

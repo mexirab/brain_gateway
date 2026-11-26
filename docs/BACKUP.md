@@ -36,6 +36,32 @@ speaker model in it re-downloads. After a restore, run
 enroll again (`docs/VOICE_AND_TTS.md` → Voice match); until then the
 voice-match rooms answer every voice and `VoiceMatchFailing` fires.
 
+## Nightly jobs on Jupiter
+
+Five independent host cron jobs back up the irreplaceable state off-box to
+Saturn. Each takes a consistent SQLite snapshot (online-backup API), rsyncs to
+its own directory on Saturn and writes textfile metrics for a paging staleness
+alert (>36h). Crontab entries are a host step (CI never installs them).
+
+| Backup | Script | Cron | Saturn target | Stale alert | Detail |
+|--------|--------|------|---------------|-------------|--------|
+| Orchestrator state + live Chroma + credentials | `scripts/backup_state.py` | 03:30 | `/home/labadmin/jess-backups/` | `JessBackupStale` | below |
+| Home Assistant config | `homeassistant/backup_ha.sh` | 03:45 | `/home/labadmin/ha-backups/` | `JessHABackupStale` | `docs/HA.md` → Backup |
+| Radicale calendars | `radicale/backup_radicale.sh` | 03:50 | `/home/labadmin/calendar-backups/` | `JessCalendarBackupStale` | `docs/CALENDAR.md` → Backup / restore |
+| Actual Budget | `actual/backup_actual.sh` | 03:55 | `/home/labadmin/actual-backups/` | `JessActualBackupStale` | Actual Budget below |
+| Grist spreadsheets | `grist/backup_grist.sh` | 04:05 | `/home/labadmin/grist-backups/` | `JessGristBackupStale` | Grist below |
+
+Every backup also writes an off-box success gauge, which feeds the quiet
+`JessBackupOffboxFailing` (one alert per `backup` label: `state`, `ha`,
+`calendar`, `actual`, `grist`) when a copy has had no off-box success in 3 days.
+All five firing together means Saturn is down or off the tailnet
+(`monitoring/README.md` → Off-box backup alert).
+
+Not a backup, same pattern: `scripts/refresh_google_token.py` runs weekly from
+host cron (Mondays 04:00) and keeps the Google OAuth token (Calendar/Gmail) alive
+whether or not the orchestrator is up. Its textfile metric feeds the paging
+`GoogleTokenRefreshStale` (>8 days). Cron line + paths: the script's docstring.
+
 ## What the backup does
 
 `scripts/backup_state.py` is standalone and **stdlib-only** — no venv, no pip

@@ -128,6 +128,10 @@ Context is passively recorded from:
 4. Timer fires → TTS with context + offer to resume
 5. User says "resume" or starts focus → mark bookmark as resumed
 
+### Overnight parking
+
+The evening briefing parks one unfinished thing (the active focus task, else the top open backlog task) and the morning briefing offers it back. Rules: F-006 → Evening shutdown ritual.
+
 ### Modified Files
 
 | File | Changes |

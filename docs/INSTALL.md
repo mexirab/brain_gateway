@@ -51,6 +51,8 @@ When you open the dashboard for the first time and send any message, Jess prepen
 
 This makes the post-install path discoverable without you having to read docs to find the Settings page.
 
+Under the hood: `orchestrator/welcome.py` is a pure formatter (it strips markdown control characters from `user_name` / `assistant_name`); `cloud_brain._maybe_prepend_welcome` prepends it to the first reply, skipping fast-path and voice turns. `routes_setup.is_first_chat()` / `mark_first_chat_done()` keep the `first_chat_completed` flag in `data/app/setup_state.json`. Metric: `bgw_welcome_fired_total{result=prepended|error}`.
+
 The auto-resume hook is `~/.brain-gateway-resume.sh` plus a single sourcing line appended to `~/.bash_profile`. Both are idempotent. The script file is removed by Stage 2; the sourcing line becomes a harmless no-op.
 
 If you ever need to manually re-run Stage 2 (skipped the auto-resume, killed the script, etc.):

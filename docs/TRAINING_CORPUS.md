@@ -17,7 +17,7 @@ Capture every conversation turn the orchestrator ever sees in a single normalize
 
 ## Schedule
 
-Registered in `orchestrator/orchestrator.py` alongside the RAG file watcher:
+Registered in `orchestrator/orchestrator.py` alongside the RAG file watcher, **only when `JESS_ADVANCED` is true**. The drain collects user conversations and Claude Code prompts and keeps them forever, a privacy hazard for a fresh install, so the default shippable build never runs it:
 
 - `training_corpus_drain` — APScheduler cron, daily at 02:30 local
 - `training_corpus_backfill` — one-shot 30s after startup. Idempotent via content-addressed dedup; also warms the Prometheus metric labels inside the FastAPI process so they show up immediately.
