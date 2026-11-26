@@ -67,7 +67,6 @@ HEARTBEAT_ONLY = {"deadman": frozenset({"Watchdog"})}
 # Alerts that deliberately notify nobody (Prometheus / Grafana only), each with
 # its reason. Adding a name here is a decision, not a way to make CI pass.
 GRAFANA_ONLY = {
-    "UranusDown": "known-dead test box, excluded from NodeDown; exists so uranus stays visible",
     "AlertmanagerUnreachable": "fires when Prometheus can't reach Alertmanager, so routing it there is circular",
     "HighRequestLatency": "slow-turn trend at a few turns a day; dashboard signal (monitoring/README.md)",
     "AppDown": "every tier=app target (actual, grist, paperless, radicale) has its own routed *Down alert",

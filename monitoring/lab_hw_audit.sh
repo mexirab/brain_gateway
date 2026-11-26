@@ -24,7 +24,7 @@ if [[ -f "${PROJECT_DIR}/.env" ]]; then
     set +a
 fi
 
-NODES_DEFAULT=(jupiter helios saturn uranus)
+NODES_DEFAULT=(jupiter helios saturn)
 NODES=("${NODES_DEFAULT[@]}")
 
 SSH_OPTS=(

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { nodeStatus } from './node-status';
-import { CLUSTER_NODES } from './constants';
+import { CLUSTER_NODES, type ClusterNode } from './constants';
 import type { ServicesResponse, ServiceInfo } from './types';
 
 function svc(overrides: Partial<ServiceInfo>): ServiceInfo {
@@ -24,16 +24,17 @@ function services(entries: Record<string, Partial<ServiceInfo>>): ServicesRespon
 const HELIOS = CLUSTER_NODES.find((n) => n.id === 'helios')!;
 const JUPITER = CLUSTER_NODES.find((n) => n.id === 'jupiter')!;
 const SATURN = CLUSTER_NODES.find((n) => n.id === 'saturn')!;
-const URANUS = CLUSTER_NODES.find((n) => n.id === 'uranus')!;
+// No live node is `unreachable` today, so the branch is tested on a made-up one.
+const RETIRED: ClusterNode = { ...SATURN, id: 'retired', power: 'unreachable' };
 
 describe('nodeStatus', () => {
   it('returns unknown when services data has not loaded', () => {
     expect(nodeStatus(HELIOS, undefined).status).toBe('unknown');
   });
 
-  it('marks a known-unreachable box (Uranus) offline regardless of probe', () => {
-    expect(nodeStatus(URANUS, undefined).status).toBe('offline');
-    expect(nodeStatus(URANUS, services({})).status).toBe('offline');
+  it('marks a known-unreachable box offline regardless of probe', () => {
+    expect(nodeStatus(RETIRED, undefined).status).toBe('offline');
+    expect(nodeStatus(RETIRED, services({})).status).toBe('offline');
   });
 
   it('marks Helios ASLEEP when its model is configured but not healthy', () => {

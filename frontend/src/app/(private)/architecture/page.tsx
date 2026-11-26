@@ -15,7 +15,7 @@ export default function ArchitecturePage() {
   const { data: health } = useHealth();
   const { data: services } = useServices();
 
-  // 4 real nodes, derived — never hard-code the count.
+  // Node count derived from the list — never hard-code it.
   const nodeCount = CLUSTER_NODES.length;
   const gpuCount = CLUSTER_NODES.filter((n) => n.gpu).length;
 

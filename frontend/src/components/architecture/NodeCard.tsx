@@ -1,27 +1,24 @@
 'use client';
 
-import { Server, Cpu, Monitor, Home } from 'lucide-react';
+import { Server, Cpu, Home } from 'lucide-react';
 import type { ClusterNode } from '@/lib/constants';
 import type { NodeStatusInfo } from '@/lib/node-status';
 
 const NODE_ICONS: Record<string, React.ElementType> = {
   jupiter: Home,
   saturn: Cpu,
-  uranus: Monitor,
   helios: Server,
 };
 
 const NODE_COLORS: Record<string, string> = {
   jupiter: 'border-warning/30',
   saturn: 'border-info/30',
-  uranus: 'border-accent-violet/30',
   helios: 'border-success/30',
 };
 
 const GPU_COLORS: Record<string, string> = {
   jupiter: 'text-warning',
   saturn: 'text-info',
-  uranus: 'text-accent-violet',
   helios: 'text-success',
 };
 

@@ -6,7 +6,7 @@
 #
 # Usage:
 #   bash scripts/model_layer_smoketest.sh
-#   MODEL_HOST=10.0.0.173 bash scripts/model_layer_smoketest.sh   # remote box
+#   MODEL_HOST=<test-box-ip> bash scripts/model_layer_smoketest.sh   # remote box
 set -uo pipefail
 
 HOST="${MODEL_HOST:-127.0.0.1}"

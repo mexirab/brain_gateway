@@ -17,7 +17,6 @@
 #   Helios:  ${NODE_HELIOS_IP}  (GPU model layer: primary LLM split across RTX 5090 + RTX PRO
 #                                 5000, STT on CPU — power-tiered)
 #   Saturn:  ${NODE_SATURN_IP}  (backup box: off-box backups, spare RTX 3090)
-#   Uranus:  ${NODE_URANUS_IP}  (ComfyUI/Conjure on 2x RTX 5080)
 
 global:
   scrape_interval: 15s
@@ -62,13 +61,6 @@ scrape_configs:
           role: 'gateway'
           gpu: 'rtx5090+rtx-pro-5000'
 
-      # Uranus (ComfyUI / Conjure on 2x RTX 5080)
-      - targets: ['${NODE_URANUS_IP}:9100']
-        labels:
-          node: 'uranus'
-          role: 'comfyui'
-          gpu: '2x-rtx5080'
-
       # Saturn (backup box: off-box backup target, spare RTX 3090; vision + Pi-hole retired 2026-09)
       - targets: ['${NODE_SATURN_IP}:9100']
         labels:
@@ -92,11 +84,6 @@ scrape_configs:
         labels:
           node: 'helios'
           gpu: 'rtx5090+rtx-pro-5000'
-
-      - targets: ['${NODE_URANUS_IP}:${MONITORING_GPU_EXPORTER_PORT}']
-        labels:
-          node: 'uranus'
-          gpu: '2x-rtx5080'
 
       - targets: ['${NODE_SATURN_IP}:${MONITORING_GPU_EXPORTER_PORT}']
         labels:
@@ -370,10 +357,6 @@ scrape_configs:
       - targets: ['${NODE_SATURN_IP}:19999']
         labels:
           node: 'saturn'
-          source: 'netdata'
-      - targets: ['${NODE_URANUS_IP}:19999']
-        labels:
-          node: 'uranus'
           source: 'netdata'
       - targets: ['${NODE_HELIOS_IP}:19999']
         labels:

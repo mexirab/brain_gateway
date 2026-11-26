@@ -14,7 +14,8 @@ export const PRIMARY_MODEL_FALLBACK = 'Primary LLM';
  * - `always-on`  — expected up whenever the cluster is up.
  * - `wake-on-demand` — power-tiered; asleep by default, woken on demand. A
  *   configured-but-unhealthy service on such a node means "asleep", not "down".
- * - `unreachable` — known-offline / test box; never expected to be live.
+ * - `unreachable` — known-offline box; never expected to be live (no node uses
+ *   it today: the old Uranus test box was decommissioned 2026-11-26).
  */
 export type NodePower = 'always-on' | 'wake-on-demand' | 'unreachable';
 
@@ -35,7 +36,7 @@ export interface ClusterNode {
 }
 
 /**
- * Single source of truth for the cluster topology (2026-07-04).
+ * Single source of truth for the cluster topology (2026-11-26).
  *
  * Both the NodeCard grid (architecture page) and the SVG SystemDiagram derive
  * node identity from this list, and node LIVE status from `serviceKeys` +
@@ -92,16 +93,6 @@ export const CLUSTER_NODES: readonly ClusterNode[] = [
     power: 'always-on',
     // Nothing the orchestrator probes runs here (the voice is on Jupiter, vision
     // on the Helios brain), so status is "unknown" rather than a guessed "online".
-    serviceKeys: [],
-  },
-  {
-    id: 'uranus',
-    name: 'Uranus',
-    ip: '10.0.0.173',
-    gpu: '2x RTX 5080',
-    role: 'Test box — currently unreachable',
-    services: ['Test / experimental'],
-    power: 'unreachable',
     serviceKeys: [],
   },
 ] as const;
