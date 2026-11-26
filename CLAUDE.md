@@ -17,7 +17,7 @@ Helpers: agents (`.claude/agents/`) are the independent reviewers and noisy inve
 | Helios | 10.0.0.195 | — (off Tailscale by design; `ssh -J` through Jupiter or Saturn) | RTX 5090 + RTX PRO 5000 | **GPU model layer, power-tiered**: asleep most of the time, woken through an HA smart plug. Brain + vision (`llama-server-primary`, :8080), STT on CPU (:8003). No TTS. |
 | Jupiter | 10.0.0.248 | jupiter-amds.tail74fc4a.ts.net | 2x RTX 5080 (16GB each) | **Always-on hub**: orchestrator, frontend, HA, monitoring, Actual, Radicale, Grist, live TTS (VoxCPM2). The voice card is `cuda:0`: pin experiments to the other 5080 by UUID, never by index. |
 | Saturn | 10.0.0.58 | saturn-3090.tail74fc4a.ts.net | RTX 3090 (24GB) + RTX 3080 (10GB) | **Backup box**, no Jess runtime services: off-box backup target, planned home of the dead-man's switch, spare GPUs. |
-| Uranus, Pi, Callisto (retired) | 10.0.0.173, 10.0.0.106, 10.0.0.136 | - | - | Decommissioned (old test box — its two RTX 5080s are now Jupiter's; old HA Pi; old kiosk Pi). Don't use. Prometheus, the Homelab Infra dashboard and the dashboard's node list still list Uranus. |
+| Uranus, Pi, Callisto (retired) | 10.0.0.173, 10.0.0.106, 10.0.0.136 | - | - | Decommissioned (old test box — its two RTX 5080s are now Jupiter's; old HA Pi; old kiosk Pi). Don't use. |
 
 Per-node detail (what runs where, access, GPUs): `docs/internal/HELIOS_INFRASTRUCTURE.md` → Cluster nodes.
 

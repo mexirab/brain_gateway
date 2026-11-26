@@ -29,7 +29,7 @@ The maintainer cluster: what runs where, how to reach each box, and the Helios m
 
 ### Retired
 
-- **Uranus (10.0.0.173, `uranus-5080s.tail74fc4a.ts.net`):** the non-Helios test box (Ubuntu 24.04); the boot test in `docs/HARDWARE.md` ran there. Unreachable from 2026-07-04, then decommissioned; its two RTX 5080s are the ones now in Jupiter (owner, 2026-11-26). Still listed in `monitoring/prometheus/prometheus.yml.template` (node, GPU and Netdata targets), `alert-rules.yml` (`UranusDown`, the `NodeDown` exclusion), the Homelab Infra dashboard, the dashboard's node list (`frontend/src/lib/constants.ts`) and a few scripts.
+- **Uranus (10.0.0.173, `uranus-5080s.tail74fc4a.ts.net`):** the non-Helios test box (Ubuntu 24.04); the boot test in `docs/HARDWARE.md` ran there. Unreachable from 2026-07-04, then decommissioned; its two RTX 5080s are the ones now in Jupiter (owner, 2026-11-26).
 - **Pi (10.0.0.106):** ran Home Assistant until its SD card failed (2026-07-04). Dead but untouched; safe to reimage. A rescue copy of its config is at `~/ha-rescue` on Jupiter and Saturn (`docs/HA.md`).
 - **Callisto (10.0.0.136):** Pi 4 monitoring kiosk, unused since 2026-10-14. Succeeded by the closet monitors kiosk on Jupiter (2026-11-24, `scripts/jupiter-kiosk/`).
 
