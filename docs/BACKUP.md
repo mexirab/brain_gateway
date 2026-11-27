@@ -62,6 +62,11 @@ host cron (Mondays 04:00) and keeps the Google OAuth token (Calendar/Gmail) aliv
 whether or not the orchestrator is up. Its textfile metric feeds the paging
 `GoogleTokenRefreshStale` (>8 days). Cron line + paths: the script's docstring.
 
+One more nightly job stays on Jupiter: the media mirror copies the
+irreplaceable folders of the `/mnt/media` HDD onto a second disk in the same
+box (systemd timer 02:30 UTC, quiet `JessMediaMirrorStale`). See
+[Local mirror of /mnt/media](#local-mirror-of-mntmedia).
+
 ## What the backup does
 
 `scripts/backup_state.py` is standalone and **stdlib-only** — no venv, no pip
@@ -339,6 +344,133 @@ rm -rf /tmp/grist-restore
 
 Verify: open https://jupiter-amds.tail74fc4a.ts.net:8485 (tailnet only) and ask
 Jess "what spreadsheets do you have?".
+
+## Local mirror of /mnt/media
+
+`/mnt/media` is a single 10 TB HDD. Three things on it exist nowhere else: the
+audiobooks (with Audiobookshelf's config, database and metadata), the Immich
+library (with Immich's own nightly database dumps), and the model archive's
+`jess-live` folder (the copy of Helios's models and the downloads Jess needs to
+rebuild offline). `scripts/media_mirror.py` copies them every night to
+`/mnt/mirror`, a 1 TB NVMe in the same box. That covers the HDD dying or a
+folder being wiped. It does not cover losing Jupiter. The rest of the model
+archive (about 5 TB) is not copied: it needs a second big disk.
+
+| | |
+|---|---|
+| Script | `scripts/media_mirror.py` → installed as `/usr/local/sbin/media-mirror` (docstring = spec + install lines) |
+| Units | `scripts/media-mirror/media-mirror.service` + `.timer` → `/etc/systemd/system/`, daily 02:30 UTC, `Persistent=true`. Host step, CI never installs them |
+| Copied | `audiobooks`, `podcasts`, `ebooks`, `config`, `metadata`, `immich/library`, `model-archive/{jess-live,_tools,software,README.md}` (`ITEMS` in the script) |
+| Not copied | `immich/postgres` (a file copy of a running Postgres can't be restored; the dumps in `immich/library/backups/` are copied instead), the rest of `model-archive/` |
+| Mirror disk | `/mnt/mirror`, fstab by UUID with `nosuid,nodev,noexec,nofail`, root mode 700 |
+| History | Every file a night deletes or overwrites moves into `/mnt/mirror/.deleted/<UTC stamp>/<item>/` (all folders but `model-archive/software`). Kept 30 days, pruned only after a run where every item succeeded |
+| Diagnostics | rsync's own error lines (they name files) for a failed folder: `/mnt/mirror/.media-mirror-errors/<folder>.txt`, root-only |
+| Metrics | textfile `jess_media_mirror.prom`: `jess_media_mirror_success_timestamp_seconds`, `_used_bytes`, `_duration_seconds`, `_last_files{change="new\|moved"}` |
+| Alert | `JessMediaMirrorStale` (no good run for 36 h, or the metric is missing while `/mnt/mirror` is mounted; quiet tier) |
+
+**How a night works.** For each folder the script compares the mirror with the
+source file by file (no rsync involved) and counts what the copy would take out
+of the mirror: files gone from the source, turned into a folder or a hard link
+to something else, or changed in size or mtime. When tonight's count, or
+tonight's plus everything moved in the last 30 days (the same 30 days
+`.deleted/` keeps), is more than 500, or more than 10 % of the folder once 10 or
+more files are involved, the folder is **held**: nothing is copied, new files
+included, and the run fails. (For the 30-day total the Immich library uses 60
+instead of 10: its ~20 files churn daily.) A hold stays while the loss is there;
+one that came only from the 30-day total clears by itself as old nights age
+out. Files turned into symlinks or FIFOs in the Audiobookshelf and Immich
+folders don't count: rsync skips those and the mirror keeps its copy.
+
+What this does and doesn't stop: a wipe, a mass overwrite or encryption, or a
+fast drain is held before anything leaves the mirror. A slow drain that stays
+under the budget (10 %, or 500 files, per 30 days) is only slowed down:
+each removed file still sits in `.deleted/` for 30 days, and
+`jess_media_mirror_last_files{change="moved"}` shows every night's count, but
+nothing alerts on it. The mirror is a second copy, not an audit.
+
+After each copy, the files that actually moved into `.deleted/` are counted
+too, even when rsync failed or the run was killed (the next run counts an
+interrupted copy). More than the limit **trips** the folder: it stays held, and
+the journal names the `.deleted/<stamp>` holding those files and the exact
+number to accept. Before copying, a dry run checks the new and changed files
+fit, keeping 5 % of the disk (at least 10 GB) free; a copy that wouldn't fit
+holds the folder instead of filling the disk. `model-archive/software` is
+exempt and keeps no history (public source, re-fetchable; git's housekeeping
+churns it). Audiobookshelf's database is snapshotted with SQLite's online
+backup instead of copied, also on nights its folder is held or fails, and a
+changed snapshot moves the previous one into `.deleted/`.
+
+The folders Audiobookshelf and Immich write are copied without symlinks and
+without hard links, so nothing in the mirror can point elsewhere or share
+content with a planted file. A real copy refuses unless `/mnt/media` is
+read-only to it, which is what the unit's sandbox does (it also hides `/home`,
+`/var/lib`, the container specs under `/run`, sockets and secrets), so it only
+runs through the unit:
+
+```bash
+sudo systemctl start media-mirror          # a real run, same as the nightly one
+journalctl -u media-mirror -n 30            # per-folder counts; never file names
+sudo media-mirror --check                  # anywhere: what each folder would do; writes nothing
+sudo media-mirror --check --list           # ... and the names of files that would leave (terminal only)
+sudo less /mnt/mirror/.media-mirror-errors/<folder>.txt   # rsync's own lines after a FAILED copy
+```
+
+**When a folder is HELD** (`journalctl` says `HELD` and prints the exact line):
+
+1. `sudo media-mirror --check --list`: see what would leave the mirror. For a
+   trip, look in the `.deleted/<stamp>` the journal names.
+2. If it's wrong (a wiped folder, an app gone bad), fix the source first. The
+   mirror still has everything; restore from it (below).
+3. If it's expected (you deleted a series, an app rewrote its metadata), write
+   the number the journal printed into the folder's accept file, then run it:
+   `echo 812 | sudo tee /mnt/mirror/.accept/audiobooks` (the file name is the
+   folder with `/` as `-`, e.g. `immich-library`), then
+   `sudo systemctl start media-mirror`. The accept file is used up as soon as
+   that folder starts, whatever happens next; it allows that number plus 10 %
+   (at least 10 more), it must be at least what a trip moved, and it is ignored
+   when older than 24 h. The old copies go to `.deleted/` as usual.
+4. HELD because it "would not fit": nothing to accept. Find what grew in the
+   source (`sudo du -xh --max-depth=2 /mnt/media/<folder> | sort -h | tail`). A
+   sudden huge file in an Audiobookshelf or Immich folder is worth treating as
+   an attack, not as clutter.
+
+The counts and trips live in `/mnt/mirror/.media-mirror-state.json`. If the run
+finds it unreadable, it sets it aside (`…json.unreadable-state-<stamp>`) and
+holds every gated folder until each is accepted (`echo 0` is enough when
+nothing is known to be lost), so a broken state file can never clear a trip.
+
+**Restore.** Stop the app that owns the folder first. The mirror holds what the
+containers wrote (minus device files, symlinks, hard links and setuid bits), so
+look before you copy a whole folder back. The source folder is
+container-writable too: check it for planted symlinks before you write into it
+as root, and use `mv` and `rsync` (which replace a symlink) rather than `cp`
+(which follows one).
+
+```bash
+# A whole folder (example: audiobooks)
+docker stop audiobookshelf
+sudo find /mnt/media/audiobooks -type l          # must print nothing: a symlink here was planted, so stop
+sudo rsync -a --numeric-ids /mnt/mirror/audiobooks/ /mnt/media/audiobooks/
+docker start audiobookshelf
+
+# The Audiobookshelf database (the mirror's copy is from the last good night;
+# older ones are under /mnt/mirror/.deleted/<stamp>/config/)
+docker stop audiobookshelf
+sudo find /mnt/media/config -maxdepth 1 -type l   # must print nothing; if it prints anything, stop
+sudo mv -T /mnt/media/config/absdatabase.sqlite /mnt/media/config/absdatabase.sqlite.broken   # -T: never into a folder
+sudo rm -f /mnt/media/config/absdatabase.sqlite-journal /mnt/media/config/absdatabase.sqlite-wal \
+    /mnt/media/config/absdatabase.sqlite-shm   # stale sidecars would be replayed over the restored file
+sudo rsync -a --numeric-ids /mnt/mirror/config/absdatabase.sqlite /mnt/media/config/absdatabase.sqlite
+docker start audiobookshelf
+
+# One deleted or overwritten file: the newest stamp holds the version before the last change
+sudo find /mnt/mirror/.deleted -path '*/audiobooks/*' -name '<file name>'
+```
+
+For Immich, copy `immich/library/` back, then restore the database from the
+newest `immich/library/backups/immich-db-backup-*.sql.gz` with Immich's own
+restore procedure (Immich docs → Backup and Restore). `jess-live` copies back
+into `/mnt/media/model-archive/jess-live/`, or straight onto Helios.
 
 ## File ownership
 

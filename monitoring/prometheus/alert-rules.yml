@@ -112,7 +112,7 @@ groups:
           severity: critical
         annotations:
           summary: "Media storage /mnt/media is not mounted on Jupiter"
-          description: "node-exporter reports no filesystem at /mnt/media while the node is up. This disk holds the Immich photo library (~41GB) and its Postgres data directory, plus audiobooks/ebooks/podcasts. Immich Postgres logged 'could not open file global/pg_control: Input/output error' when this vanished on 2026-07-15. usb-storage-remount.service should have remounted it automatically; if this is firing, that recovery failed — check `systemctl status usb-storage-remount.service`. Once the disk is back (`lsblk`), `sudo systemctl start usb-storage-remount.service` mounts it and stops+starts the Immich/Audiobookshelf containers so Postgres recovers cleanly (`journalctl -u usb-storage-restart-stale -n 40`). Never `docker compose start` the whole Immich project: its ML container cannot start on this host (no /dev/kfd) and aborts the command before immich_server."
+          description: "node-exporter reports no filesystem at /mnt/media while the node is up. This disk holds the Immich library and its Postgres data directory, the audiobooks/ebooks/podcasts (~41GB) and the model archive (~5TB); the irreplaceable folders also have a nightly second copy on /mnt/mirror (media-mirror). Immich Postgres logged 'could not open file global/pg_control: Input/output error' when this vanished on 2026-07-15. usb-storage-remount.service should have remounted it automatically; if this is firing, that recovery failed — check `systemctl status usb-storage-remount.service`. Once the disk is back (`lsblk`), `sudo systemctl start usb-storage-remount.service` mounts it and stops+starts the Immich/Audiobookshelf containers so Postgres recovers cleanly (`journalctl -u usb-storage-restart-stale -n 40`). Never `docker compose start` the whole Immich project: its ML container cannot start on this host (no /dev/kfd) and aborts the command before immich_server."
 
       # -- Containers still on a disconnected disk -----------------------------
       # The *MountMissing rules above only check the HOST mount. On 2026-10-31
@@ -366,21 +366,22 @@ groups:
           summary: "A {{ $labels.node }} GPU is at {{ $value }}°C"
           description: "GPU temp is {{ $value }}C on {{ $labels.node }}."
 
-      # / on every node, plus Jupiter's USB disks: /mnt/logging (Prometheus
+      # / on every node, plus Jupiter's data disks: /mnt/logging (Prometheus
       # TSDB, Loki, Grafana, Alertmanager state), /mnt/documents (Paperless and
-      # its Postgres), /mnt/media (Immich and its Postgres). A full /mnt/logging
+      # its Postgres), /mnt/media (Immich and its Postgres, audiobooks, the model
+      # archive), /mnt/mirror (the media mirror NVMe). A full /mnt/logging
       # stops Prometheus and Loki writing, which can take all alerting down with
       # them. Disks fill over days (/mnt/logging grew ~0.14 GiB/day in Oct
       # 2026), so quiet tier with a 24h repeat, not a page. job= pinned for the
       # netdata honor_labels reason given at LoggingMountMissing above.
       - alert: DiskSpaceLow
-        expr: (1 - node_filesystem_avail_bytes{job="node-exporter", mountpoint=~"/|/mnt/(logging|documents|media)"} / node_filesystem_size_bytes{job="node-exporter", mountpoint=~"/|/mnt/(logging|documents|media)"}) > 0.90
+        expr: (1 - node_filesystem_avail_bytes{job="node-exporter", mountpoint=~"/|/mnt/(logging|documents|media|mirror)"} / node_filesystem_size_bytes{job="node-exporter", mountpoint=~"/|/mnt/(logging|documents|media|mirror)"}) > 0.90
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: "Disk >90% full on {{ $labels.node }} {{ $labels.mountpoint }}"
-          description: "{{ $labels.mountpoint }} on {{ $labels.node }} is {{ $value | humanizePercentage }} full. Find the space with `sudo du -xh --max-depth=2 {{ $labels.mountpoint }} | sort -h | tail -20` and `docker system df`. On /mnt/logging, Prometheus (30d) and Loki (720h) are time-retained only, with no size cap — if `du` points at loki/, find the noisy source in Grafana Explore with `topk(10, sum by (service_name, container, host) (bytes_over_time({service_name=~\".+\"}[24h])))`. Free space before it hits 100 %: a full /mnt/logging stops Prometheus and Loki writing, which can take all alerting down with them."
+          description: "{{ $labels.mountpoint }} on {{ $labels.node }} is {{ $value | humanizePercentage }} full. On /mnt/mirror (the media mirror), run `du` first: a sudden huge file in an Audiobookshelf or Immich folder is worth treating as an attack, and /mnt/mirror/.deleted/<stamp>/ holds the only copies of what left the source in the last 30 days, so remove those last, oldest stamp first, and only once you know what they are. Find the space with `sudo du -xh --max-depth=2 {{ $labels.mountpoint }} | sort -h | tail -20` and `docker system df`. On /mnt/logging, Prometheus (30d) and Loki (720h) are time-retained only, with no size cap — if `du` points at loki/, find the noisy source in Grafana Explore with `topk(10, sum by (service_name, container, host) (bytes_over_time({service_name=~\".+\"}[24h])))`. Free space before it hits 100 %: a full /mnt/logging stops Prometheus and Loki writing, which can take all alerting down with them."
 
       # Both Helios GPUs carry the brain since 2026-10-24 (Qwen3.8-Flash-Next split
       # across the 5090 + PRO 5000 by llama-server-primary.service). Since the TTS
@@ -1156,6 +1157,25 @@ groups:
         annotations:
           summary: "Grist backup is stale (>36h)"
           description: "The nightly Grist backup hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + /home/labadmin/gateway_nerves/grist/backup_grist.sh (log: /home/labadmin/grist/backup.log)."
+      - alert: JessMediaMirrorStale
+        # Second copy of /mnt/media's irreplaceable folders (audiobooks +
+        # Audiobookshelf, the Immich library, the model archive's jess-live) on
+        # Jupiter's /mnt/mirror NVMe. scripts/media_mirror.py runs nightly from
+        # media-mirror.timer and writes this only after a fully good run, so a
+        # failed item or a HELD one (too many files leaving the mirror tonight or in 30 days:
+        # it copies nothing and stays held until accepted) keeps it firing. Quiet tier: the primary
+        # copy on /mnt/media is still there. The absent() branch only fires where
+        # /mnt/mirror is mounted, so a fresh install without the mirror stays quiet.
+        expr: |
+          time() - jess_media_mirror_success_timestamp_seconds > 129600
+          or (absent(jess_media_mirror_success_timestamp_seconds)
+              and on() count(node_filesystem_size_bytes{job="node-exporter", mountpoint="/mnt/mirror"}) > 0)
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "Media mirror is stale (>36h) or never ran"
+          description: "The nightly /mnt/media → /mnt/mirror copy hasn't fully succeeded for 36 h (or its metric is missing), so the audiobooks, the Immich library and jess-live are down to one copy. `journalctl -u media-mirror -n 30` names each failed or HELD item and what to do; `findmnt /mnt/media /mnt/mirror` checks both disks. HELD = more files would leave the mirror (deleted, replaced or changed type, tonight or in 30 days; or new data that wouldn't fit) than the limit, and nothing was copied: see which with `sudo /usr/local/sbin/media-mirror --check --list`; if it's expected, run the `echo <N> | sudo tee /mnt/mirror/.accept/<folder>` line the journal printed, then `sudo systemctl start media-mirror` (a real copy only runs through the unit). Runbook: docs/BACKUP.md → Local mirror of /mnt/media."
       - alert: ExchangeCalendarSyncStale
         # The work (Exchange) calendar only reaches Jess through the iPhone
         # Shortcut → POST /api/calendar/sync. If it stops (Shortcut disabled,

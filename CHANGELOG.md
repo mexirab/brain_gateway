@@ -4,6 +4,32 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Local mirror of /mnt/media onto a second disk (2026-11-27)
+
+Branch `feat/media-mirror`. New host job on Jupiter plus one alert; nothing in the orchestrator changes.
+
+### Why
+
+A disk audit found that the audiobooks (with Audiobookshelf's config and database), the Immich library and the model archive's `jess-live` folder lived only on the single 10 TB HDD at `/mnt/media`, outside every nightly backup. Jupiter's spare 1 TB NVMe (an unused Nobara install) was wiped and mounted at `/mnt/mirror` for a second copy.
+
+### What
+
+- `scripts/media_mirror.py` + `scripts/media-mirror/media-mirror.{service,timer}`: nightly at 02:30 UTC, rsync per folder with a 30-day history of deleted or overwritten files under `/mnt/mirror/.deleted/<stamp>/`. Audiobookshelf's SQLite database is snapshotted with the online backup API. Immich's live Postgres folder is skipped; its own nightly dumps are copied.
+- Before each copy the script compares the mirror with the source file by file (rsync's `--stats` miss files turned into folders, symlinks or hard links). A folder that would lose more than 500 files, or more than 10 % of it, tonight or within the 30 days `.deleted/` keeps, is held: nothing is copied until the owner writes the printed count into a one-time accept file (used up when the folder starts, ignored after 24 h). Files actually moved during a copy are counted too, including an interrupted one, and a trip can only be cleared with its own count. A dry run holds a copy that wouldn't fit on the disk. An unreadable state file holds every gated folder instead of clearing anything. Old history is pruned only after a fully good run. Known limit: a slow drain under the budget is slowed, not stopped.
+- The folders Audiobookshelf and Immich write are copied without symlinks or hard links (`-H` let a container make rsync replace mirror copies with a decoy's content), and a real copy refuses unless `/mnt/media` is read-only to it (the unit's sandbox).
+- The unit hides `/home`, `/var/lib` and other secrets, blocks every socket family, forbids setuid bits and keeps `/mnt/media` read-only (`systemd-analyze security` 1.5). `--check` / `--check --list` is a dry run for diagnosis.
+- Alert `JessMediaMirrorStale` (quiet): no good run for 36 h, or the metric is missing while `/mnt/mirror` is mounted. `DiskSpaceLow` now covers `/mnt/mirror`. Metrics `jess_media_mirror_*`.
+- Tests: `orchestrator/tests/test_media_mirror.py` (the real-rsync cases skip in the test image, which has no rsync; run the file on the host).
+
+### Upgrade actions (Jupiter, done 2026-11-27)
+
+- `/etc/fstab`: `/mnt/mirror` by UUID with `defaults,noatime,nosuid,nodev,noexec,nofail,x-systemd.device-timeout=30`; `chmod 700 /mnt/mirror`.
+- Install lines in the script's docstring. First run: 216 GB in 15 min.
+
+### Files
+
+`scripts/media_mirror.py`, `scripts/media-mirror/`, `orchestrator/tests/test_media_mirror.py`, `monitoring/prometheus/alert-rules.yml`, `monitoring/alertmanager/alertmanager.yml.template`, `docs/BACKUP.md`, `monitoring/README.md`, `CLAUDE.md`.
+
 ## [Unreleased] — Claude Code helpers: agents vs skills, and a CLAUDE.md three times smaller (2026-11-26)
 
 Branch `chore/agents-skills-claude-md`. Docs and Claude Code config only; no code or behavior change.
