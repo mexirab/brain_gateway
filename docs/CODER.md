@@ -239,7 +239,7 @@ Qwen Code found it, ran the test file inside the box (7 failed → 44 passed) an
 
 | File | What |
 |---|---|
-| `coder/Dockerfile` | The box image: the orchestrator's dependency lines (shared build cache), none of its code; `requirements.txt` + `embedding_pin.py` come in through the compose build context `orchestrator` |
+| `coder/Dockerfile` | The box image (`jess-coder:current`, built through the build-only compose service `coder`, profile `coder`): the orchestrator's dependency lines (shared build cache), none of its code; `requirements.txt` + `embedding_pin.py` come in through the compose build context `orchestrator`. The pinned embedding model is baked in, because Jess's tests load it at import and the box is offline |
 | `coder/package.json`, `package-lock.json` | Pinned Qwen Code |
 | `coder/settings.json` | Locked Qwen Code settings (`/etc/qwen-code/settings.json`, system scope) |
 | `coder/system-prompt.md` | The lean system prompt (the spike measured ~4.4K tokens per request with it) |

@@ -127,7 +127,7 @@ The trial began with a question about stratallm.org.
 ## Known limits / open items
 
 - **The flag fails open:** `VOICE_THINKING_ENABLED` defaults to `false`, and nothing ties it to the running brain. Restoring an `.env` from before 2026-10-24, or one rebuilt from `.env.example`, while Flash-Next is installed silently brings the voice-turn unrequested actions back. The deterministic gate in front of `home_assistant` calls is the real control.
-- **Context:** 64K until the TTS moves to Jupiter, which raises it to 262K. At 64K, the self-audit investigator's ~70K run (2026-10-21) was rejected and came back `partial`.
+- **Context:** 64K until the TTS moved to Jupiter (2026-11-23, PR #172); 262K since. At 64K, the self-audit investigator's ~70K run (2026-10-21) was rejected and came back `partial`.
   - At 262K, a cold 200K-token prompt takes ~140 s to prefill. That is longer than the unified loop's 120 s per-round timeout. Only a very long dashboard chat can get there (see the history point below); the investigator's budgets keep it near 45–60K tokens. Later rounds hit the prompt cache.
   - Decode slows with context depth: 88 tok/s at 100K, 57 tok/s at 200K.
   - Nothing caps client chat history any more. At 64K, an oversized conversation failed fast. Now a 64K–~170K-token history means roughly 40–110 s to first token per turn, while it holds the single llama slot (the per-turn context sits ahead of the history, so it is re-processed every turn). Follow-up: a size budget in `cloud_brain._sanitize_client_history`.

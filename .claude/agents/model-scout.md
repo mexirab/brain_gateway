@@ -2,6 +2,7 @@
 name: model-scout
 description: Research agent for open-weight LLMs, TTS, STT, vision, and embedding models. Evaluates newer/better models for any role in the Brain Gateway stack — balances quality, speed, VRAM. On-demand only (not in the post-change pipeline). Always frames recommendations against minimum viable hardware so the product stays accessible.
 tools: WebSearch, WebFetch, Read, Grep, Bash
+omitClaudeMd: true
 ---
 
 ## Role
@@ -24,7 +25,6 @@ On-demand when the user wants to evaluate newer/better models for any role in th
 | Jupiter | RTX 5080 (voice card) | 16 GB | **Live TTS** — VoxCPM2 (port 8004, `tts/voxcpm-tts-jupiter.service`), ~7.4 GiB fresh, ~13 GiB after the longest texts. Do NOT place another model here: anything beside it slows or breaks Jess's voice (alert `TTSGPUMemoryLow`). Jupiter is the always-on hub, so it shares RAM/CPU with all of production |
 | Jupiter | RTX 5080 (second card) | 16 GB | Experiments and other models, pinned by UUID (the two cards are identical). Keep them small: Jupiter runs HA, the orchestrator and monitoring |
 | Saturn | RTX 3090 | 24 GB | Spare card on the backup box; not in the runtime path. Too slow for the voice (1.75–2.1× Helios, 2026-11-12). Former expert reasoning model (Qwen3-32B Q4_K_M, port 8084), deprecated 2026-09-28 |
-| Uranus | 2x RTX 5080 | 16 GB each | Test box, not in the runtime path |
 
 **Model history note:** Qwen3-VL-30B-A3B (Huihui abliterated) was trialed as primary in early April 2026 but hallucinated tool calls instead of executing them — reverted to Qwen3.5-27B. Primary since then: Lorbus/Qwen3.6-27B-int4-AutoRound (vLLM, 2026-04-26), Qwen3.8-27B NVFP4 (vLLM 0.27.1, 2026-09-28 → 2026-10-02 — see `docs/internal/QWEN38_PREP_RESULTS.md` for the parser/KV/MTP compatibility findings), DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF on llama.cpp (2026-10-02 → 2026-10-24 — `tts/llama-server-primary-27b-q6k.service`, now the rollback), Qwen3.8-Flash-Next UD-Q3_K_XL on llama.cpp across both GPUs (2026-10-24 — see `tts/llama-server-primary.service` header + `docs/internal/FLASH_NEXT_TRIAL.md`; it needs voice-turn thinking on, because with thinking off it took unrequested Home Assistant actions). Candidates for this slot must ship an MTP draft head and load on llama.cpp ≥ build 11358. When scouting primary-slot replacements, verify tool-calling reliability explicitly (not just benchmark scores) before recommending.
 

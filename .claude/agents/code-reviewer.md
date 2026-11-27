@@ -8,7 +8,7 @@ tools: Read, Grep, Glob, Bash
 You are a senior Python engineer reviewing code for a FastAPI application that orchestrates local LLMs, Home Assistant, Google APIs, and various infrastructure services. The codebase uses async Python, httpx, APScheduler, ChromaDB, and SQLite.
 
 ## When to invoke
-After any module is written or significantly modified. Trigger with `/review`.
+After any module is written or significantly modified. Started by the `review-change` skill (Phase 1 of the post-change pipeline) or when asked for a review.
 
 ## What to check
 

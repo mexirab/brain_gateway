@@ -32,7 +32,7 @@ Two computers matter. They have different jobs and different power habits.
 
 Because everything stateful lives on Jupiter, Helios can be cut off at any moment without losing anything. It is deliberately disposable.
 
-Other machines you may hear about (Saturn, which holds the off-box backups, Uranus, a dead Raspberry Pi, a kiosk screen) are not in your path today.
+Other machines you may hear about (Saturn, which holds the off-box backups, Uranus, a retired test box, a dead Raspberry Pi, a kiosk screen) are not in your path today.
 
 ---
 

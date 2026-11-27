@@ -1,22 +1,37 @@
 # Infrastructure Details
 
-## HTTPS Access (Tailscale Serve)
+The maintainer cluster: what runs where, how to reach each box, and the Helios model layer in detail. The short tables live in `CLAUDE.md` → Cluster and Services. Past setups: `HISTORY.md` (same directory).
 
-Mobile mic access requires HTTPS. Handled by Tailscale Serve (no nginx needed).
+## Cluster nodes
 
-```bash
-# Already running — persists across reboots
-sudo tailscale serve --bg http://localhost:80
+### Helios — 10.0.0.195 (GPU model layer, power-tiered)
 
-# Disable
-sudo tailscale serve --https=443 off
+- RTX 5090 (GPU0, 32 GB) + RTX PRO 5000 Blackwell (GPU1, 48 GB). Runs only the model layer: the brain (`llama-server-primary.service`, :8080; it also serves vision through `VISION_*`) and STT on CPU (`stt-onnx.service`, :8003). Layout: Helios GPU Layout below.
+- Also on Helios: the Wyoming bridges for HA Assist (:10300 STT, :10301 TTS; the TTS bridge gets no audio since the voice left Helios), and `promtail-helios` (:9080, internal) and `nut-exporter` (:9199), each from its own compose project (Monitoring below).
+- No TTS: Helios's `voxcpm-tts` (:8004) and `qwen-tts` (:8002) are disabled rollbacks. The code agent (`llama-server-coder.service`, :8082) is retired.
+- **Power-tiered:** asleep most of the time, woken on demand through its HA smart plug; not always-on (`POWER_TIERING_SPEC.md` → As built). Stateless: every DB lives on Jupiter.
+- **Access:** SSH `labadmin@10.0.0.195`, LAN only. Helios is kept off Tailscale by owner decision (2026-11-07): `tailscaled` is installed but logged out; don't re-join it. From off the LAN, jump through Jupiter or Saturn: `ssh -J labadmin@jupiter-amds labadmin@10.0.0.195`. Neither advertises a subnet route, so Helios's ports (:8080, :8003) can't be reached from the tailnet.
+- **HTTPS:** none on Helios any more. The dashboard's HTTPS (needed for the phone mic) is Tailscale Serve on Jupiter → `localhost:3001` (`docs/FRONTEND.md` → HTTPS). The old Helios setup (`tailscale serve` at `helios.tail74fc4a.ts.net`, cert under `/opt/gateway_mvp/certs/`) is gone.
 
-# Cert renewal (auto-managed, but manual if needed)
-sudo tailscale cert --cert-file /opt/gateway_mvp/certs/helios.crt \
-  --key-file /opt/gateway_mvp/certs/helios.key helios.tail74fc4a.ts.net
-```
+### Jupiter — 10.0.0.248, `jupiter-amds.tail74fc4a.ts.net` (always-on hub)
 
-**URL:** `https://helios.tail74fc4a.ts.net/` (must use domain, not IP, for valid cert)
+- 2× RTX 5080 (16 GB each).
+- **Docker:** orchestrator `brain-orchestrator` (:8888); frontend (:3001, via Tailscale Serve HTTPS); Home Assistant (own compose project `homeassistant/`, host network, :8123; `docs/HA.md`); monitoring (Prometheus, Grafana, Alertmanager, Loki, promtail, blackbox exporter, `loki-push-gw` :3101; `monitoring/README.md`; Grafana overview `https://jupiter-amds.tail74fc4a.ts.net:3000/d/brain-gateway-overview`); SearXNG; Actual Budget (`actual-budget`, own compose project `actual/`, loopback :5006 + tailnet HTTPS :5007, the finance source of truth); Radicale CalDAV (`radicale`, loopback :5232 + tailnet HTTPS :5233); Grist (`grist`, own compose project `grist/`, loopback :8484 + tailnet HTTPS :8485); Pi-hole (idle: no clients since LAN DNS moved to the router in late Sept 2026; `nebula-sync` stopped).
+- **Not Docker:** Conjure API (a separate project: Node.js under PM2 at `/opt/conjure`, logs shipped by the Jupiter promtail).
+- **Host systemd:** the live TTS `voxcpm-tts` (VoxCPM2, `tts/voxcpm-tts-jupiter.service` + `.socket`, one 5080 picked by UUID, socket-activated on `172.17.0.1:8004` for Docker networks only, bearer key; its journal isn't shipped to Loki; `docs/VOICE_AND_TTS.md` → VoxCPM2 on Jupiter); the GPU exporter (:9400, `monitoring/gpu-exporter/nvidia-gpu-exporter-jupiter.service`); the hourly NVIDIA module check (`scripts/nvidia-module-check/`); the closet kiosk (`scripts/jupiter-kiosk/`); the container firewall (`scripts/container-firewall/`).
+- **GPUs:** the voice is on the PCI-bus-0b card since 2026-11-24, which makes it `cuda:0`: an unpinned single-GPU tool lands on the voice. The bus-0c card has the two HDMI ports and drives the closet monitors; it is the experiment card. Pin experiments by UUID, never by index (`docs/VOICE_AND_TTS.md` → VoxCPM2 on Jupiter). "Above 4G Decoding" is on in the BIOS since 2026-11-22; without it the second card gets no BAR space and `nvidia-smi` lists one card.
+
+### Saturn — 10.0.0.58, `saturn-3090.tail74fc4a.ts.net` (backup box)
+
+- RTX 3090 (24 GB) + RTX 3080 (10 GB). Both cards were out 2026-11-13 → 2026-11-24 and Saturn was down meanwhile; it is back up since 2026-11-24.
+- No Jess runtime services. It is the off-box target of the five nightly backups (`docs/BACKUP.md`) and the planned home of the dead-man's switch `jupiter-deadman` (:9466; the owner installs it by hand, not installed yet; `monitoring/deadman/README.md`). Spare GPUs: the 3090 is too slow for the voice (1.75–2.1× Helios, 2026-11-12), the 3080 too small.
+- Former roles, all out of the runtime path: vision (Qwen3-VL-8B-Instruct Q4_K_M, :8010, until 2026-09-28; vision now uses the Helios brain), the expert model (Qwen3-32B Q4_K_M, :8084, `expert-model` container, deprecated 2026-09-28, `EXPERT_ENABLED=false`), Pi-hole secondary (admin `http://saturn-3090.tail74fc4a.ts.net:8053/admin`; no longer the LAN resolver).
+
+### Retired
+
+- **Uranus (10.0.0.173, `uranus-5080s.tail74fc4a.ts.net`):** the non-Helios test box (Ubuntu 24.04); the boot test in `docs/HARDWARE.md` ran there. Unreachable from 2026-07-04, then decommissioned; its two RTX 5080s are the ones now in Jupiter (owner, 2026-11-26).
+- **Pi (10.0.0.106):** ran Home Assistant until its SD card failed (2026-07-04). Dead but untouched; safe to reimage. A rescue copy of its config is at `~/ha-rescue` on Jupiter and Saturn (`docs/HA.md`).
+- **Callisto (10.0.0.136):** Pi 4 monitoring kiosk, unused since 2026-10-14. Succeeded by the closet monitors kiosk on Jupiter (2026-11-24, `scripts/jupiter-kiosk/`).
 
 ## RAG Personal Knowledge
 
@@ -162,6 +177,8 @@ Full trial + acceptance record: `QWEN38_PREP_RESULTS.md` (same directory).
 
 ### History
 
+All eras, removed services and migrations: `HISTORY.md` (same directory). Brain changes in short:
+
 2026-10-02 → 2026-10-24: DavidAU Qwen3.8-27B TURBO Q6_K MTP on llama.cpp, GPU0 alone (now the 27B rollback unit above). Replaced by Qwen3.8-Flash-Next for a better A/B score (66/66 vs 64/66), faster decode (~135–180 vs ~106–122 tok/s), ~0.5 s warm TTFT and a 27 s cold load; costs: 64K context instead of 131K, Qwen3-TTS no longer fits on GPU1, and voice turns need thinking on. See `FLASH_NEXT_TRIAL.md`. Later the live TTS (VoxCPM2) moved from GPU1 to a Jupiter RTX 5080 (Saturn's RTX 3090 was tried first and was too slow), and the context went to 262K (`-ts 40,60 -ub 384`, measured 2026-11-11).
 
 2026-09-28 → 2026-10-02: `RadixArk/Qwen3.8-27B-NVFP4` on vLLM 0.27.1, GPU0 (`vllm-primary.service`, now the older rollback unit above). Replaced by llama.cpp for ~equal decode speed (106–122 vs ~111 tok/s), a ~4 s warm start instead of ~2m50s, a systemd-sandboxed native process instead of a privileged `docker run`, and llama.cpp's `/metrics`.
@@ -183,12 +200,15 @@ Repo changes (units take effect only when installed on Helios):
 | `voxcpm-tts.service` (Helios copy, now the disabled rollback; the live Jupiter unit runs as its own `voxcpm` user and has its own bearer key) | `InaccessiblePaths=-/etc/llama-server` — runs as the same `llama` user as the brain, so it must not read the key. The `-` skips a missing path: restart `voxcpm-tts` after `/etc/llama-server` is first created |
 | `vllm-primary.service` | Header only: no API key in that unit, so rolling back to it turns key enforcement off |
 | Grafana / Loki (Jupiter) | Usage stats, update checks, plugin key download/preinstall and news feed off — `monitoring/README.md` → No phone-home |
+| `orchestrator/self_investigator.py` | Its read-only file tool refuses `llama_api_key` and any name matching `api[_-]?key` (plus tokens, secrets, `.env*`), so the investigator can't read the key |
 
 Host-side, outside the repo (done 2026-10-27):
 
 - **Helios `mistral_proxy` / `openai_shim`** (:8000 / :8001): stale Aug 2025 services, unauthenticated, nothing used them — disabled.
 - **Netdata** (Helios + Jupiter): opted out of anonymous statistics (`/etc/netdata/.opt-out-from-anonymous-statistics`). Helios Netdata was also streaming to a parent `ceres` that doesn't exist — streaming disabled.
 - **Jupiter `qwen` CLI wrapper** (`~/.local/bin/qwen`, Qwen Code driven by this brain): reads the brain key from `~/.qwen/brain-api-key` (mode 600).
+
+**Deliberate outbound path (2026-11-24, opt-in):** `brain-orchestrator` → `https://api.anthropic.com` (base URL fixed in code) for the self-audit investigator, only when `SELF_AUDIT_CLAUDE_API_KEY`, `SELF_AUDIT_ENABLED`, `JESS_ADVANCED` and `SELF_AUDIT_INVESTIGATE` are all set. What it sends: `monitoring/README.md` → Self-audit investigator on Claude.
 
 **Remaining gaps:** the key crosses the LAN in plain HTTP (stops callers without it, not a LAN sniffer). The brain's and STT's allow-lists still include the LAN, so DNS through the LAN resolver is the one internet-bound path they keep; narrowing `IPAddressAllow` (`LLAMA_SERVER_REMOTE_MEDIA.md` → Option A) is still open.
 
@@ -200,14 +220,9 @@ Host-side, outside the repo (done 2026-10-27):
 - `TERMINAL_TOOLS` set in the loop short-circuits after state-changing tools (start_focus, stop_focus, home_assistant, set_reminder, cancel_reminder, update_data, create_calendar_event) — prevents Nemotron from undoing its own actions in subsequent rounds
 - Streaming chunk size: 80 chars (was 20)
 
-## Callisto Kiosk (Monitoring Display)
+## Callisto Kiosk (retired)
 
-```bash
-./pi-kiosk/deploy.sh                # deploy and start
-./pi-kiosk/deploy.sh restart        # restart kiosk display
-./pi-kiosk/deploy.sh status         # check status
-./pi-kiosk/deploy.sh stop           # stop kiosk
-```
+Callisto has been unused since 2026-10-14; the closet monitors kiosk on Jupiter replaced it (`scripts/jupiter-kiosk/README.md`). `./pi-kiosk/deploy.sh [restart|status|stop]` is the old deploy script, kept for reference.
 
 ## Monitoring
 

@@ -245,6 +245,39 @@ If either holds, the spoken briefing is skipped, its text is mirrored off the sp
 
 **Known gap:** with the default 07:00 morning routine, the briefing is effectively inbox/Telegram-only every day (an inbox card in the `/chat` tray, Telegram if the bot is on). The routine does NOT speak weather, today's events, the parked item, or the missed-reminder recap. The `include_calendar_summary` step flag is parsed but unused; only `_complete_routine` speaks a calendar summary (Google-only, ≤3 events) and only if all steps finish.
 
+### Metrics
+
+`bgw_routine_started_total{routine,triggered_by}`, `bgw_routine_steps_advanced_total{routine,action}`, `bgw_routine_completed_total{routine}`, `bgw_routine_auto_skipped_total{routine,step}`, `bgw_routine_auto_ended_total{routine,step}` (the stuck-routine signal; Grafana-only alert `RoutineAutoEnded`), and `bgw_selfcare_logged_total{action}` for every self-care log, routine bridge included.
+
+### Evening shutdown ritual (evening briefing)
+
+`jobs_calendar.evening_briefing()`, daily cron at `EVENING_BRIEFING_TIME` (default 21:30; `EVENING_BRIEFING_ENABLED`). Registered in `orchestrator.py` whether or not a calendar is configured (meds + parking still deliver without one); registration is try/except-guarded so a malformed time can't crash-loop startup. The mirror of the morning briefing:
+
+- **Tomorrow's first event** from every calendar source (`jobs_calendar.get_tomorrow_events()`, shared with the wind-down nudge) + a leave-by time (`get_travel_time` + `TRAVEL_TIME_BUFFER`) when it has a physical location. Work (Exchange) locations are never sent to Maps. A calendar it couldn't read is said out loud, never read as a clear day.
+- **Evening meds check:** `selfcare_manager.evening_meds_status()`, same "confirmed today, hour ≥ 17" semantics as `_check_meds`.
+- **Parks ONE unfinished thing** (F-007): the active focus task, else the top open backlog task, in the `app_state` SQLite KV (`state_store.set_app_state` / `get_app_state_entry` / `delete_app_state`, key `parked_item`). `morning_briefing` offers it back and clears it only on a successful, non-suppressed announce. Items older than 36 h are dropped, not announced as "last night".
+- **Gates:** an active guided routine (the evening routine auto-triggers at 21:00) → no speech, the digest is mirrored, the item stays parked. DND → parks silently, no card.
+- **Mirroring:** `jobs_calendar._mirror_message` posts the morning digest (skip path), the evening digest and the missed-reminder recap as a dashboard inbox `message` card and via `telegram_bot.fire_system_message` (no-op when the bot is off). No Web Push under DND.
+- Speaker route: the `briefing` category.
+- **Monitoring:** `bgw_evening_briefing_outcome_total{outcome}` (no panel or alert; `skipped_routine` is normal on routine nights). Heartbeat `bgw_evening_briefing_last_run_timestamp_seconds` → `EveningBriefingStale` (25.5 h + `for: 30m`; the threshold rationale, incl. the 25 h DST fall-back night, is in `monitoring/prometheus/alert-rules.yml`).
+
+**Heartbeats** (morning/evening briefing, wind-down nudge + dim) go through `orchestrator/job_heartbeat.py` (docstring = contract): `stamp()` persists the run time to `app_state` (`heartbeat_<job>_ts`), `seed()` restores the real last run at startup (the first enable records the registration time once), `forget()` drops the key of a job not scheduled at startup, so re-enabling it doesn't page on an old stamp. Accepted edge: a restart across a fire time skips that run, and the Stale alert then fires truthfully.
+
+### Sleep wind-down ladder
+
+`orchestrator/jobs_winddown.py` (module docstring = overview). Two cron rungs ahead of `WIND_DOWN_BEDTIME` (default 22:30). Registration in `orchestrator.py` is try/except-guarded, and the minute math wraps past-midnight bedtimes.
+
+| Rung | Does | Rules |
+|------|------|-------|
+| `wind_down_dim` (T-60) | Activates each scene in the comma-separated `WIND_DOWN_SCENE` via `ha_client.call_service(scene, "turn_on")`. Silent | Non-`scene.*` entries are dropped with a WARN: a `.env` typo must not turn on an arbitrary domain every night. Per-scene error isolation. No-op when unset. Skipped under DND (a scene can raise lights an early goodnight turned off) |
+| `wind_down_nudge` (T-30) | Speaks a screens-away line + a one-line tomorrow anchor (`get_tomorrow_events()`; no anchor when a calendar source failed) on the `briefing` speaker route | Same DND / active-routine silent-skip rules as the evening briefing. Outcome-honest log |
+
+**Morning half.** `sleep_mode("on")` stamps `app_state.sleep_started_at` via `tool_handlers._stamp_sleep_started` — **goodnight intent only**: indefinite mutes (no `duration_hours`) between 20:00 and 05:00. The same tool is also "mute, guests over" and "quiet for 2 h", and stamping those would falsely soften the next morning. `morning_briefing` reads + clears the stamp and goes gentle (softer greeting, weather skipped) when the night ran under `WIND_DOWN_SHORT_NIGHT_HOURS` (6.5 h). Stamps more than 16 h old are ignored, so afternoon timed mutes don't count.
+
+**Monitoring.** Heartbeats `bgw_wind_down_last_run_timestamp_seconds` (T-30 nudge) and `bgw_wind_down_dim_last_run_timestamp_seconds` (T-60 dim), both persisted + seeded via `job_heartbeat`. The dim stamp is written at the top of `wind_down_dim`, before its no-scene / DND early returns, so it proves the job fired even on nights it does nothing (the scene counter alone can't tell a dropped job from a legitimate no-op). The nudge has the `WindDownNudgeStale` warning alert (25.5 h, quiet Pushover): a missing spoken nudge is invisible by omission, and the feature targets the person least likely to notice. The dim rung has a heartbeat panel but no alert, by design (a failed dim is visible in the house). Grafana row "Sleep Wind-Down".
+
+Tests: `tests/test_evening_briefing.py`, `tests/test_wind_down.py`, `tests/test_morning_briefing.py` (parked-item pickup, short-night morning).
+
 ---
 
 ## Testing Checklist

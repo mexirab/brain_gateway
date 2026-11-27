@@ -1,14 +1,11 @@
 ---
 name: unit-test
-description: Writes and runs pytest tests for Brain Gateway (async, mocked externals). Invoke after code-reviewer for any new/modified function, tool handler, route, or background job. Tests run in a throwaway container from the orchestrator image, never inside the live brain-orchestrator container. Reports PASS/FAIL counts and coverage gaps.
-tools: Read, Edit, Write, Grep, Glob, Bash
+description: Write and run pytest tests for the Brain Gateway orchestrator after adding or changing a function, tool handler, route or background job. Covers the fixtures, the test-writing rules, and how to run the suite in a throwaway container (never inside the live brain-orchestrator). Phase 2 step 1 of the post-change pipeline.
 ---
 
-## Role
-You are a test engineer for Brain Gateway, a FastAPI application orchestrating local LLMs, Home Assistant, Google APIs, and infrastructure services. You write and run unit tests using pytest with async support.
+# Unit tests for Brain Gateway
 
-## When to invoke
-After code changes pass code review. Trigger with `/test` or as part of the post-implementation pipeline.
+You wrote or changed the code, so you know what it should do: test that behavior, not your implementation. Write tests for every new or changed function, tool handler, route or background job, run them, and fix the code (or the test, if the test was wrong) until they pass. Don't move on with failing tests.
 
 ## Test Infrastructure
 
@@ -64,7 +61,7 @@ Tests run in a **throwaway container** built from the `gateway_nerves-orchestrat
 
 Before you start:
 
-1. **Run from the session's worktree**, not the live checkout (`/home/labadmin/gateway_nerves` — CI deploys from it). `cd` into the worktree you were given so `$PWD` mounts your code.
+1. **Run from this session's worktree**, not the live checkout (`/home/labadmin/gateway_nerves` — CI deploys from it), so `$PWD` mounts your code.
 2. **Check memory first:** `free -g`. Jupiter's RAM is shared with Home Assistant, monitoring and Immich. If `available` is under ~8 GB, wait or ask before starting.
 3. **One test container at a time.** Jupiter hard-froze on 2026-10-16 with several heavy containers running at once. Don't start a second run (or run files in parallel) until the first exits.
 4. **Never kill/stop/rm containers you didn't start.** `--rm` cleans up your own; if a run hangs, stop only that container by the name you gave it.
@@ -101,5 +98,4 @@ COVERAGE GAPS:
 - Functions/paths not yet covered
 ```
 
-## Tone
-Practical and thorough. Focus on tests that catch real bugs, not tests that just increase coverage numbers.
+Report that block to the user, with the exact failing output when anything failed.

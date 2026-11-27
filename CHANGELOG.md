@@ -4,6 +4,36 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Claude Code helpers: agents vs skills, and a CLAUDE.md three times smaller (2026-11-26)
+
+Branch `chore/agents-skills-claude-md`. Docs and Claude Code config only; no code or behavior change.
+
+### Why
+
+`CLAUDE.md` had grown from 46 KB (June) to 168 KB (~42k tokens). It loads in full into every session and every subagent, and one post-change pipeline run starts five to seven subagents, so ~210–300k tokens per change went to re-reading it. Its `## Notes` section alone was 112 KB of history, measurements and per-feature detail. The docs-updater agent's own rule ("keep CLAUDE.md lean") wasn't holding.
+
+### Agents and skills (`.claude/`)
+
+- Reviewers and noisy investigators stay agents (own context, read-only tools, parallel): `code-reviewer`, `security`, `prod-support`, `frontend`, `hacker`, `model-scout`.
+- How-tos that need the session's context become skills (`.claude/skills/`):
+  - `unit-test` (was an agent): fixtures, test rules, the throwaway-container run.
+  - `docs-updater` (was an agent): a current doc map and hard limits on what goes into `CLAUDE.md` (bullet ≤ 3 lines, no measurements/history/lists, size check before and after).
+  - `observability-rules` (new, from `prod-support.md`): log levels and prefixes, the never-log list, library loggers, adding a metric / Grafana panel / alert. Preloaded into `prod-support` with the agent `skills:` field.
+  - `review-change` (moved from `.claude/commands/`): now runs the whole pipeline, Phase 1 agents and then the `unit-test` and `docs-updater` skills.
+- `frontend` is review-only (no Edit/Write). `model-scout` sets `omitClaudeMd: true`. Stale facts fixed: `hacker` and `frontend` pointed at Helios and `/opt/gateway_mvp`; `prod-support` had the deleted Deep-Dive dashboard, a hand-edited-JSON Grafana workflow, the orchestrator scrape target on Helios and Saturn as down.
+
+### CLAUDE.md
+
+- 168,651 → ~51,000 bytes. Every Notes bullet is now what it is + the rules a maintainer must not break + a pointer; the Notes are grouped by topic. The Cluster / Services / Tools / Key Files tables have one- or two-sentence cells (Key Files 66 → 33 rows; the rest are in `docs/DEV.md` → Module map).
+- Every removed fact was moved into a topic doc first. A check of every backticked name that left `CLAUDE.md` found each one in a doc, the changelog or the source, apart from branch names and old one-off commands.
+- Corrections found on the way: the Docker project is `gateway_nerves` (not `gateway_mvp`); secrets are in the checkout's `.env` (not `~/.env`); new RAG files are ingested automatically (`rag_ingest_watch`), and `reindex_rag.py` is only a whole-collection re-embed that writes Chroma directly, so CLAUDE.md, `COMMANDS.md` (whose block named a script not in the image, on Helios) and the quick start now say so and stop the orchestrator for it instead of `docker exec`; Saturn is up (RTX 3090 + RTX 3080); the stale-mount units are installed and the data disks are on internal SATA; routine/selfcare metrics do exist; Uranus is decommissioned and its two RTX 5080s are Jupiter's (owner, 2026-11-26). PR #194 removes it from Prometheus, the alert rules, the dashboard's node list and the scripts.
+
+### Docs that received the moved detail
+
+- New `docs/internal/HISTORY.md` (brain eras, migrations, removed services).
+- `TECHNICAL_REFERENCE.md`: new System Prompt Layout, Real Streaming and Telegram Bot sections, `get_data` / `finance_status` tool sections, the loop-guard known gaps as a list, missing `/api/config/*` routes; Setup Wizard corrected (validate is locked after `/complete`).
+- `monitoring/README.md`, `docs/BACKUP.md` (nightly jobs table), `docs/DEV.md` (module map, CI timeout rule), `docs/MEMPALACE.md` (offline repairs, tests), `docs/FRONTEND.md` (Settings section), `docs/VOICE_AND_TTS.md`, `docs/CALENDAR.md`, `docs/HA.md`, `docs/UPGRADE.md`, `docs/INSTALL.md`, `docs/CODER.md`, `docs/TRAINING_CORPUS.md`, `docs/ENV_VARS.md` (two corrections), `docs/FOCUS_AND_PIHOLE.md`, `docs/NAMING.md`, `docs/JESS_QUICK_START.md`, `COMMANDS.md`, `docs/internal/{HELIOS_INFRASTRUCTURE,POWER_TIERING_SPEC,FLASH_NEXT_TRIAL,README}.md`, `jess-features/F-006/7/8/11/12/13`, `scripts/jupiter-kiosk/README.md`, `ROADMAP.md`.
+
 ## [Unreleased] — Voice satellite: voice match, a per-room TV filter (2026-11-25)
 
 Branch `feat/voice-match`. A TV or game false-woke a satellite mic and Jess answered its dialogue. On devices listed in `VOICE_MATCH_DEVICES`, the bridge now scores the captured question against enrolled voiceprints before Helios, STT and the brain. Below `VOICE_MATCH_THRESHOLD` the turn ends silently. New decision D14. It is a TV filter, **not a security control**: a recording passes, and D8 (anyone in the room has full access) stays the security assumption in every room. Detail: `docs/VOICE_AND_TTS.md` → Voice match; spec: `orchestrator/voice_match.py` module docstring.

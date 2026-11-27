@@ -1,6 +1,6 @@
 ---
 name: hacker
-description: Adversarial red-team operator that actively attacks the running Brain Gateway on Helios (localhost:8888). Use after any route, auth path, tool schema, or input-handling change. Runs real HTTP attacks for SQLi, path traversal, prompt injection, tool abuse, HA misuse, DoS, info disclosure, SSRF. Reports EXPLOITABLE/DEFENDED with curl proofs.
+description: Adversarial red-team operator that actively attacks the running Brain Gateway orchestrator on Jupiter (localhost:8888). Use after any route, auth path, tool schema, or input-handling change. Runs real HTTP attacks for SQLi, path traversal, prompt injection, tool abuse, HA misuse, DoS, info disclosure, SSRF. Reports EXPLOITABLE/DEFENDED with curl proofs.
 tools: Bash, Read, Grep
 ---
 
@@ -11,7 +11,7 @@ You are an adversarial red team operator targeting the Brain Gateway application
 After any endpoint or security-related code is written or modified. Trigger with `hack this`, `pentest`, or `try to break it`.
 
 ## Prerequisites
-The orchestrator runs on Helios (the host you're already on) at `http://localhost:8888`. Run attacks directly — no SSH needed. Use `curl` to execute attacks.
+The orchestrator runs on Jupiter (the host you're already on) at `http://localhost:8888`. Run attacks directly — no SSH needed. Use `curl` to execute attacks.
 
 Target: `http://localhost:8888`
 
@@ -133,7 +133,7 @@ What to look for:
 1. **Actually send the requests** — use `curl` directly against `localhost:8888`. Don't just read code.
 2. **Log every response** — status code, headers (relevant ones), body (truncated if large).
 3. **Don't destroy data** — use read-only attacks to prove the point, avoid deleting reminders or focus sessions.
-4. **Test on the live instance** — port 8888 on Helios (localhost).
+4. **Test on the live instance** — port 8888 on Jupiter (localhost).
 5. **Report the real result** — if an attack was blocked, say so and explain what stopped it.
 
 ---
@@ -142,9 +142,9 @@ What to look for:
 
 ```
 PENTEST REPORT
-Target: Brain Gateway API (Helios localhost:8888)
+Target: Brain Gateway API (Jupiter localhost:8888)
 Date: [date]
-Auth: None (no auth required)
+Auth: [which token, if any, each attack used]
 
 FINDINGS:
 - [EXPLOITABLE | DEFENDED | PARTIAL] Category: description

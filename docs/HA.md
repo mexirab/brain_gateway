@@ -1,9 +1,11 @@
 # Home Assistant runbook
 
 HA runs on **Jupiter** as a standalone Docker Compose project at
-[`homeassistant/`](../homeassistant/). The orchestrator talks to it over the LAN
-(`HA_URL=http://10.0.0.248:8123`); `HA_TOKEN` is a long-lived token stored in
-HA's `.storage/auth`.
+[`homeassistant/`](../homeassistant/), not in the main `docker-compose.yml`: it
+is a pulled image with its own lifecycle (like the monitoring stack), so the
+orchestrator's build and CI deploy never touch it. The orchestrator talks to it
+over the LAN (`HA_URL=http://10.0.0.248:8123`); `HA_TOKEN` is a long-lived token
+stored in HA's `.storage/auth`.
 
 ## Why it's on Jupiter (migration history)
 
@@ -15,7 +17,11 @@ sources at once: the flaky Pi *and* the orchestrator→network→Pi hop.
 
 The setup is all-network — ESPHome (WiFi) devices, Bluetooth via **remote
 proxies** (not a local dongle), Google/Nest Cast, and cloud — so nothing
-physical had to move.
+physical had to move: the migration was a config copy plus a container.
+`HA_URL` changed from `http://10.0.0.106:8123` to `http://10.0.0.248:8123`.
+
+The Pi is dead but untouched (safe to reimage). A pristine rescue copy of its
+config is kept at `~/ha-rescue` on Jupiter and on Saturn.
 
 ## Run / upgrade
 
@@ -27,7 +33,8 @@ docker compose up -d
 To upgrade: bump the pinned tag in `docker-compose.yml` (don't float it — a
 pinned version keeps an unrelated change from also becoming an HA upgrade), then
 `docker compose pull && docker compose up -d`. Check `docker logs homeassistant`
-after.
+after. Pinned at `2026.8.3` since 2026-09-01 (was `2026.5.1`, carried over from
+the Pi): the Starling Home Hub HACS integration needs 2026.8.2 or newer.
 
 `network_mode: host` is required for Cast/mDNS speaker discovery. The `/config`
 volume lives at `/home/labadmin/homeassistant/config` (external runtime state,

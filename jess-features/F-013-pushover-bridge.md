@@ -63,7 +63,13 @@ The F-011 confirm side-channel (visible "Logged" / "Snoozed until X:XX" after a 
 
 ## Security model
 
-No change from F-011. Both ack and snooze URLs are HMAC-signed (`sig = HMAC-SHA256(NTFY_HMAC_SECRET, f"{id}|{action}|{exp}|{extra}")[:32]`). The routes themselves are bearer-exempt via `BearerAuthMiddleware.PUBLIC_PREFIXES` and do their own signature verification.
+No change from F-011. Both ack and snooze URLs are HMAC-signed (`sig = HMAC-SHA256(NTFY_HMAC_SECRET, f"{id}|{action}|{exp}|{extra}")[:32]`). The routes themselves are bearer-exempt via `BearerAuthMiddleware.PUBLIC_PREFIXES` and do their own signature verification. Their feature gate is `if not (ntfy_enabled or pushover_enabled)`, so a Pushover-only deployment works.
+
+**HTML escaping.** The message is sent with `html=1`, so the reminder text is escaped (`html.escape(text, quote=False)`) before it goes into the body. Otherwise a prompt-injection-planted `<a href>` in a reminder would render as a tappable link inside the trusted "Jess reminder" notification.
+
+**Error bodies** from Pushover pass through `_sanitize_body` (no HTML, ≤300 chars) and `_strip_credentials` (credential-regex strip) before they are logged or returned.
+
+**Confirm titles stay generic** ("✓ Logged", "💤 Snoozed until H:MM"); the action category lives only in the body (same lock-screen privacy rule as F-011).
 
 **Pushover-specific data considerations:** reminder body transits Pushover's infrastructure (their servers + APNs). For a personal ADHD assistant the content is mostly "take meds" / "pet the cat" — low sensitivity. Medical category is NOT in titles (same rule as F-011 security review). The callback URLs contain the reminder_id (random UUID4) and HMAC sig — if a Pushover operator wanted to ack a user's reminder they'd need to extract the URL and ignore that they're clicking someone else's ack. Accepted risk.
 
@@ -98,7 +104,7 @@ No change from F-011. Both ack and snooze URLs are HMAC-signed (`sig = HMAC-SHA2
 
 ## Metrics
 
-- `bgw_pushover_push_total{result, kind}` — `result`: `ok|fail|skipped`; `kind`: `reminder|confirm`. Every exit path from a push function increments exactly once.
+- `bgw_pushover_push_total{result, kind, reason}` — `result`: `ok|fail|skipped`; `kind`: `reminder|confirm`; `reason`: `ok|http_4xx|http_5xx|timeout|connect_error|other|disabled|missing_user_key|missing_app_token|missing_credentials`, so Grafana can tell "token revoked" from "Pushover down". Every exit path from a push function increments exactly once.
 - `bgw_pushover_push_latency_seconds{kind}` — histogram of the POST latency (orchestrator → Pushover).
 
 ---

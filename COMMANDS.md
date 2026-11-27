@@ -426,16 +426,13 @@ https://helios.tail74fc4a.ts.net/
 
 ## RAG
 
-### Re-index RAG after adding documents
-```bash
-# Copy new docs to Helios first, then run inside the orchestrator container:
-ssh labadmin@10.0.0.195 "docker exec brain-orchestrator python /app/ingest_rag.py \
-  --source /rag \
-  --persist /chroma/personal_rag \
-  --collection personal_rag"
+### Adding RAG documents / re-embedding
+New or changed files under `RAG_BASE` (on Jupiter) are ingested automatically: the in-process job `rag_ingest_watch` (`orchestrator/rag_ingest.py`) checks every 2 min and re-embeds only files whose hash changed. No command, no restart.
 
-# Restart orchestrator to pick up changes
-ssh labadmin@10.0.0.195 "cd /opt/gateway_mvp && docker compose restart orchestrator"
+Re-embed the whole collection only after an embedding-model change. `scripts/reindex_rag.py` writes Chroma directly, and Chroma isn't safe for two writers, so back up `CHROMA_HOST_PATH` and stop the orchestrator first (`docs/MEMPALACE.md` → Offline repairs):
+```bash
+cd /home/labadmin/gateway_nerves
+docker compose stop orchestrator && docker compose run --rm --no-deps orchestrator python scripts/reindex_rag.py && docker compose up -d orchestrator
 ```
 
 ### Check RAG doc count

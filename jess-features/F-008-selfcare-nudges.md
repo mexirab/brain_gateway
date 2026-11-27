@@ -140,7 +140,7 @@ The movement nudge only knew about movement someone logged, so it nagged after a
 | New day | Only a count that went DOWN on a later day is a new day's total. The same or a higher count on a later day is a carry-over (HA restored yesterday's state after an overnight restart), not a walk |
 | New-day steps | Walk time unknown. First reported before today's movement hours open: credited (the morning walk). Inside them: no credit |
 | Restart | Baselines are RAM-only, so the first read only sets them |
-| Logs | Never values or entity ids. One WARNING per new failure kind (the same kind repeats at most hourly; WARNINGs feed the self-audit), INFO on recovery |
+| Logs | Never values or entity ids (an entity id holds the phone's name; never commit a real one — docs and tests use `sensor.<phone>_…`). One WARNING per new failure kind (the same kind repeats at most hourly; WARNINGs feed the self-audit), INFO on recovery |
 
 Startup log line when on: `[SCHEDULER] Self-care nudges every 15 min (movement from the phone: steps, stand)`.
 

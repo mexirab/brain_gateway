@@ -156,6 +156,7 @@ Background fact extraction from chats (`orchestrator/auto_learn.py`; scheduling 
 | Model asleep | Model unreachable at fire time → re-queue every 30 min, up to 16 attempts (~7.5 h), then drop |
 | Windows | ≤12000 chars each (`_EXTRACTION_MAX_CHARS`); a short conversation is one window. Longer: assistant replies cut to 300 chars, messages packed into consecutive windows, each later window repeating the previous message (an answer keeps its question). At most 4 (`_EXTRACTION_MAX_WINDOWS`): beyond that the most recent 4 are kept, the first prefixed `[...earlier conversation omitted...]` (INFO log). Until 2026-10-26 a long conversation was cut to its last 12k chars |
 | Slot sharing | Each window first waits (≤60 s) for in-flight chat requests to finish (`metrics.ACTIVE_REQUESTS`; single llama slot). A failed model call stops the remaining windows |
+| Timeout | 120 s per extraction call, the unified loop's per-call budget (the call can queue behind a chat turn on the single slot). 30 s hit `httpx.ReadTimeout` under slot contention and failed silently |
 | Cap | `AUTO_LEARN_MAX_FACTS` (20) per window, applied after the confidence/category/sensitive filters; excess counted in `bgw_auto_learn_facts_capped_total` |
 | Storage | `route_fact` by category (see Fact routing); each store invalidates the wakeup cache |
 | Re-arm | New turns during a running extraction re-cache the conversation, but APScheduler skips the re-armed job if it comes due mid-run (one instance per id). `_rearm_if_orphaned` (after every run) schedules a fresh job when the conversation is still cached and has none |
@@ -181,5 +182,13 @@ Background fact extraction from chats (`orchestrator/auto_learn.py`; scheduling 
 **Write volume looks wrong:**
 - `bgw_palace_stores_total` should match the sum of `bgw_auto_learn_facts_stored_total` + rag_ingest chunk count + manual palace stores. If it doesn't, one of the writer paths has lost its metric increment (this happened before commit `e5e1d07` — rag_ingest and auto_learn were writing directly to chroma and bypassing the counter).
 
+**Offline repairs (re-filing facts, re-extracting a conversation, any one-off script that writes to the collection):**
+- Chroma's persistent store is not safe for two processes writing at once. Back up `CHROMA_HOST_PATH`, stop the orchestrator, then run the script as a one-off container from the same image: `docker compose stop orchestrator && docker compose run --rm --no-deps orchestrator python …`, then `docker compose up -d orchestrator`.
+- A one-off process that calls the model needs `API_TOKEN` set and its own `httpx.AsyncClient`: `shared._http` is only created in the app's startup event.
+
 **Session mining wants to mine the same sessions twice:**
 - Session miner dedupes via doc_id fingerprints in metadata, but if you re-run it with different prompts or the LLM extracts different facts, you can get near-duplicates. `PALACE_DEDUP_THRESHOLD` (cosine similarity) gates this. Default `0.85`.
+
+## Tests
+
+`orchestrator/tests/test_memory_recall.py` (retrieval floors, memory framing, fact routing, wakeup block, windowed extraction, `update_memory`), `test_auto_learn.py` (filters, parsing, extraction pipeline), `test_auto_learn_scheduling.py` (one job per conversation, conversation keys, model-asleep retries, drop counts).
