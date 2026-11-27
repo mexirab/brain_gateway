@@ -1,0 +1,14 @@
+# Repo copy of the Jupiter unit. Install path: /etc/systemd/system/media-mirror.timer
+# Install steps: docstring of scripts/media_mirror.py.
+# 02:30 UTC (20:30 / 21:30 in Chicago, winter / summer): before the five nightly backups (03:30-04:05 UTC, none on
+# /mnt/media) and before the model-archive download window (22:00-06:00 Chicago), which writes to
+# the same HDD. Persistent: a run missed while Jupiter was off happens at the next boot.
+[Unit]
+Description=Nightly second copy of /mnt/media onto /mnt/mirror
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,68 @@
+# Repo copy of the Jupiter unit. Install path: /etc/systemd/system/media-mirror.service
+# Install steps: docstring of scripts/media_mirror.py.
+#
+# Nightly (via media-mirror.timer) second copy of /mnt/media's irreplaceable folders onto the
+# /mnt/mirror NVMe: audiobooks + Audiobookshelf, Immich, the model archive's jess-live. Writes
+# jess_media_mirror.prom for JessMediaMirrorStale. Exit 1 = an item failed or is HELD (the unit
+# shows failed in `systemctl --failed`); `journalctl -u media-mirror -n 30` says which and what to do.
+# This is also the only way to run a real copy by hand: `sudo systemctl start media-mirror`. The
+# script refuses to copy outside systemd, because this sandbox is part of its safety.
+[Unit]
+Description=Second copy of /mnt/media's irreplaceable folders onto /mnt/mirror
+# Pulls in both mounts. A missing disk fails the start (dependency failed), the metric stops moving
+# and the stale alert fires; the script also refuses unless both are mount points.
+RequiresMountsFor=/mnt/media /mnt/mirror
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I -u /usr/local/sbin/media-mirror --metrics-dir /home/labadmin/node_exporter/textfile_collector
+# The first copy was 216 GB in 15 min; nightly runs after that take a minute or two.
+TimeoutStartSec=6h
+Nice=15
+IOSchedulingClass=idle
+UMask=0022
+# Keep the page cache of a big copy from pushing everything else out (it's reclaimable anyway).
+MemoryHigh=4G
+
+# Root, to read every file whatever its owner and to keep owners in the copy. The source is written
+# by containers (Immich, Audiobookshelf), so a planted symlink can make root rsync read outside
+# /mnt/media (rsync follows a folder swapped for a symlink mid-run). Hence: everything secret is
+# hidden, /mnt/media is read-only (the script refuses a real copy unless it is), and only /mnt/mirror
+# and the textfile directory are writable.
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindPaths=/home/labadmin/node_exporter/textfile_collector
+ReadWritePaths=/mnt/mirror
+# Neither python3 -I nor rsync needs anything under /var/lib, /var/log, /var/spool or /boot.
+InaccessiblePaths=-/root -/opt -/srv -/boot -/swap.img -/mnt/documents -/mnt/logging
+InaccessiblePaths=-/var/lib -/var/log -/var/spool -/var/backups -/var/cache -/var/mail
+InaccessiblePaths=-/etc/shadow -/etc/shadow- -/etc/gshadow -/etc/gshadow- -/etc/sudoers -/etc/sudoers.d -/etc/ssh
+InaccessiblePaths=-/etc/ssl/private -/etc/credstore -/etc/cloudflared -/etc/libvirt -/etc/netplan -/etc/netdata
+InaccessiblePaths=-/etc/security -/etc/iscsi -/etc/fwupd -/etc/multipath -/etc/cloud -/etc/jupiter-kiosk
+InaccessiblePaths=-/etc/voxcpm-tts -/etc/voxcpm-tts.env -/etc/jess-docker-input.conf
+# Container specs (with their env: tokens and keys), and Immich's live database on the same disk.
+InaccessiblePaths=-/run/containerd -/run/docker -/run/libvirt -/run/samba -/var/crash -/mnt/media/immich/postgres
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+# No sockets at all (rsync's local copy uses socketpair(), which this doesn't block): nothing can
+# reach systemd, D-Bus, Docker or Tailscale over their AF_UNIX sockets.
+RestrictAddressFamilies=none
+NoNewPrivileges=yes
+# The script copies no setuid/setgid bits (rsync --chmod=ug-s), so the unit can forbid them.
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_CHOWN CAP_FOWNER
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
