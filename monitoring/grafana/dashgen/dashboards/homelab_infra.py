@@ -2,13 +2,13 @@
 homelab-infra — cluster / GPU / disk / network / temps.
 
 Not Brain Gateway specific. Applies to every node in the homelab cluster
-(Helios, Jupiter, Saturn, Uranus). Lives alongside Brain Gateway dashboards
+(Helios, Jupiter, Saturn). Lives alongside Brain Gateway dashboards
 but will be reused for future workloads.
 
 Metrics come from:
   - node-exporter on port 9100 (job="node-exporter") — CPU, memory, disk,
     network, hwmon. The scrape config in monitoring/prometheus/prometheus.yml
-    adds a friendly `node` label (helios/jupiter/saturn/uranus) so we use
+    adds a friendly `node` label (helios/jupiter/saturn) so we use
     that instead of `instance` for legends.
   - nvidia_gpu_exporter v1.4.1 on port 9400 (job="gpu-exporter") — GPU temp,
     utilization, VRAM, power. Metric names are `nvidia_smi_*`. The only

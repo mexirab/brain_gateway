@@ -111,9 +111,8 @@ check_required "GF_SECURITY_ADMIN_PASSWORD" "Grafana admin password"
 echo ""
 echo -e "${BLUE}=== Network Nodes ===${NC}"
 check_optional "NODE_JUPITER_IP" "Gateway host"
-check_optional "NODE_SATURN_IP" "Nemotron server"
-check_optional "NODE_URANUS_IP" "TTS/STT server"
-check_optional "NODE_HELIOS_IP" "Expert model server"
+check_optional "NODE_SATURN_IP" "Backup box"
+check_optional "NODE_HELIOS_IP" "GPU model layer"
 check_optional "NODE_HA_IP" "Home Assistant"
 
 echo ""
@@ -155,7 +154,6 @@ echo -e "${BLUE}=== Network Connectivity (Optional) ===${NC}"
 echo "Testing if nodes are reachable..."
 check_ip_reachable "NODE_JUPITER_IP" "Gateway"
 check_ip_reachable "NODE_SATURN_IP" "Saturn (reserve)"
-check_ip_reachable "NODE_URANUS_IP" "TTS/STT"
 check_ip_reachable "NODE_HELIOS_IP" "Helios"
 check_ip_reachable "NODE_HA_IP" "Home Assistant"
 
@@ -189,7 +187,6 @@ fi
 
 # TTS service
 TTS_TEST_URL="${TTS_URL:-}"
-TTS_TEST_URL="${TTS_TEST_URL//\$\{NODE_URANUS_IP:-10.0.0.173\}/${NODE_URANUS_IP:-10.0.0.173}}"
 TTS_TEST_URL="${TTS_TEST_URL//\$\{SERVICE_TTS_PORT:-8002\}/${SERVICE_TTS_PORT:-8002}}"
 if [[ -n "$TTS_TEST_URL" ]]; then
     if curl -s --connect-timeout 3 "${TTS_TEST_URL}/health" &>/dev/null; then

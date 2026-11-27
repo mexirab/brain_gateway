@@ -1,6 +1,6 @@
 # Hardware Optimization Deployment Checklist
 
-> **⚠️ STALE — v6 hybrid era doc.** References Nemotron-8B, `start-helios.sh`, and Helios-off-by-default — all removed in v7. Use only as a historical reference. Current architecture: single unified model (Qwen3.5-27B) on Helios, always-on, see `CLAUDE.md` and `ARCHITECTURE.md`.
+> **⚠️ STALE — v6 hybrid era doc.** References Nemotron-8B, `start-helios.sh`, and Uranus as the TTS/STT box — all gone. Uranus (10.0.0.173) was decommissioned 2026-11-26: don't run the commands below, the address may belong to another device now. Historical reference only; the current layout is in `CLAUDE.md` → Cluster.
 
 This checklist covers deploying the optimized architecture for voice-first ADHD support.
 

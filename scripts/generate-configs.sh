@@ -63,7 +63,6 @@ fi
 export NODE_JUPITER_IP="${NODE_JUPITER_IP:-10.0.0.248}"
 export NODE_HELIOS_IP="${NODE_HELIOS_IP:-10.0.0.195}"
 export NODE_SATURN_IP="${NODE_SATURN_IP:-10.0.0.58}"
-export NODE_URANUS_IP="${NODE_URANUS_IP:-10.0.0.173}"
 export NODE_HA_IP="${NODE_HA_IP:-10.0.0.106}"
 export SERVICE_ORCHESTRATOR_PORT="${SERVICE_ORCHESTRATOR_PORT:-8888}"
 export SERVICE_TTS_PORT="${SERVICE_TTS_PORT:-8002}"
@@ -126,7 +125,6 @@ echo "Using configuration:"
 echo "  NODE_JUPITER_IP: ${NODE_JUPITER_IP}  (hub, monitoring stack, TTS on an RTX 5080)"
 echo "  NODE_HELIOS_IP:  ${NODE_HELIOS_IP}  (primary LLM, STT)"
 echo "  NODE_SATURN_IP:  ${NODE_SATURN_IP}  (off-box backups, dead-man's switch)"
-echo "  NODE_URANUS_IP:  ${NODE_URANUS_IP}  (ComfyUI)"
 echo ""
 
 # Validate a candidate render before it touches the live bind mount — a
@@ -283,7 +281,7 @@ prom_rc=0
 render_template \
     "$prom_template" \
     "${PROJECT_DIR}/monitoring/prometheus/prometheus.yml" \
-    '${NODE_JUPITER_IP} ${NODE_SATURN_IP} ${NODE_URANUS_IP} ${NODE_HELIOS_IP} ${NODE_HA_IP} ${SERVICE_ORCHESTRATOR_PORT} ${SERVICE_TTS_PORT} ${SERVICE_STT_PORT} ${MONITORING_GPU_EXPORTER_PORT} ${DEADMAN_HOST} ${DEADMAN_PORT} ${JUPITER_TTS_GPU_UUID_BARE}' \
+    '${NODE_JUPITER_IP} ${NODE_SATURN_IP} ${NODE_HELIOS_IP} ${NODE_HA_IP} ${SERVICE_ORCHESTRATOR_PORT} ${SERVICE_TTS_PORT} ${SERVICE_STT_PORT} ${MONITORING_GPU_EXPORTER_PORT} ${DEADMAN_HOST} ${DEADMAN_PORT} ${JUPITER_TTS_GPU_UUID_BARE}' \
     "" \
     prometheus \
     prometheus.yml.template || prom_rc=$?

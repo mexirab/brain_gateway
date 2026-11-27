@@ -12,46 +12,27 @@ groups:
           summary: "Brain Gateway orchestrator is down"
           description: "The orchestrator has not responded to /metrics scrapes for 2 minutes."
 
-      # uranus is EXCLUDED deliberately. It has been unreachable since
-      # 2026-07-04 and is not in the runtime path, so including it would mean
-      # this alert pages every repeat_interval (4h) forever about a box everyone
-      # already knows is dead — and an alert that always fires is one nobody
-      # reads. Until this exclusion was added NodeDown was routed to the "null"
-      # receiver for exactly that reason, which meant a REAL node going down
-      # (jupiter, helios, saturn) notified nobody at all. Excluding the known-dead
-      # node is what makes paging on the rest safe.
-      # When uranus comes back: drop the "uranus" alternative. Do NOT instead
-      # re-point this at "null".
-      #
-      # helios is EXCLUDED too, for a different reason: it is power-tiered — its
-      # smart plug is switched off most of the day on purpose, so node-exporter
-      # being down is its normal sleeping state. Including it paged every 4h from
-      # 2026-10-09 to 10-14 (vacation, plug off) — the same "always firing, so
-      # nobody reads it" trap as uranus. Helios outages are paged by the
-      # plug-aware HeliosPoweredButUnreachable in group helios_health instead
-      # (plug draws running-level power but the box doesn't answer), and
+      # helios is EXCLUDED deliberately: it is power-tiered — its smart plug is
+      # switched off most of the day on purpose, so node-exporter being down is
+      # its normal sleeping state. Including it paged every 4h from 2026-10-09
+      # to 10-14 (vacation, plug off), and an alert that always fires is one
+      # nobody reads. Helios outages are paged by the plug-aware
+      # HeliosPoweredButUnreachable in group helios_health instead (plug draws
+      # running-level power but the box doesn't answer), and
       # HeliosUnreachablePlugBlind covers the case where the plug reads are
       # stale or contradictory and so can't tell sleep from an outage.
+      # Exclude a node that is down by design; never re-point this alert at the
+      # "null" receiver: before these exclusions, the long-dead uranus test box
+      # kept it firing, so it was routed to "null" — and a REAL node going down
+      # notified nobody.
       - alert: NodeDown
-        expr: up{job="node-exporter", node!~"uranus|helios"} == 0
+        expr: up{job="node-exporter", node!="helios"} == 0
         for: 3m
         labels:
           severity: critical
         annotations:
           summary: "Node {{ $labels.node }} is down"
           description: "Node exporter on {{ $labels.node }} is unreachable for 3 minutes."
-
-      # Non-paging counterpart so the excluded node is still VISIBLE on the
-      # dashboard rather than silently dropped from monitoring entirely.
-      # Deliberately not in the alertmanager allow-list — Grafana-only.
-      - alert: UranusDown
-        expr: up{job="node-exporter", node="uranus"} == 0
-        for: 30m
-        labels:
-          severity: info
-        annotations:
-          summary: "uranus (test box) is unreachable"
-          description: "Known-dead since 2026-07-04 and excluded from NodeDown paging. This exists so the box does not vanish from monitoring; if it is genuinely back, drop \"uranus\" from the NodeDown node!~ matcher and delete this rule."
 
       # -- Storage substrate ----------------------------------------------------
       # /mnt/logging is an EXTERNAL USB disk (WDC WD10EZEX; its sdX letter changes on
@@ -537,7 +518,7 @@ groups:
           severity: critical
         annotations:
           summary: "Server closet is at {{ $value | printf \"%.0f\" }}°F"
-          description: "The server closet has been at or above 95°F for 10 minutes. Check the closet door/airflow and the rack fans; shut down non-essential nodes (Saturn, Uranus) if it keeps climbing."
+          description: "The server closet has been at or above 95°F for 10 minutes. Check the closet door/airflow and the rack fans; shut down non-essential nodes (Saturn) if it keeps climbing."
       - alert: ClosetTemperatureSensorMissing
         # The closet series is dropped whenever HA has no reading (sensor gone,
         # renamed, battery dead), so absent() catches it. It read 0 for days in

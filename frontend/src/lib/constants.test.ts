@@ -1,13 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { CLUSTER_NODES } from './constants';
 
-describe('CLUSTER_NODES topology (2026-07-04 ground truth)', () => {
+describe('CLUSTER_NODES topology (2026-11-26 ground truth)', () => {
   const byId = Object.fromEntries(CLUSTER_NODES.map((n) => [n.id, n]));
 
-  it('has exactly the 4 real nodes', () => {
-    expect(CLUSTER_NODES.map((n) => n.id).sort()).toEqual(
-      ['helios', 'jupiter', 'saturn', 'uranus'].sort(),
-    );
+  it('has exactly the 3 real nodes', () => {
+    expect(CLUSTER_NODES.map((n) => n.id).sort()).toEqual(['helios', 'jupiter', 'saturn'].sort());
   });
 
   it('includes Jupiter as the always-on gateway on 10.0.0.248', () => {
@@ -42,9 +40,9 @@ describe('CLUSTER_NODES topology (2026-07-04 ground truth)', () => {
     expect(byId.helios.serviceKeys).not.toContain('tts');
   });
 
-  it('flags Uranus as an unreachable test box', () => {
-    expect(byId.uranus.power).toBe('unreachable');
-    expect(byId.uranus.serviceKeys).toHaveLength(0);
+  it('does NOT contain the decommissioned Uranus test box (10.0.0.173)', () => {
+    expect(byId.uranus).toBeUndefined();
+    for (const node of CLUSTER_NODES) expect(node.ip).not.toBe('10.0.0.173');
   });
 
   it('reflects the current model layer (llama.cpp brain, Parakeet STT)', () => {
